@@ -855,9 +855,9 @@ def summarize_content_with_llm(context: str, original_question: str, chat_histor
     elif "strictly in Chinese" in original_question:
         target_lang = "Chinese"
     
-    # [중요] 캐시 키 버전을 v15로 변경 (기존 한국어 캐시 무시)
+    # [중요] 캐시 키 버전을 v16으로 변경 (기존 한국어 캐시 무시)
     context_hash = hashlib.md5((context + target_lang).encode('utf-8')).hexdigest()
-    cache_key = f"summary_v15_{target_lang}:{context_hash}"
+    cache_key = f"summary_v16_{target_lang}:{context_hash}"
     
     try:
         cached = redis_client.get(cache_key)
@@ -1146,9 +1146,9 @@ def rerank_search_results(question: str, candidates: list) -> list:
        - 예: "Baby allowance" -> "아동수당", "부모급여" 매칭 (O)
        
     2. **'검사/진단' 질문 시 (가장 중요):**
-       - 사용자가 '발달 검사', '장애 진단', '정밀 검사'를 찾고 있다면, 제목에 **'검사', '진단', '선별', 'K-CDI'** 가 포함된 문서가 압도적 1순위입니다.
-       - **(감점/제외 대상):** 단순히 '발달 지원', '상담', '교육 프로그램', '놀이 치료', '사회성 향상' 등은 **검사 자체가 아니므로 후순위로 미루세요.** 
-       - 예: "발달지연 아동 지원사업" (X) -> "온라인 발달검사" (O)가 훨씬 더 적합합니다.
+       - 사용자가 '발달 검사', '장애 진단', '정밀 검사'를 찾고 있다면, 제목에 **'비용', '지원', '진단서', '검사비'**가 포함된 문서가 1순위입니다.
+       - **(감점/제외 대상):** 단순한 '교육 프로그램', '건강 교실', '부모 교육', '마사지 교실', '놀이 치료' 등은 검사가 아닙니다. 
+       - 질문에 '학교', '입학', '교육청'이 없다면, '특수교육대상자 선정' 문서는 후순위로 미루세요.
 
     3. **'치료/재활' 및 '사회성' 질문 시:**
        - '언어치료', '재활' -> '발달재활서비스 바우처' (1순위)
