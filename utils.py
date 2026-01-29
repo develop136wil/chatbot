@@ -664,6 +664,76 @@ async def call_groq_async_simple(prompt: str, system_message: str = "You are a h
                 await asyncio.sleep(1)
     return None
 
+# --- [신규] Groq Sync 호출 함수 (run_indexer.py 등 동기 환경용) ---
+def call_groq_sync_simple(prompt: str, system_message: str = "You are a helpful assistant.") -> Optional[str]:
+    """Helper for sync Groq calls"""
+    if not GROQ_SYNC_CLIENT: return None
+    try:
+        completion = GROQ_SYNC_CLIENT.chat.completions.create(
+            messages=[
+                {"role": "system", "content": system_message},
+                {"role": "user", "content": prompt}
+            ],
+            model="llama-3.3-70b-versatile",
+            temperature=0.1,
+            max_tokens=2048, # 번역은 길 수 있으므로 넉넉하게
+        )
+        return completion.choices[0].message.content
+    except Exception as e:
+        print(f"⚠️ Groq Sync Error: {e}")
+        return None
+
+def translate_content_multilingual_sync(title: str, content: str) -> dict:
+    """
+    [Phase 3] 다국어 번역 (영어/중국어/베트남어) - JSON 반환
+    Groq 우선 사용 -> Gemini 폴백
+    """
+    prompt = f"""
+    You are a professional translator for a welfare chatbot.
+    Translate the following Korean title and content into English, Chinese (Simplified), and Vietnamese.
+
+    [Source]
+    Title: {title}
+    Content: {content}
+
+    [Output Format]
+    Return ONLY a JSON object with this exact structure:
+    {{
+      "en": {{ "title": "...", "content": "..." }},
+      "zh": {{ "title": "...", "content": "..." }},
+      "vi": {{ "title": "...", "content": "..." }}
+    }}
+    """
+    
+    # 1. Groq 시도
+    if GROQ_SYNC_CLIENT:
+        try:
+            resp = call_groq_sync_simple(prompt, "You are a JSON translator.")
+            if resp:
+                 # JSON 추출
+                json_start = resp.find('{')
+                json_end = resp.rfind('}') + 1
+                if json_start != -1 and json_end != -1:
+                    return json.loads(resp[json_start:json_end])
+        except Exception as e:
+            print(f"⚠️ Groq Translation Failed: {e}")
+
+    # 2. Gemini 폴백
+    client = get_llm_client()
+    if client:
+        try:
+            resp = generate_content_safe(client, prompt, timeout=40)
+            text = resp.text if hasattr(resp, 'text') else str(resp)
+            json_start = text.find('{')
+            json_end = text.rfind('}') + 1
+            if json_start != -1 and json_end != -1:
+                return json.loads(text[json_start:json_end])
+        except Exception as e:
+            print(f"⚠️ Gemini Translation Failed: {e}")
+            
+    return {} # 실패 시 빈 딕셔너리
+
+
 # --- [신규] 비동기 의도 분석 함수 ---
 async def extract_info_from_question_async(question: str, chat_history: list[dict] = []) -> dict:
     history_formatted = "(이전 대화 없음)"

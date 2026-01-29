@@ -224,37 +224,51 @@ def process_job(job_data: Dict[str, Any]) -> Tuple[str, List[str], int]:
         if target_lang_code != "ko":
             logger.info(f"🌍 [Worker] 언어 감지: {target_lang_code} -> 내용/제목/UI 번역 시작")
             
-            # 1. 제목 일괄 수집
-            original_titles = [doc.get("metadata", {}).get("title", "") for doc in display_results]
+            # 1. 제목 번역 (Pre-translated 확인 -> 없으면 Batch)
+            docs_needing_title = []
+            for i, doc in enumerate(display_results):
+                meta = doc.get("metadata", {})
+                # DB에 저장된 번역이 있는지 확인
+                pre_title = meta.get(f"title_{target_lang_code}")
+                if pre_title:
+                    doc["metadata"]["title"] = pre_title
+                else:
+                    docs_needing_title.append((i, meta.get("title", "")))
+
+            # 필요한 것만 Batch 번역
+            if docs_needing_title:
+                titles_to_translate = [t[1] for t in docs_needing_title]
+                translated_titles = translate_titles_batch(titles_to_translate, target_lang_code)
+                for (idx, _), new_title in zip(docs_needing_title, translated_titles):
+                    display_results[idx]["metadata"]["title"] = new_title
             
-            # 2. 제목 일괄 번역 실행 (1회 호출)
-            translated_titles = translate_titles_batch(original_titles, target_lang_code)
-            
-            # 3. 결과 적용 및 나머지 번역
+            # 2. 본문 및 카테고리 번역
             for i, doc in enumerate(display_results):
                 meta = doc.get("metadata", {})
                 original_summary = meta.get("pre_summary", "")
                 original_category = meta.get("category", "기타")
-                original_title = meta.get("title", "")
                 
-                # 1. 카테고리 이름 번역 (사전 매핑)
+                # 카테고리 이름 번역 (사전 매핑)
                 translated_cat = ui_text["cats"].get(original_category, original_category)
                 doc["metadata"]["category"] = translated_cat
 
-                # 2. [제목 번역 적용] Batch 결과 사용
-                new_title = translated_titles[i] if i < len(translated_titles) else original_title
-                doc["metadata"]["title"] = new_title
+                # 본문 번역 (Pre-translated 확인 -> 없으면 Realtime)
+                pre_summary_key = f"pre_summary_{target_lang_code}"
+                pre_summary_val = meta.get(pre_summary_key)
 
-                # 3. 본문 요약 번역
-                try:
-                    translated_summary = summarize_content_with_llm(
-                        content=original_summary,  
-                        language=target_lang_code  # [수정] "ko" -> target_lang_code (실제 대상 언어로 번역)
-                    )
-                    doc["metadata"]["pre_summary"] = translated_summary
-                    logger.debug(f"   -> '{original_title}' => '{new_title}' (번역 완료)")
-                except Exception as e:
-                    logger.warning(f"   ⚠️ 본문 번역 실패: {e}")
+                if pre_summary_val:
+                    doc["metadata"]["pre_summary"] = pre_summary_val
+                    # logger.debug(f"   ⚡️ [Pre-translated] Summary Used")
+                else:
+                    # Fallback: 실시간 번역
+                    try:
+                        translated_summary = summarize_content_with_llm(
+                            content=original_summary,  
+                            language=target_lang_code
+                        )
+                        doc["metadata"]["pre_summary"] = translated_summary
+                    except Exception as e:
+                        logger.warning(f"   ⚠️ 본문 실시간 번역 실패: {e}")
         # ==================================================================
 
         all_page_ids = [r.get("metadata", {}).get("page_id") for r in reranked_results]

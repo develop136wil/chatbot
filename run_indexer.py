@@ -14,8 +14,10 @@ from utils import (
     _get_number, 
     _get_rich_text,
     _get_url,
+    _get_url,
     get_gemini_embedding,
-    _get_multi_select
+    _get_multi_select,
+    translate_content_multilingual_sync # [신규]
 )
 
 # 로깅 설정
@@ -232,8 +234,21 @@ def run_indexing():
                     logger.info(f"   ... 요약 및 임베딩 생성 중 ('{title}')")
                     
                     try:
-                        # 1. 요약
-                        pre_summary = summarize_content_with_llm(chunk_text, title, [])
+
+                        # 1. 요약 (한국어) - [수정] utils Signature에 맞춤
+                        try:
+                            pre_summary = summarize_content_with_llm(chunk_text, language="ko")
+                        except TypeError:
+                            # 만약 utils가 수정되지 않았을 경우를 대비한 안전장치
+                            pre_summary = summarize_content_with_llm(chunk_text)
+
+                        # [신규] 다국어 번역 (Phase 3)
+                        transl_dict = translate_content_multilingual_sync(title, pre_summary)
+                        
+                        # 번역 결과 추출 (실패 시 빈값)
+                        en_data = transl_dict.get("en", {})
+                        zh_data = transl_dict.get("zh", {})
+                        vi_data = transl_dict.get("vi", {})
 
                         # 2. 임베딩
                         embedding = get_gemini_embedding(
@@ -253,7 +268,14 @@ def run_indexing():
                             "end_age": end_age,
                             "title": title,
                             "page_url": page_url,
-                            "pre_summary": pre_summary
+                            "pre_summary": pre_summary,
+                            # [신규] 다국어 필드 추가
+                            "title_en": en_data.get("title", ""),
+                            "pre_summary_en": en_data.get("content", ""),
+                            "title_zh": zh_data.get("title", ""),
+                            "pre_summary_zh": zh_data.get("content", ""),
+                            "title_vi": vi_data.get("title", ""),
+                            "pre_summary_vi": vi_data.get("content", "")
                         }
 
                         records_to_insert.append({
