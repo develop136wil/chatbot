@@ -1,0 +1,1649 @@
+import sys
+# UTF-8 출력 설정 (Windows 인코딩 오류 방지)
+# UTF-8 출력 설정 (Windows 인코딩 오류 방지)
+try:
+    if hasattr(sys.stdout, 'reconfigure') and sys.stdout.encoding != 'utf-8':
+        sys.stdout.reconfigure(encoding='utf-8')
+except Exception:
+    pass # Vercel 등 일부 환경에서는 stdout 설정 변경 불가
+
+try:
+    import redis
+except ImportError:
+    redis = None
+    
+import os
+import sys
+import json
+import time
+import hashlib
+import asyncio
+import itertools
+import re  # [긴급 수정] 정규식 모듈 추가 (expand_search_query에서 사용)
+import secrets  # [추가] 보안 토큰 생성용
+import redis
+import warnings
+
+# [설정] 구글 라이브러리 Deprecation 경고 숨김 (기능상 문제 없음)
+warnings.filterwarnings("ignore", category=UserWarning, module="google.genai") # 신규 라이브러리 경고 방지
+
+from dotenv import load_dotenv
+try:
+    from google import genai
+    from google.genai import types
+    print("✅ Using google.genai package")
+except ImportError:
+    print("❌ google.genai package not found. Please install it.")
+    genai = None
+    print("❌ google.genai is required for this application")
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from notion_client import Client as NotionClient
+from supabase import create_client, create_async_client
+from functools import lru_cache
+from typing import Optional, List
+
+# Groq import (사용 가능한 경우에만)
+try:
+    from groq import AsyncGroq, Groq
+except ImportError:
+    AsyncGroq = None
+    Groq = None
+    print("⚠️ Groq library not found. pip install groq")
+
+# --- 1. 설정 로드 ---
+load_dotenv()
+# [Vercel 호환성] NOTION_API_KEY를 우선 확인하고, 로컬용 NOTION_KEY를 Fallback으로 사용
+NOTION_KEY = os.getenv("NOTION_API_KEY", os.getenv("NOTION_KEY"))
+
+# [수정] 설정값 로드 시 공백(.strip)을 제거하여 에러 방지
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost").strip()
+
+# Supabase 설정 로드 (혹시 모를 공백 제거)
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "").strip()
+
+# [핵심] API 키 로테이션 로직
+_keys_env = os.getenv("GEMINI_API_KEYS", "")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY") # [신규] Groq 키 로드
+
+# 콤마로 구분된 키를 리스트로 변환 (공백 제거)
+KEY_POOL = [k.strip() for k in _keys_env.split(",") if k.strip()]
+
+# [★신규] 키를 순서대로 무한 반복해서 제공하는 이터레이터 (Round Robin)
+# 랜덤이 아니므로, 1번->2번->3번... 순서가 보장되어 429 에러를 최소화합니다.
+KEY_CYCLE = itertools.cycle(KEY_POOL) if KEY_POOL else None
+
+print(f"💳 [System] 로드된 Gemini API 키 개수: {len(KEY_POOL)}개")
+
+# --- 2. 전역 변수 ---
+# [최적화] Database IDs를 환경 변수로 관리 (Fallback 값 유지)
+DATABASE_IDS = {
+    "의료/재활": os.getenv("NOTION_DB_MEDICAL", "2738ade50210801f9ef8ca93c1ee1f08"),
+    "교육/보육": os.getenv("NOTION_DB_EDUCATION", "2738ade5021080339203d7148d7d943b"),
+    "가족 지원": os.getenv("NOTION_DB_FAMILY", "2738ade502108041a4c7f5ec4c3b8413"),
+    "돌봄/양육": os.getenv("NOTION_DB_CARE", "2738ade5021080cf842df820fdbeb709"),
+    "생활 지원": os.getenv("NOTION_DB_LIFE", "2738ade5021080579e5be527ff1e80b2")
+}
+NOTION_PROPERTY_NAMES = {
+    "title": "사업명", "category": "분류", "sub_category": "대상 특성",
+    "start_age": "시작 월령(개월)", "end_age": "종료 월령(개월)", "support_detail": "상세 지원 내용",
+    "contact": "문의처", "url1": "관련 홈페이지 1", "url2": "관련 홈페이지 2",
+    "url3": "관련 홈페이지 3", "extra_req": "추가 자격요건",
+    # [신규] 비용/주의사항 필드 추가 (Notion DB에 필드가 생성되어야 함)
+    "cost_info": "비용 부담", "notes": "주의사항"
+}
+
+# --- 3. 클라이언트 초기화 ---
+LLM_CLIENT = None
+GROQ_CLIENT = None
+GROQ_SYNC_CLIENT = None
+
+# [신규] google.genai Client 초기화 (Lazy Loading)
+# 전역에서 바로 실행하지 않고, 필요할 때 호출하거나 명시적으로 초기화합니다.
+def get_llm_client():
+    global LLM_CLIENT
+    if LLM_CLIENT:
+        return LLM_CLIENT
+        
+    if KEY_POOL and genai:
+        try:
+            # 첫 번째 키로 클라이언트 생성
+            LLM_CLIENT = genai.Client(api_key=KEY_POOL[0])
+            print("✅ Utils: Google GenAI Client (gemini-2.5-flash) 초기화 완료")
+            return LLM_CLIENT
+        except Exception as e:
+            print(f"⚠️ Utils: Google GenAI Client 초기화 실패: {e}")
+            return None
+    return None
+
+# 하위 호환성을 위해 전역 변수는 None으로 시작
+# LLM_MODEL = LLM_CLIENT (여기서는 아직 None)
+
+# 기존 코드와의 호환성을 위해 LLM_MODEL 별칭 유지 (그러나 이제는 Client 객체임)
+LLM_MODEL = LLM_CLIENT
+
+# [신규] Groq 초기화 (Sync/Async 둘 다)
+if GROQ_API_KEY and AsyncGroq and Groq:
+    try:
+        GROQ_CLIENT = AsyncGroq(api_key=GROQ_API_KEY)
+        GROQ_SYNC_CLIENT = Groq(api_key=GROQ_API_KEY)
+        print("✅ Utils: Groq (Llama-3.3) 하이브리드 클라이언트 초기화 완료")
+    except Exception as e:
+        print(f"⚠️ Utils: Groq 초기화 실패: {e}")
+else:
+    print("ℹ️ Utils: GROQ_API_KEY가 없거나 Groq 라이브러리가 없습니다. (백업 시스템 비활성)")
+
+notion = NotionClient(auth=NOTION_KEY) if NOTION_KEY else None
+
+if SUPABASE_URL and SUPABASE_KEY:
+    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+    try:
+        supabase_async = create_async_client(SUPABASE_URL, SUPABASE_KEY)
+        print("✅ Utils: Supabase Async 클라이언트 초기화 완료")
+    except Exception as e:
+        print(f"⚠️ Utils: Supabase Async 클라이언트 초기화 실패: {e}")
+        supabase_async = None
+else:
+    print("⚠️ Utils: Supabase 설정이 없습니다.")
+    supabase = None
+    supabase_async = None
+
+# --- 4. Redis 클라이언트 초기화 ---
+redis_client = None
+redis_async_client = None
+MAIN_ANSWER_CACHE_KEY = "chatbot:main_answers"
+MAIN_ANSWER_CACHE_TTL = 3600
+
+if redis:
+    try:
+        # [수정] 연결 테스트용: 1초 타임아웃 (Vercel Cold Start 최적화)
+        # Vercel에서는 외부 연결이 느릴 수 있으므로, 실패해도 치명적이지 않게 처리
+        test_r = redis.Redis(host=REDIS_HOST, port=6379, db=0, socket_timeout=1)
+        try:
+            if test_r.ping():
+                print("✅ Utils: Redis 연결 성공 (테스트 완료)")
+        except Exception:
+             print("⚠️ Utils: Redis 초기 연결 테스트 실패 (무시하고 진행)")
+            
+            
+        # [2단계] 실제 사용용: 타임아웃 제한 없음 (Worker가 오랫동안 대기할 수 있도록)
+        # socket_timeout을 빼거나 None으로 설정해야 BLPOP에서 에러가 안 납니다.
+        redis_client = redis.Redis(
+            host=REDIS_HOST, 
+            port=6379, 
+            db=0, 
+            decode_responses=False, 
+            socket_timeout=None  # <--- 핵심 수정! (제한 해제)
+        )
+        
+        # [3단계] 비동기 클라이언트 (FastAPI용)
+        redis_async_client = redis.asyncio.Redis(
+            host=REDIS_HOST,
+            port=6379,
+            db=0,
+            decode_responses=False,
+            socket_timeout=None
+        )
+        print("✅ Utils: Redis Async 연결 설정 완료")
+
+    except Exception as e:
+        print(f"⚠️ Utils: Redis 연결 실패 (캐시 기능 없이 동작합니다) - {e}")
+        redis_client = None
+        redis_async_client = None
+else:
+    print("⚠️ Utils: redis 라이브러리가 설치되지 않았습니다. (캐시 미사용)")
+
+# --- [수정] 키 교체 함수 (Client 재생성) ---
+def rotate_api_key():
+    if not KEY_CYCLE: 
+        print("⚠️ [Key Rotation] 교체할 키가 없습니다.")
+        return
+    
+    try:
+        next_key = next(KEY_CYCLE)
+        
+        masked_key = next_key[:4] + "****" + next_key[-4:] if len(next_key) > 8 else "****"
+        print(f"🔄 [Key Rotation] API 키 교체 시도: {masked_key}")
+        
+        # [핵심] Client 객체 재생성
+        global LLM_CLIENT, LLM_MODEL
+        if genai:
+            LLM_CLIENT = genai.Client(api_key=next_key)
+            LLM_MODEL = LLM_CLIENT
+        
+        print("✅ [Key Rotation] GenAI Client 재설정 완료.")
+        
+    except Exception as e:
+        print(f"❌ [Key Rotation] 키 교체 중 오류: {e}")
+
+# --- 5. 시스템 명령어 ---
+SYSTEM_INSTRUCTION_WORKER = (
+    "당신은 검색된 정보를 있는 그대로 전달하는 정직한 메신저입니다. "
+    "제공된 '검색된 컨텍스트(정보)'의 내용과 형식을 자의적으로 요약하거나 문장으로 바꾸지 마세요. "
+    "반드시 원본의 **불렛 포인트(- 지원 내용, - 대상 등)** 형식을 그대로 유지하여 답변해야 합니다. "
+    "각 검색 결과의 끝에는 반드시 [출처 번호]를 명시하세요."
+)
+
+# --- 6. 핵심 로직 함수들 ---
+
+# --- [수정] 임베딩 함수 (Client API 사용) ---
+@lru_cache(maxsize=1000)
+@retry(
+    stop=stop_after_attempt(7), 
+    wait=wait_exponential(multiplier=1, min=3, max=15),
+    retry=retry_if_exception_type(Exception)
+)
+def get_gemini_embedding(text: str, task_type: str = "SEMANTIC_SIMILARITY") -> Optional[List[float]]:
+    client = get_llm_client() # Lazy Load
+    if not KEY_POOL or not client: return None
+    try:
+        # Client 인스턴스 사용
+        result = client.models.embed_content( # client 변수 사용
+            model='models/text-embedding-004', 
+            contents=text,
+            config=types.EmbedContentConfig(task_type=task_type)
+        )
+        
+        # 결과 처리 (Embedding 객체에서 values 추출)
+        # v1.0: result.embeddings[0].values (batch) or result.embedding.values (single)?
+        # 보통 single call 결과는 result.embedding.values 일 가능성 높음.
+        # 안전하게 속성 확인
+        if hasattr(result, 'embeddings') and result.embeddings:
+            return list(result.embeddings[0].values)
+        if hasattr(result, 'embedding') and result.embedding:
+            return list(result.embedding.values)
+            
+        # fallback for different response structure
+        return list(result.embedding) if hasattr(result, 'embedding') else []
+        
+    except Exception as e:
+        print(f"⚠️ Embed API 실패: {e}")
+        rotate_api_key() 
+        raise e
+
+# --- [신규] 비동기 임베딩 함수 ---
+async def get_gemini_embedding_async(text: str, task_type: str = "SEMANTIC_SIMILARITY") -> Optional[List[float]]:
+    """비동기 버전의 임베딩 함수"""
+    if not KEY_POOL: return None
+    
+    try:
+        # 비동기 클라이언트 생성
+        current_key = next(KEY_CYCLE)
+        client_aio = genai.Client(api_key=current_key)
+        
+        result = await client_aio.models.embed_content(
+            model='models/text-embedding-004', 
+            contents=text,
+            config=types.EmbedContentConfig(task_type=task_type)
+        )
+        
+        # 결과 처리
+        if hasattr(result, 'embeddings') and result.embeddings:
+            return list(result.embeddings[0].values)
+        if hasattr(result, 'embedding') and result.embedding:
+            return list(result.embedding.values)
+            
+        return list(result.embedding) if hasattr(result, 'embedding') else []
+        
+    except Exception as e:
+        print(f"⚠️ Embed API 실패 (async): {e}")
+        rotate_api_key()
+        raise e
+
+# --- [수정] 콘텐츠 생성 함수 (Client API 사용) ---
+@retry(
+    stop=stop_after_attempt(7), 
+    wait=wait_exponential(multiplier=1, min=3, max=15),
+    retry=retry_if_exception_type(Exception)
+)
+def generate_content_safe(client, prompt, timeout=8, **kwargs): 
+    # client 인자는 이제 LLM_CLIENT (Client 객체)입니다.
+    
+    # kwargs에서 설정값 추출하여 Config 객체 생성
+    config_params = {}
+    if 'safety_settings' in kwargs:
+        config_params['safety_settings'] = kwargs.pop('safety_settings')
+    if 'temperature' in kwargs:
+        config_params['temperature'] = kwargs.pop('temperature')
+    if 'top_p' in kwargs:
+        config_params['top_p'] = kwargs.pop('top_p')
+    if 'max_output_tokens' in kwargs:
+        config_params['max_output_tokens'] = kwargs.pop('max_output_tokens')
+    if 'response_mime_type' in kwargs:
+        config_params['response_mime_type'] = kwargs.pop('response_mime_type')
+        
+    config = types.GenerateContentConfig(**config_params)
+    
+    for attempt in range(5):
+        try:
+            # 매 시도마다 최신 Client 객체 사용 (키 로테이션 반영)
+            # 함수 인자로 받은 client보다 전역 LLM_CLIENT가 더 최신일 수 있음 (get_llm_client() 사용)
+            global LLM_CLIENT
+            current_client = LLM_CLIENT if LLM_CLIENT else client
+            
+            if not current_client:
+                current_client = get_llm_client() # 없으면 생성 시도
+            
+            time.sleep(2) 
+            
+            # v1.0 동기 호출
+            return current_client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=prompt,
+                config=config,
+                # timeout은 별도 옵션일 수 있으나 여기서는 생략하거나 kwargs에 남은 것 사용
+                **kwargs 
+            )
+            
+        except Exception as e:
+            error_msg = str(e)
+            if "429" in error_msg or "Quota exceeded" in error_msg:
+                print(f"🛑 [Quota Limit] 할당량 초과! ({attempt+1}/5)")
+                rotate_api_key() 
+                time.sleep(60) 
+                continue 
+            
+            print(f"⚠️ API 호출 실패: {e}")
+            rotate_api_key()
+            time.sleep(5) 
+            
+    raise Exception("API 호출 5회 실패")
+
+# --- [신규] Groq 백업 호출 함수 (모델 업데이트됨) ---
+async def call_groq_backup(prompt):
+    """
+    Gemini가 죽었을 때 호출되는 Groq(Llama3) 백업 함수 (Async)
+    """
+    if not GROQ_CLIENT:
+        print("❌ [Groq] 백업 클라이언트가 없습니다. (실패)")
+        raise Exception("Gemini Quota Exceeded & No Groq Backup")
+        
+    print("🚑 [Groq] Llama-3.3-70b 백업 시스템 가동!")
+    try:
+        completion = await GROQ_CLIENT.chat.completions.create(
+            model="llama-3.3-70b-versatile", # [수정] 백업용은 고성능 70B 모델 사용
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant. Answer strictly in JSON if requested."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.1,
+            max_tokens=1024,
+            top_p=1,
+            stream=False,
+            stop=None,
+        )
+        
+        # 응답 포맷 맞추기 (Gemini와 호환되게 .text 속성 흉내)
+        response_text = completion.choices[0].message.content
+        
+        class MockResponse:
+            def __init__(self, text):
+                self.text = text
+                
+        return MockResponse(response_text)
+        
+    except Exception as e:
+        print(f"❌ [Groq] 백업 호출 실패: {e}")
+        raise e
+
+def call_groq_sync_simple(prompt, system_message="You are a helpful assistant."):
+    """
+    [신규] 간단한 작업을 위한 Groq 동기 호출 함수 (검색어 확장 등)
+    """
+    if not GROQ_SYNC_CLIENT: return None
+    
+    try:
+        completion = GROQ_SYNC_CLIENT.chat.completions.create(
+            model="llama-3.1-8b-instant", # [수정] 단순 작업은 초고속/대용량 8B 모델 사용
+            messages=[
+                {"role": "system", "content": system_message},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.1,
+            max_tokens=1024
+        )
+        return completion.choices[0].message.content
+    except Exception as e:
+        print(f"⚠️ Groq Sync 호출 실패: {e}")
+        return None
+
+# --- [최적화] 비동기 콘텐츠 생성 함수 (Client API Async) ---
+async def generate_content_safe_async(client, prompt, timeout=120, **kwargs): 
+    """
+    [성능 최적화] google.genai.Client.aio 사용
+    """
+    max_retries = 7
+    consecutive_quota_errors = 0
+    
+    # Config 구성 (동기 함수와 동일)
+    config_params = {}
+    if 'safety_settings' in kwargs:
+        config_params['safety_settings'] = kwargs.pop('safety_settings')
+    if 'temperature' in kwargs:
+        config_params['temperature'] = kwargs.pop('temperature')
+    if 'top_p' in kwargs:
+        config_params['top_p'] = kwargs.pop('top_p')
+    if 'response_mime_type' in kwargs:
+        config_params['response_mime_type'] = kwargs.pop('response_mime_type')
+        
+    config = types.GenerateContentConfig(**config_params)
+    
+    for attempt in range(max_retries):
+        try:
+            global LLM_CLIENT
+            current_client = LLM_CLIENT if LLM_CLIENT else client
+            
+            if not current_client:
+                 current_client = get_llm_client() # 없으면 생성 시도
+            
+            if not current_client:
+                print("⚠️ [Async API] 클라이언트 객체가 없습니다. 로테이션 시도...")
+                rotate_api_key()
+                continue
+
+            if attempt > 0:
+                await asyncio.sleep(2)
+            
+            print(f"🚀 [Async API] 호출 시도 ({attempt+1}/{max_retries})")
+            
+            # [수정] v1.0 Async 호출: client.aio.models.generate_content
+            # 주의: client.aio (AsyncClient) 속성을 사용해야 함
+            result = await current_client.aio.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=prompt,
+                config=config,
+                **kwargs
+            )
+            
+            consecutive_quota_errors = 0
+            return result
+            
+        except Exception as e:
+            error_msg = str(e)
+            print(f"⚠️ [Async API] 호출 실패 ({attempt+1}/{max_retries}): {e}")
+            
+            if "429" in error_msg or "Quota exceeded" in error_msg:
+                consecutive_quota_errors += 1
+                
+                retry_delay = 60
+                try:
+                    match = re.search(r'retry in ([\d.]+)s', error_msg)
+                    if match:
+                        retry_delay = max(1, min(int(float(match.group(1))), 60))
+                        print(f"📊 [API] 권장 대기 시간: {retry_delay}초")
+                except: pass
+                
+                if consecutive_quota_errors >= 2:
+                    print(f"🛑 [Critical] Gemini 할당량 {consecutive_quota_errors}회 연속 초과 → Groq 전환")
+                    return await call_groq_backup(prompt)
+
+                print(f"🛑 [Async Quota Limit] 할당량 초과! {retry_delay}초 대기...")
+                rotate_api_key()
+                await asyncio.sleep(retry_delay)
+                continue 
+            
+            rotate_api_key()
+            await asyncio.sleep(5) 
+            
+    print("💀 [System] Gemini 모든 재시도 실패 → Groq 최종 호출")
+    return await call_groq_backup(prompt)
+
+def extract_info_from_question(question: str, chat_history: list[dict] = []) -> dict:
+    history_formatted = "(이전 대화 없음)"
+    if chat_history:
+        recent_history = chat_history[-3:]
+        history_formatted = "\n".join([f"  - {t['role']}: {t['content']}" for t in recent_history])
+
+    cache_key = None
+    if not chat_history:
+        question_hash = hashlib.md5(question.encode('utf-8')).hexdigest()
+        cache_key = f"extract_v2:{question_hash}"
+        try:
+            cached = redis_client.get(cache_key)
+            if cached: return json.loads(cached.decode('utf-8'))
+        except Exception: pass
+
+    client = get_llm_client() # Lazy Load
+    if not client: return {"error": "Gemini 모델 로드 실패"}
+
+    # 2. 히스토리 요약 (최근 3개만)
+    recent_history = chat_history[-3:] 
+    history_str = "\n".join([f"{t['role']}: {t['content'][:300]}" for t in recent_history]) if recent_history else "None"
+
+    # 3. [최종 최적화 프롬프트] 
+    # 지시어는 영어(토큰 절약), 핵심 키워드는 한국어 예시(정확도 보장)
+    prompt = f"""
+    You are an intent classifier for a welfare chatbot.
+    Analyze the user's input based on history and extract JSON.
+    
+    [History]
+    {history_str}
+    
+    [Input]
+    "{question}"
+
+    [Task]
+    Return ONLY a JSON object with keys: "intent", "category", "sub_category", "age" (int), "keywords" (list).
+
+    [Rules]
+    1. **intent**:
+       - "show_more" (more info), "safety_block" (profanity), "exit", "reset", "out_of_scope" (weather, stocks), "small_talk".
+       - "clarify_category": If input has age/target but NO service keyword (e.g., "6개월 아기", "장애 영유아").
+       - null: Normal search.
+    
+    2. **age**:
+       - Convert years('살') or 'dol'('돌') to **MONTHS**. (e.g., "3살" -> 36, "두 돌" -> 24).
+       - If only months are given, use as is. Return integer or null.
+
+    3. **category** (CRITICAL, Match specific keywords, else null):
+       - ONLY assign a category for GENERIC queries (e.g., "병원비 지원", "보육료").
+       - **IF the user asks for a SPECIFIC SERVICE NAME (e.g., "아동수당", "양육수당", "부모급여", "기저귀 바우처", "발달재활서비스", "아이돌봄"), SET "category" TO null.**
+       - Reason: Specific services can belong to unexpected categories. Global search (null) is safer.
+       
+       - "의료/재활": 병원, 치료, 검사, 진단, 재활 (generic terms only).
+       - "교육/보육": 어린이집, 유치원, 교육, 보육, 학습 (generic terms only).
+       - "가족 지원": 상담, 부모, 가족 (generic terms only).
+       - "돌봄/양육": 돌봄, 양육, 활동지원 (generic terms only).
+       - "생활 지원": 바우처, 지원금, 수당, 셔틀, 교통, 차량, 기저귀, 통장 (generic terms only).
+       
+       * **Priority Rule:** If the input contains generic words like "복지(welfare)" or "서비스(service)" AND specific category keywords are absent, set "category" to null to broaden the search.
+
+    4. **sub_category**:
+       - Extract specific traits: "장애", "다문화", "한부모", "저소득", "발달지연".
+       - **IGNORE** generic words like "아이", "아기", "영유아" (child, baby).
+    
+    5. **keywords**:
+       - Extract core nouns for search.
+       - Resolve pronouns ("그거", "거기") using [History].
+
+    [Output Example]
+    {{
+        "intent": null,
+        "category": "null",
+        "sub_category": "null",
+        "age": 24,
+        "keywords": ["바우처", "신청"]
+    }}
+    """
+    try:
+        # [수정] google.genai.types.SafetySetting 객체 사용
+        safety_settings = [
+            types.SafetySetting(category=c, threshold="BLOCK_NONE")
+            for c in ["HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH", "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT"]
+        ]
+        
+        # 앞서 추가한 generate_content_safe 함수 사용
+        response = generate_content_safe(client, prompt, timeout=60, safety_settings=safety_settings) # client 전달
+        # response.resolve() 제거 (v1.0에서는 불필요)
+
+        
+        response_text = response.text
+        json_block_start = response_text.find('{')
+        json_block_end = response_text.rfind('}') + 1
+        
+        if json_block_start != -1 and json_block_end != -1:
+             # JSON 파싱
+            json_string = response_text[json_block_start:json_block_end]
+            default_info = {"age": None, "category": None, "sub_category": None, "intent": None, "keywords": None}
+            extracted_info = json.loads(json_string)
+            default_info.update(extracted_info)
+             
+            has_other_criteria = default_info.get("age") is not None or default_info.get("sub_category") is not None
+            
+            # [수정 2] if 문 아래 들여쓰기 수정
+            if has_other_criteria and default_info.get("category") is None and default_info.get("intent") is None and not default_info.get("keywords"): 
+                default_info["intent"] = "clarify_category"
+
+            # [수정 3] 캐시 저장 로직 들여쓰기 맞춤
+            if cache_key:
+                try:
+                     redis_client.set(cache_key, json.dumps(default_info).encode('utf-8'))
+                except Exception: pass
+                 
+            return default_info
+        
+        else: 
+             return {"error": "Gemini 응답 JSON 없음"}
+             
+    # [수정 4] try와 짝이 맞는 except 위치
+    except Exception as e: 
+        return {"error": f"질문 분석 중 오류: {e}"}
+
+# --- [신규] 비동기 의도 분석 함수 ---
+async def extract_info_from_question_async(question: str, chat_history: list[dict] = []) -> dict:
+    history_formatted = "(이전 대화 없음)"
+    if chat_history:
+        recent_history = chat_history[-3:]
+        history_formatted = "\n".join([f"  - {t['role']}: {t['content']}" for t in recent_history])
+
+    cache_key = None
+    if not chat_history:
+        question_hash = hashlib.md5(question.encode('utf-8')).hexdigest()
+        cache_key = f"extract_v2:{question_hash}"
+        try:
+            # [수정] 비동기 Redis 사용
+            if redis_async_client:
+                cached = await redis_async_client.get(cache_key)
+                if cached: return json.loads(cached.decode('utf-8'))
+        except Exception: pass
+
+    if not LLM_MODEL and not get_llm_client(): return {"error": "Gemini 모델 로드 실패"} # check lazy
+
+    recent_history = chat_history[-3:] 
+    history_str = "\n".join([f"{t['role']}: {t['content'][:300]}" for t in recent_history]) if recent_history else "None"
+
+    # 프롬프트는 기존과 동일하게 사용 (재사용성)
+    prompt = f"""
+    You are an intent classifier for a welfare chatbot.
+    Analyze the user's input based on history and extract JSON.
+    
+    [History]
+    {history_str}
+    
+    [Input]
+    "{question}"
+
+    [Task]
+    Return ONLY a JSON object with keys: "intent", "category", "sub_category", "age" (int), "keywords" (list).
+
+    [Rules]
+    1. **intent**: "show_more", "safety_block", "exit", "reset", "out_of_scope", "small_talk", "clarify_category", null.
+    2. **age**: Convert to MONTHS (int) or null.
+    3. **category**: generic queries only (see utils.py rules). specific names -> null.
+    4. **sub_category**: specific traits or null.
+    5. **keywords**: extract core nouns.
+
+    [Output Example]
+    {{ "intent": null, "category": "null", "sub_category": "null", "age": 24, "keywords": ["바우처"] }}
+    """
+    
+    try:
+        safety_settings = [
+            types.SafetySetting(category=c, threshold="BLOCK_NONE")
+            for c in ["HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH", "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT"]
+        ]
+        
+        # [수정] 비동기 함수 호출
+        # lazy load된 client 사용
+        client = get_llm_client()
+        response = await generate_content_safe_async(client, prompt, timeout=60, safety_settings=safety_settings)
+        
+        # [중요] response.resolve()는 제거해야 합니다.
+        # response는 이미 완료된 GenerateContentResponse 객체입니다.
+        
+        # 텍스트 추출 (비동기 스트리밍이 아니므로 바로 접근 가능)
+        if hasattr(response, 'text'):
+            response_text = response.text
+        else:
+            # 혹시라도 awaitable이 반환되었다면 (거의 없지만)
+            response_text = str(response)
+
+        json_block_start = response_text.find('{')
+        json_block_end = response_text.rfind('}') + 1
+        
+        if json_block_start != -1 and json_block_end != -1:
+            json_string = response_text[json_block_start:json_block_end]
+            default_info = {"age": None, "category": None, "sub_category": None, "intent": None, "keywords": None}
+            extracted_info = json.loads(json_string)
+            default_info.update(extracted_info)
+                
+            has_other_criteria = default_info.get("age") is not None or default_info.get("sub_category") is not None
+            
+            if has_other_criteria and default_info.get("category") is None and default_info.get("intent") is None and not default_info.get("keywords"): 
+                default_info["intent"] = "clarify_category"
+
+            if cache_key and redis_async_client:
+                try:
+                        await redis_async_client.set(cache_key, json.dumps(default_info).encode('utf-8'))
+                except Exception: pass
+                    
+            return default_info
+        
+        else: 
+                return {"error": "Gemini 응답 JSON 없음"}
+                
+    except Exception as e: 
+        return {"error": f"질문 분석 중 오류: {e}"}
+
+def summarize_content_with_llm(context: str, original_question: str, chat_history: list[dict] = []) -> str:
+    if not context: return ""
+    
+    # [수정] 언어 감지 로직 (느슨한 검사로 변경)
+    # 괄호나 공백, 줄바꿈이 섞여도 핵심 단어만 있으면 언어를 인식하도록 수정합니다.
+    target_lang = "Korean" 
+    
+    if "strictly in English" in original_question:
+        target_lang = "English"
+    elif "strictly in Vietnamese" in original_question:
+        target_lang = "Vietnamese"
+    elif "strictly in Chinese" in original_question:
+        target_lang = "Chinese"
+    
+    # [중요] 캐시 키 버전을 v15로 변경 (기존 한국어 캐시 무시)
+    context_hash = hashlib.md5((context + target_lang).encode('utf-8')).hexdigest()
+    cache_key = f"summary_v15_{target_lang}:{context_hash}"
+    
+    try:
+        cached = redis_client.get(cache_key)
+        if cached: return cached.decode('utf-8')
+    except Exception: pass
+
+    client = get_llm_client() # Lazy Load
+    if not client: return "Gemini 모델 로드 실패"
+
+    prompt = f"""
+    # 사용자 원본 질문: "{original_question}"
+        
+    ---원본 텍스트---
+    {context}
+
+    ---
+    # 지시사항:
+    위 '원본 텍스트'를 바탕으로 사용자의 질문에 답변하기 위한 핵심 정보를 요약하세요.
+
+    [★★★ 핵심 언어 규칙 ★★★]
+    **결과물은 반드시 '{target_lang}'(으)로 작성해야 합니다.**
+    - 헤더(항목 제목)와 내용 모두 해당 언어로 번역하세요.
+    - 예: '지원 내용' -> 'Support Content' (영어일 경우)
+
+    당신은 복지 정보 요약 전문가입니다.
+        
+    아래 "---원본 텍스트---"를 바탕으로 사용자의 질문에 맞춰 요약해 주세요.
+
+    # ★★★ [매우 중요] 예외 처리 규칙 ★★★
+    1. 만약 텍스트가 제목, 목차, 또는 아주 짧은 문장만 포함하고 있어서 요약할 정보가 부족하다면,
+       "정보가 부족합니다"라고 말하지 말고, **입력된 텍스트를 그대로 출력**하세요.
+    2. 각 항목의 내용은 **명사형**으로 간결하게 작성하세요. (예: ~지원, ~운영)
+    3. **중요:** 원본 텍스트에 해당 항목의 정보가 없다면, **그 항목 자체를 아예 적지 말고 생략하세요.**
+    4. "정보가 없습니다", "링크를 확인하세요", "👉" 같은 불필요한 문구는 **절대** 적지 마세요.
+        
+    이 텍스트의 내용을 바탕으로, **특히 사용자의 원본 질문과 관련성이 높은 정보**를 중심으로 [출력 예시]와 같이 **표준 Markdown 문법**을 사용하여 간결하게 요약해 주세요.
+    # 추출 항목 (3개 핵심 섹션만):
+    1. 지원 내용 (Support Content)
+    2. 대상 (Target)
+    3. 문의처 (Contact)
+    
+    # 참고: "지원 금액", "신청 방법", "주의사항" 등 상세 정보는 원본 링크에서 확인 가능하다는 안내만 제공
+    
+    # [출력 스타일 가이드 - 스크린샷 스타일]:
+    1. **불렛 포인트 사용:** 모든 항목은 반드시 `* ` (별표+공백)으로 시작하세요. (화면에서 동그라미로 변환됩니다.)
+    2. **헤더 볼드 처리:** 항목의 제목은 `**제목**`으로 감싸고, 뒤에 콜론(:)을 붙이세요.
+       - 형식: `* **지원 내용** : 내용`
+    3. **대괄호/이모지 금지:** `[지원 내용]`이나 이모지를 쓰지 마세요.
+    4. **계층 구조:** 하위 항목은 스페이스 2칸 들여쓰기 후 `* `로 작성하세요.
+
+    # [출력 예시]
+    * **지원 내용** : 장애인 등록 진단서 발급비 및 검사비 지원
+    * **대상** : 도봉구 거주 영유아 (0~6세)
+      * 의료급여수급자 및 차상위계층
+    * **문의처** : 도봉구 보건소 (☎ 02-xxx-xxxx)
+      * 상세 지원 금액 및 신청 방법은 링크에서 확인 가능
+
+    (여기서부터 요약을 시작하세요):
+    """
+    
+    try:
+        # 안전 설정 (의료 용어 차단 방지) - types.SafetySetting 사용
+        safety_settings = [
+            types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="BLOCK_NONE"),
+            types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="BLOCK_NONE"),
+            types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_NONE"),
+            types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE")
+        ]
+
+        # [수정] safety_settings를 인자로 전달!
+        # 이제 generate_content_safe가 **kwargs로 받아서 처리해 줄 거야.
+        response = generate_content_safe(
+            client, # client 전달 
+            prompt, 
+            timeout=30, 
+            safety_settings=safety_settings # <--- 여기 추가!
+        )
+        
+        # [수정] 응답 객체 처리 방식 변경
+        # retry 데코레이터가 적용된 함수는 반환값을 그대로 넘깁니다.
+        # generate_content의 반환값은 GenerateContentResponse 객체입니다.
+        if hasattr(response, 'text'):
+            summary = response.text.strip()
+        else:
+            summary = str(response).strip() # 혹시 문자열로 오면 그대로 사용
+        
+        try:
+            redis_client.set(cache_key, summary.encode('utf-8'))
+        except Exception: pass
+        
+        return summary
+
+    except Exception as e: 
+        print(f"⚠️ 요약 실패: {e}")
+        return context[:300] + "..."
+
+def expand_search_query(question: str) -> list:
+    """
+    [Upgrade Final] 다국어 질문 -> 한국어 검색어 변환 강제화
+    1. (System: ...) 시스템 프롬프트 제거 (노이즈 방지 강화)
+    2. 무조건 한국어 키워드로 변환하도록 프롬프트 강화 (중국어/베트남어 필수)
+    """
+    
+    # ---------------------------------------------------------
+    # 1. 노이즈 제거 (강력한 전처리)
+    # ---------------------------------------------------------
+    # [수정] 정규식 강화: 대소문자 무시, 공백 유연하게 처리
+    clean_question = re.sub(r'\s*\(System[\s\S]*?\)', '', question, flags=re.IGNORECASE).strip()
+    
+    # 특수문자 제거
+    clean_question = re.sub(r'[^\w\s]', '', clean_question) 
+    
+    # [업그레이드] 다국어 불용어 (Stop Words)
+    STOP_WORDS = [
+        # 한국어
+        "있어", "있니", "있나요", "어디", "어디야", "알려줘", "해줘", "궁금해", 
+        "무엇", "뭐야", "대한", "관한", "관련", "알고", "싶어", "해요", "되나요",
+        "나와", "저기", "그거", "이거", "요", "좀", "수", "것", "등", "및", "자세히",
+        "하는", "있는", "좋을", "같다고", "하셨는데", "하셨습니다", "가야하는지",
+        "받아보는", "의심된다고", "같습니다", "합니다", "입니다",
+        "선생님께서", "섲ㄴ생님꼐서", "어린이집에서", "아이를", "아이가", "키우고", "우리", "제가",
+        
+        # 영어
+        "please", "answer", "strictly", "english", "in", "system", "what", "where", "how", "when", "why", 
+        "can", "you", "tell", "me", "about", "is", "are", "the", "a", "an", "for", "to", "help",
+        
+        # 베트남어
+        "là", "gì", "ở", "đâu", "như", "thế", "nào", "tại", "sao", "khi", 
+        "có", "không", "của", "cho", "tôi", "hỏi", "xin", "vui", "lòng", 
+        "làm", "ơn", "nhé", "ạ", "về", "cách", "được", "muốn", "biết",   
+        "bạn", "chúng", "mình", "giúp", "với", "những", "các",           
+
+        # 중국어
+        "的", "了", "是", "我", "你", "他", "们", "在", "好", "吗",        
+        "什么", "怎么", "如何", "请", "问", "哪里", "个", "这", "那",      
+        "关于", "一下", "谢谢", "并没有", "可以", "想", "知道", "告诉",    
+        "有没有", "哪里有", "什么时候", "为什么", "需要"                   
+    ]
+    
+    # 사용자 입력 단어 1차 필터링
+    raw_tokens = clean_question.split()
+    refined_user_keywords = [
+        k for k in raw_tokens 
+        if len(k) >= 1 and k.lower() not in STOP_WORDS
+    ]
+
+    # ---------------------------------------------------------
+    # 2. 비상용 키워드 (Rule Base)
+    # ---------------------------------------------------------
+    fallback_keywords = []
+    
+    # 영어/한글 혼용 대응
+    lower_q = question.lower()
+    if "test" in lower_q or "check" in lower_q or "검사" in clean_question: 
+        fallback_keywords.extend(["검사", "비용", "지원", "진단서"])
+        
+    if any(w in lower_q for w in ["therapy", "group", "social", "friend", "짝치료", "그룹"]):
+        fallback_keywords.extend(["두리활동", "프로그램", "사회성"])
+
+    # ---------------------------------------------------------
+    # 3. AI 확장 (Smart Expansion - Hybrid: Groq 1순위 -> Gemini 백업)
+    # ---------------------------------------------------------
+    ai_keywords = []
+    
+    # [프롬프트 공통 정의]
+    expansion_prompt = f"""
+    당신은 한국어 DB 검색을 위한 '다국어 통역기'입니다.
+    사용자의 질문(영어/중국어/베트남어)을 분석하여, 반드시 **'한국어 핵심 키워드'**로 변환하세요.
+    
+    [사용자 질문]
+    "{clean_question}"
+    
+    [★★★ 필수 변환 규칙 (어기면 안됨) ★★★]
+    1. **무조건 한국어로 출력:** 질문이 외국어라도 검색 키워드는 **반드시 한국어**여야 합니다.
+       - "儿童津贴" -> **"아동수당, 지급, 대상"** (O)
+       - "Development test" -> **"발달, 검사, 영유아, 장애"** (O)
+       
+    2. **동의어 확장:**
+       - "Allowance/津贴" -> "수당, 급여, 지원금"
+       - "Center/中心" -> "센터, 복지관, 보육"
+       - "Test/检查" -> "검사, 진단, 비용"
+
+    3. **출력 형식:** - 설명 없이 오직 한국어 단어만 쉼표(,)로 구분하여 나열하세요.
+    """
+
+    # [1순위] Groq (Llama-3.3) 시도 - 속도 빠름
+    if GROQ_SYNC_CLIENT:
+        try:
+            groq_response = call_groq_sync_simple(expansion_prompt, "You are a professional translator for welfare services.")
+            if groq_response:
+                ai_keywords = [k.strip() for k in re.split(r'[,|\n]', groq_response) if k.strip()]
+                print(f"⚡️ [Groq 확장] {ai_keywords}")
+        except Exception as e:
+            print(f"⚠️ Groq 확장 실패 (Gemini로 전환): {e}")
+
+    # [2순위] Gemini 시도 (Groq 없거나 실패 시)
+    if not ai_keywords and LLM_MODEL:
+        try:
+            response = generate_content_safe(LLM_MODEL, expansion_prompt, timeout=30)
+            ai_keywords = [k.strip() for k in re.split(r'[,|\n]', response.text) if k.strip()]
+            print(f"🐢 [Gemini 확장] {ai_keywords}")
+        except Exception as e:
+            print(f"⚠️ AI 확장 실패: {e}")
+
+    # ---------------------------------------------------------
+    # 4. 최종 합체
+    # ---------------------------------------------------------
+    final_keywords = list(set(ai_keywords + fallback_keywords + refined_user_keywords))
+    
+    # [최종 필터링]
+    # "지원", "서비스", "센터" 같은 너무나 일반적인 단어는
+    # 다른 구체적인 키워드(예: "양육수당")가 있다면 제거합니다.
+    # 그래야 검색 결과가 "지원"이라는 단어 하나 때문에 "특수교육 가족 지원" 같은 엉뚱한 걸 잡지 않습니다.
+    GENERIC_TERMS = ["지원", "서비스", "센터", "복지", "신청", "방법", "문의", "대상"]
+    
+    filtered_keywords = [k for k in final_keywords if len(k) >= 1 and k.lower() not in STOP_WORDS]
+    
+    # 구체적인 키워드가 있는지 확인 (일반적이지 않은 단어)
+    has_specific = any(k not in GENERIC_TERMS for k in filtered_keywords)
+    
+    if has_specific:
+        # 구체적인 단어가 있다면 일반적인 단어 제거
+        filtered_keywords = [k for k in filtered_keywords if k not in GENERIC_TERMS]
+        
+    return filtered_keywords
+
+
+def rerank_search_results(question: str, candidates: list) -> list:
+    """
+    [Upgrade] 중복 정의 버그 수정 및 심사 기준 + 다국어 의도 파악 통합 버전
+    """
+    if not candidates or not LLM_MODEL: return candidates
+
+    # [최적화] SQL에서 이미 키워드 가산점으로 정렬되었으므로 상위 15개만 봅니다.
+    ranking_candidates = candidates[:15]
+    
+    # AI에게 보낼 후보 목록 텍스트 생성
+    candidate_texts = []
+    for i, doc in enumerate(ranking_candidates):
+        meta = doc.get("metadata", {})
+        title = meta.get("title", "")
+        # 내용은 500자 요약
+        content_preview = doc.get("content", "")[:500].replace("\n", " ")
+        candidate_texts.append(f"[{i}] 제목: {title} | 내용: {content_preview}")
+
+    candidates_str = "\n".join(candidate_texts)
+
+    # [통합 프롬프트] 위/아래로 나뉘었던 규칙을 하나로 합치고 강화했습니다.
+    prompt = f"""
+    당신은 복지 정보 검색 시스템의 '냉철한 심사위원'입니다.
+    사용자의 질문 의도(다국어 가능)를 분석하여, 아래 후보 목록(한국어)에서 의미를 연결하여 가장 적합한 문서를 골라 순서대로 나열하세요.
+
+    사용자 질문: "{question}"
+
+    [★★★ 심사 가이드라인 (엄격 준수) ★★★]
+
+    1. **언어 장벽 초월 (신규 기능):**
+       - 사용자가 외국어(예: "Where is the toy library?")로 묻더라도, 의미가 일치하는 한국어 문서(예: "도봉구 장난감 도서관")를 찾아내야 합니다.
+       - 질문의 언어가 다르다고 해서 제외하지 마세요. **'사용자의 의도(Intent)'**가 문서 내용과 맞으면 정답입니다.
+       - 예: "Baby allowance" -> "아동수당", "부모급여" 매칭 (O)
+       
+    2. **'검사/진단' 질문 시 (가장 중요):**
+       - 사용자가 '발달 검사', '장애 진단', '정밀 검사'를 찾고 있다면, 제목에 **'비용', '지원', '진단서', '검사비'**가 포함된 문서가 1순위입니다.
+       - **(감점/제외 대상):** 단순한 '교육 프로그램', '건강 교실', '부모 교육', '마사지 교실', '놀이 치료' 등은 검사가 아닙니다. 
+       - 질문에 '학교', '입학', '교육청'이 없다면, '특수교육대상자 선정' 문서는 후순위로 미루세요.
+
+    3. **'치료/재활' 및 '사회성' 질문 시:**
+       - '언어치료', '재활' -> '발달재활서비스 바우처' (1순위)
+       - '짝치료', '사회성', '그룹', '친구' -> **'두리활동', '사회성 향상'** 등 구체적 프로그램명이 제목에 있는 문서 (1순위)
+
+    4. **정확도 우선 법칙:**
+       - 질문의 핵심 명사(예: 아동수당, 기저귀, 교통비)가 **제목에 그대로 들어있는 문서**를 최우선으로 배치하세요.
+       - 의미가 비슷하더라도(예: 아동수당 vs 행복한 엄마), 질문한 단어가 제목에 없다면 점수를 낮게 주세요.
+
+    5. **기관/장소 질문:**
+       - 질문에 '복지관', '센터' 등이 있으면, 내용(문의처)에 해당 기관이 나오는 문서를 올리세요.
+
+    [후보 문서 목록]
+    {candidates_str}
+
+    [출력 형식]
+    - 가장 적합한 문서의 번호(ID) **최대 3개**를 쉼표로 구분하여 적으세요. (예: 3, 0, 5)
+    - **주의:** 질문과 전혀 관련 없는 문서만 있다면, 억지로 뽑지 말고 개수를 줄이거나 아무것도 적지 마세요.
+    """
+
+    try:
+        # 타임아웃 15초
+        response = generate_content_safe(LLM_MODEL, prompt, timeout=120)
+        
+        # 숫자만 추출
+        raw_indices = [int(s) for s in re.findall(r'\b\d+\b', response.text.strip())]
+        
+        final_results = []
+        seen_indices = set()
+        
+        # 1. AI가 뽑은 순서대로 담기
+        for idx in raw_indices:
+            if idx not in seen_indices and 0 <= idx < len(ranking_candidates):
+                final_results.append(ranking_candidates[idx])
+                seen_indices.add(idx)
+        
+        # 2. AI가 선택하지 않은 나머지 문서들은 뒤에 붙이기 (혹시 모를 누락 방지)
+        # (하지만 화면에는 상위 2개만 나가므로 AI의 선택이 결정적입니다)
+        for i, doc in enumerate(ranking_candidates):
+            if i not in seen_indices:
+                final_results.append(doc)
+        
+        return final_results
+
+    except Exception as e:
+        print(f"⚠️ AI 랭킹 실패: {e}")
+        # 실패하면 SQL 점수 순서 그대로 반환
+        return candidates
+    
+# [utils.py] 파일 맨 아래에 추가
+
+# --- 7. [신규] '더 보기' 및 포맷팅 헬퍼 함수 ---
+
+import asyncio
+
+def get_supabase_pages_by_ids(page_ids: list) -> list:
+    """ID 목록으로 Supabase 데이터 조회 (동기 버전)"""
+    if not page_ids or not supabase: return []
+    try:
+        response = supabase.table("site_pages").select("*").in_("page_id", page_ids).execute()
+        
+        # 중복 제거 및 정렬
+        unique_pages = {item['page_id']: item['metadata'] for item in response.data}
+        return [unique_pages[pid] for pid in page_ids if pid in unique_pages]
+    except Exception as e:
+        print(f"❌ Supabase 조회 오류: {e}")
+        return []
+
+async def get_supabase_pages_by_ids_async(page_ids: list) -> list:
+    """ID 목록으로 Supabase 데이터 조회 (비동기 버전)"""
+    if not page_ids or not supabase: return []
+    
+    # ThreadPoolExecutor로 동기 호출을 비동기처럼 실행
+    loop = asyncio.get_event_loop()
+    try:
+        result = await loop.run_in_executor(None, get_supabase_pages_by_ids, page_ids)
+        return result
+    except Exception as e:
+        print(f"❌ Supabase 비동기 조회 오류: {e}")
+        return []
+
+# --- 8. 포맷팅 함수 ---
+
+def clean_summary_text(text: str) -> str:
+    """
+    [수정] 불렛 스타일(* **제목**)을 인식하여
+    헤더 앞줄을 띄워주고, 내용 없는 빈 헤더는 삭제합니다.
+    """
+    if not text: return "요약 정보가 없습니다."
+
+    lines = text.split('\n')
+    final_lines = []
+
+    # [업그레이드] 다국어 헤더 키워드 통합
+    target_keywords = [
+        # 1. 한국어 (Korean)
+        "지원 내용", "대상", "지원 혜택", "지원 금액", "신청 방법", "문의처",
+        
+        # 2. 영어 (English)
+        "Support Content", "Target", "Benefits", "Support Amount", "How to Apply", "Contact",
+        
+        # 3. 베트남어 (Vietnamese)
+        "Nội dung hỗ trợ", "Đối tượng", "Lợi ích hỗ trợ", "Số tiền hỗ trợ", "Cách đăng ký", "Liên hệ",
+        
+        # 4. 중국어 (Chinese)
+        "支持内容", "对象", "支持福利", "支持金额", "申请方法", "咨询"
+    ]
+    
+    
+    # 정규식: * **제목** : 형태 감지
+    # ^\s*[\*\-]\s* : 줄 시작 부분에 공백, *, - 등이 오는지 확인
+    # \*\*(.+?)\*\* : 볼드체(**)로 감싸진 제목 추출
+    header_pattern = re.compile(r'^\s*[\*\-]\s*\*\*(.+?)\*\*.*$')
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        
+        # 1. 노이즈 제거
+        if not stripped: continue
+        if stripped in ["---", "***", "```"]: continue
+        if "👉" in stripped or "세부 내용" in stripped: continue
+
+        # 2. 헤더 처리
+        match = header_pattern.match(stripped)
+        if match:
+            header_content = match.group(1) # 볼드 안의 텍스트
+            
+            # 유효한 헤더인지 확인
+            if any(k in header_content for k in target_keywords):
+                # 빈 헤더인지 확인 (Look-ahead)
+                has_content = False
+                for j in range(i + 1, len(lines)):
+                    next_line = lines[j].strip()
+                    if not next_line: continue 
+                    # 다음 줄도 헤더거나 링크라면 -> 현재 헤더는 빈 것
+                    if header_pattern.match(next_line) or "🔗" in next_line:
+                        has_content = False
+                    else:
+                        has_content = True
+                    break
+                
+                if not has_content: continue 
+
+                # [가독성] 헤더 앞에 빈 줄 추가 (첫 줄 제외)
+                if final_lines: 
+                    final_lines.append("") 
+
+        final_lines.append(line)
+
+    return "\n".join(final_lines).strip()
+
+def format_search_results(pages_metadata: list) -> str:
+    cards_html = []
+    
+    # 1. [기존] Markdown 볼드체 패턴
+    header_pattern_bold = re.compile(r'^\s*[\*\-•]?\s*\*\*(.+?)\*\*\s*:?\s*(.*)$')
+    
+    # 2. [기존] 이모지 헤더 패턴
+    header_pattern_emoji = re.compile(r'^\s*[\*\-•]?\s*[✅💰📍📞💡📋🕒📝📌ℹ️✨⚠️🔴🔵📄🔗]\s*([^:\n]+)(?::\s*(.*))?$')
+
+    # 3. [기존] 번호 목록 패턴
+    numbered_pattern = re.compile(r'^\s*[\*\-•]?\s*(?:\*\*)?\s*([①-⑮❶-❿]|[0-9]+\.)\s*(.*)$')
+    
+    # 4. [신규] 당구장(참고) 패턴 (※)
+    ref_pattern = re.compile(r'^\s*[\*\-•]?\s*※\s*(.*)$')
+
+    for meta in pages_metadata:
+        title = meta.get("title", "제목 없음")
+        category = meta.get("category", "기타")
+        summary_raw = clean_summary_text(meta.get("pre_summary", ""))
+        url = meta.get("page_url", "")
+        
+        copy_text = f"[{category}] {title}\n\n{summary_raw}\n\n🔗 자세히 보기: {url}"
+        safe_copy_text = copy_text.replace('"', '&quot;').replace("'", "&apos;")
+
+        html_rows = []
+        last_li_index = -1
+        
+        # [핵심] 현재 들여쓰기 레벨 상태 변수 (기본 20px)
+        # 번호 항목(①...)을 만나면 35px로 늘어납니다.
+        current_margin_left = "20px" 
+        
+        for line in summary_raw.split('\n'):
+            line = line.strip()
+            if not line: continue
+            
+            # 매칭 확인
+            match_numbered = numbered_pattern.match(line)
+            match_bold = header_pattern_bold.match(line)
+            match_emoji = header_pattern_emoji.match(line)
+            match_ref = ref_pattern.match(line)
+            
+            # (1) [Sub-Header] 번호 매기기 (①, 1. 등) -> 2번 사진처럼 진하게!
+            if match_numbered:
+                # 번호 항목이 나오면 들여쓰기 레벨을 깊게(35px) 변경할 준비를 합니다.
+                full_content = f"{match_numbered.group(1)} {match_numbered.group(2)}".replace("**", "").strip()
+                
+                # 스타일: 검은색(#101828), 굵게(700), 들여쓰기는 상위 레벨(20px) 유지
+                row = f"<li style='list-style: none; margin-bottom: 4px; margin-top: 8px; margin-left: 20px;'><span style='color: #101828; font-weight: 700;'>{full_content}</span></li>"
+                html_rows.append(row)
+                last_li_index = len(html_rows) - 1
+                
+                # ★ 핵심: 이 다음 줄부터는 들여쓰기를 더 깊게 합니다!
+                current_margin_left = "35px"
+
+            # (2) [Main Header] 헤더 (제목) -> 들여쓰기 초기화
+            elif match_bold or match_emoji:
+                match = match_bold if match_bold else match_emoji
+                header_title = match.group(1).strip()
+                content_text = match.group(2)
+                content_text = content_text.strip() if content_text else ""
+                
+                # 새 주제가 시작되었으므로 들여쓰기 초기화 (20px)
+                current_margin_left = "20px"
+                
+                row = f"<li style='list-style: none; margin-bottom: 6px; margin-top: 12px;'><span style='color: #101828; font-weight: 700; font-size: 1.05em;'>{header_title}</span></li>"
+                html_rows.append(row)
+                last_li_index = len(html_rows) - 1
+                
+                if content_text:
+                    row_content = f"<li style='color: #475467; margin-bottom: 4px; margin-left: {current_margin_left};'>{content_text}</li>"
+                    html_rows.append(row_content)
+                    last_li_index = len(html_rows) - 1
+
+            # (3) [Ref] 당구장 표시 (※) -> 깔끔한 참고 스타일
+            elif match_ref:
+                content = match_ref.group(1).strip()
+                # 스타일: 약간 작은 글씨, 아이콘 느낌 추가
+                row = f"<li style='color: #667085; font-size: 0.9em; margin-bottom: 4px; margin-left: {current_margin_left}; list-style: none;'>※ {content}</li>"
+                html_rows.append(row)
+                last_li_index = len(html_rows) - 1
+            
+            # (4) 일반 내용 (불렛 포인트 등)
+            elif line.startswith("* ") or line.startswith("- ") or line.startswith("• "):
+                content = re.sub(r'^[\*\-•]\s*', '', line).strip()
+                # 현재 설정된 들여쓰기 값(current_margin_left)을 적용
+                row = f"<li style='color: #475467; margin-bottom: 4px; margin-left: {current_margin_left};'>{content}</li>"
+                html_rows.append(row)
+                last_li_index = len(html_rows) - 1
+            
+            # (5) 끊긴 문장 이어 붙이기
+            else:
+                if last_li_index >= 0 and "margin-left" in html_rows[last_li_index]:
+                    prev_row = html_rows[last_li_index]
+                    if prev_row.endswith("</li>"):
+                        new_content = prev_row[:-5] + " " + line + "</li>"
+                        html_rows[last_li_index] = new_content
+                    else:
+                        html_rows.append(f"<li style='color: #475467; margin-left: {current_margin_left};'>{line}</li>")
+                        last_li_index = len(html_rows) - 1
+                else:
+                    html_rows.append(f"<li style='color: #475467; margin-left: {current_margin_left};'>{line}</li>")
+                    last_li_index = len(html_rows) - 1
+
+        html_summary = f'<ul style="padding: 0; margin: 0;">{"".join(html_rows)}</ul>'
+
+        card = f"""
+        <div class="result-card">
+            <div class="card-header-badge">{category}</div>
+            <h3 class="card-title">{title}</h3>
+            <div class="card-body">{html_summary}</div>
+            <div class="card-footer">
+                {f'<a href="{url}" target="_blank" class="detail-link">자세히 보기</a>' if url else ''}
+                <button class="card-share-btn" data-copy="{safe_copy_text}">공유하기</button>
+            </div>
+        </div>
+        """
+        cards_html.append(card)
+    
+    return "".join(cards_html)
+    
+# --- 8.5 동기 검색 함수 (Worker 호환용) ---
+
+def search_supabase(question: str, extracted_info: dict, keywords: list = []) -> list:
+    """
+    Worker용 동기 검색 함수 (비동기 버전의 래퍼)
+    """
+    import asyncio
+    
+    # 비동기 함수를 동기 컨텍스트에서 실행
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(search_supabase_async(question, extracted_info, keywords))
+    finally:
+        loop.close()
+
+def check_semantic_cache(query_embedding: list) -> str | None:
+    """
+    Worker용 동기 캐시 조회 함수
+    """
+    import asyncio
+    
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(check_semantic_cache_async(query_embedding))
+    finally:
+        loop.close()
+
+def get_gemini_embedding(text: str, task_type: str = "SEMANTIC_SIMILARITY") -> Optional[List[float]]:
+    """
+    Worker용 동기 임베딩 함수
+    """
+    import asyncio
+    
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(get_gemini_embedding_async(text, task_type))
+    finally:
+        loop.close()
+
+# --- 9. 의미 기반 캐시 (Semantic Cache) 함수 ---
+
+async def check_semantic_cache_async(query_embedding: list) -> str | None:
+    """
+    Supabase에서 의미가 유사한(0.92 이상) 질문이 있었는지 확인하고,
+    있다면 저장된 답변을 반환합니다. (비동기 버전)
+    """
+    try:
+        # [★수정★] 기준을 0.92 -> 0.98로 대폭 상향합니다.
+        # 0.98 이상이어야만 '같은 질문'으로 인정하고 캐시를 반환합니다.
+        response = await supabase_async.rpc(
+            "match_chat_cache",
+            {
+                "query_embedding": query_embedding,
+                "match_threshold": 0.92, # <--- 여기를 수정하세요!
+                "match_count": 1
+            }
+        ).execute()
+        
+        if response.data and len(response.data) > 0:
+            cached_answer = response.data[0]['answer']
+            print(f"♻️ [Semantic Cache] 의미가 같은 질문 발견! (유사도: {response.data[0]['similarity']:.4f})")
+            return cached_answer
+            
+    except Exception as e:
+        print(f"⚠️ 캐시 확인 중 오류: {e}")
+    
+    return None
+
+async def save_semantic_cache_async(question: str, answer: str, embedding: list):
+    """
+    새로운 질문과 답변, 벡터를 Supabase 캐시 테이블에 저장합니다. (비동기 버전)
+    """
+    try:
+        data = {
+            "question": question,
+            "answer": answer,
+            "embedding": embedding
+        }
+        await supabase_async.table("chat_cache").insert(data).execute()
+        print("💾 [Semantic Cache] 새로운 대화 기억 저장 완료")
+    except Exception as e:
+        print(f"⚠️ 캐시 저장 실패: {e}")
+
+def save_semantic_cache(question: str, answer: str, embedding: list):
+    """
+    새로운 질문과 답변, 벡터를 Supabase 캐시 테이블에 저장합니다. (동기 버전 - Worker용)
+    """
+    try:
+        data = {
+            "question": question,
+            "answer": answer,
+            "embedding": embedding
+        }
+        supabase.table("chat_cache").insert(data).execute()
+        print("💾 [Semantic Cache] 새로운 대화 기억 저장 완료")
+    except Exception as e:
+        print(f"⚠️ 캐시 저장 실패: {e}")
+
+# [utils.py] 맨 아래 search_supabase 함수 교체
+
+# 원래 동기 함수 복구 (Worker 호환성)
+def search_supabase(question: str, extracted_info: dict, keywords: list = []) -> list:
+    """
+    [Upgrade] 키워드 리스트를 SQL에 직접 전달하여 정확도 향상 (동기 버전)
+    """
+    # 1. 임베딩 생성
+    query_embedding = get_gemini_embedding(question)
+    if not query_embedding: return []
+
+    # 2. 검색어 확장
+    if not keywords:
+        keywords = expand_search_query(question)
+    
+    final_query_text = " ".join(keywords)
+    ai_category = extracted_info.get("category")
+    
+    results = []
+    
+    # --- 1차 시도 (카테고리 필터 + 키워드 부스트) ---
+    if ai_category:
+        try:
+            response = supabase.rpc(
+                "hybrid_search_v3",
+                {
+                    "query_text": final_query_text,
+                    "query_embedding": query_embedding,
+                    "match_threshold": 0.45,
+                    "match_count": 15,
+                    "filter_category": ai_category,
+                    "keywords_arr": keywords
+                }
+            ).execute()
+            results = response.data
+        except Exception as e:
+            print(f"⚠️ 1차 검색 실패: {e}")
+
+    # --- 2차 시도 (결과 부족 시 전체 검색) ---
+    if not ai_category or len(results) < 3:
+        try:
+            response = supabase.rpc(
+                "hybrid_search_v3",
+                {
+                    "query_text": final_query_text,
+                    "query_embedding": query_embedding,
+                    "match_threshold": 0.4, 
+                    "match_count": 20,
+                    "filter_category": None,
+                    "keywords_arr": keywords
+                }
+            ).execute()
+            
+            existing_ids = {r['id'] for r in results}
+            for doc in response.data:
+                if doc['id'] not in existing_ids:
+                    results.append(doc)
+                    
+        except Exception as e:
+            print(f"⚠️ 2차 검색 실패: {e}")
+
+        user_age = extracted_info.get("age")
+    
+        if user_age is not None and isinstance(user_age, int) and results:
+            filtered_results = []
+            for doc in results:
+                meta = doc.get("metadata", {})
+                start_age = meta.get("start_age")
+                end_age = meta.get("end_age")
+                doc_age_range = f"{start_age}-{end_age}" if start_age and end_age else None
+                
+                if doc_age_range:
+                    try:
+                        doc_start, doc_end = map(int, doc_age_range.split("-"))
+                        if doc_start <= user_age <= doc_end:
+                            filtered_results.append(doc)
+                    except:
+                        pass
+            
+            if filtered_results:
+                results = filtered_results[:15]
+    
+    return results
+
+async def search_supabase_async(question: str, extracted_info: dict, keywords: list = []) -> list:
+    """
+    [Upgrade] 키워드 리스트를 SQL에 직접 전달하여 정확도 향상
+    """
+    # 1. 임베딩 생성 (비동기)
+    query_embedding = await get_gemini_embedding_async(question)
+    if not query_embedding: return []
+
+    # 2. 검색어 확장 (만약 입력된 keywords가 없으면 여기서 생성)
+    if not keywords:
+        keywords = expand_search_query(question)
+    
+    final_query_text = " ".join(keywords)
+    ai_category = extracted_info.get("category")
+    
+    # 디버깅 출력
+    print(f"🔍 [Search] 키워드: {keywords} / 카테고리: {ai_category}")
+
+    results = []
+    
+    # --- 1차 시도 (카테고리 필터 + 키워드 부스트) ---
+    if ai_category:
+        try:
+            response = await supabase_async.rpc(
+                "hybrid_search_v3",
+                {
+                    "query_text": final_query_text,
+                    "query_embedding": query_embedding,
+                    "match_threshold": 0.45,  # 기준 점수
+                    "match_count": 15,
+                    "filter_category": ai_category,
+                    "keywords_arr": keywords  # [핵심] 키워드 배열 전달
+                }
+            ).execute()
+            results = response.data
+        except Exception as e:
+            print(f"⚠️ 1차 검색 실패: {e}")
+
+    # --- 2차 시도 (결과 부족 시 전체 검색 + 키워드 부스트) ---
+    if not ai_category or len(results) < 3:
+        msg = "🔄 [Fallback] 전체 검색 진행..." if ai_category else "🌍 [Global] 전체 검색 진행..."
+        print(msg)
+        try:
+            response = await supabase_async.rpc(
+                "hybrid_search_v3",
+                {
+                    "query_text": final_query_text,
+                    "query_embedding": query_embedding,
+                    "match_threshold": 0.4, 
+                    "match_count": 20,
+                    "filter_category": None, # 필터 해제
+                    "keywords_arr": keywords # [핵심] 키워드 배열 전달
+                }
+            ).execute()
+            
+            # 중복 제거 및 합치기
+            existing_ids = {r['id'] for r in results}
+            for doc in response.data:
+                if doc['id'] not in existing_ids:
+                    results.append(doc)
+                    
+        except Exception as e:
+            print(f"⚠️ 2차 검색 실패: {e}")
+
+        # [★신규 추가] 나이(월령) 기반 필터링 로직
+        user_age = extracted_info.get("age")
+    
+        # 나이 정보가 있고, 검색 결과도 있다면 필터링 시도
+        if user_age is not None and isinstance(user_age, int) and results:
+            filtered_results = []
+            for doc in results:
+                meta = doc.get("metadata", {})
+                start_age = meta.get("start_age")
+                end_age = meta.get("end_age")
+            
+                # 나이 제한이 없는 문서(None)는 무조건 포함 (안전책)
+                if start_age is None and end_age is None:
+                    filtered_results.append(doc)
+                    continue
+                
+                try:
+                    s = int(start_age) if start_age is not None else 0
+                    e = int(end_age) if end_age is not None else 1000
+                
+                    # 범위 안에 들면 합격
+                    if s <= user_age <= e:
+                        filtered_results.append(doc)
+                except:
+                    filtered_results.append(doc) # 에러나면 그냥 포함
+        
+            # [안전장치] 필터링했더니 결과가 남았다면 -> 교체
+            if filtered_results:
+                print(f"🧹 [Age Filter] {len(results)}개 -> {len(filtered_results)}개로 정제됨")
+                results = filtered_results
+            # 결과가 0개가 되어버렸다면? -> 원본 유지 (필터링 취소)
+            else:
+                print(f"⚠️ [Age Filter] 필터링 결과가 0개여서 원본 유지")
+
+        return results
+
+# --- 6. 헬퍼 함수들 ---
+
+def _get_rich_text(properties, prop_name: str) -> str:
+    prop = properties.get(prop_name, {}).get("rich_text", [])
+    return "\n".join([text_part.get("plain_text", "") for text_part in prop]).strip()
+
+def _get_number(properties, prop_name: str):
+     return properties.get(prop_name, {}).get("number")
+
+def _get_title(properties, prop_name: str) -> str:
+    title_prop = properties.get(prop_name, {}).get("title", [])
+    return title_prop[0].get("plain_text", "") if title_prop and title_prop[0] else "제목 없음"
+
+def _get_select(properties, prop_name: str) -> str:
+    category_prop = properties.get(prop_name, {}).get("select")
+    return category_prop.get("name", "") if category_prop else "분류 없음"
+
+def _get_multi_select(properties, prop_name: str) -> list:
+    target_prop = properties.get(prop_name, {}).get("multi_select", [])
+    return [item.get("name") for item in target_prop if item]
+
+def _get_url(properties, prop_name: str) -> str:
+     return properties.get(prop_name, {}).get("url", "")
+
+def expand_search_query(question: str) -> list:
+    """간단한 검색어 확장 함수 (worker.py 호환성)"""
+    # 기본 키워드 분리
+    import re
+    words = re.findall(r'\b\w+\b', question.lower())
+    
+    # 동의어 추가 (간단 버전)
+    synonyms = {
+        '육아': ['아기', '영유아', '유아'],
+        '아기': ['육아', '영유아', '유아'],
+        '영유아': ['육아', '아기', '유아'],
+        '발달': ['성장', '발육', '성장'],
+        '성장': ['발달', '발육', '발달'],
+        '질병': ['병', '질환', '증상'],
+        '예방접종': ['백신', '접종', '예방'],
+        '수면': ['잠', '취침', '수면습관'],
+    }
+    
+    expanded_words = []
+    for word in words:
+        expanded_words.append(word)
+        if word in synonyms:
+            expanded_words.extend(synonyms[word])
+    
+    return list(set(expanded_words))
+
+def rerank_search_results(question: str, results: list) -> list:
+    """간단한 결과 재순위 함수 (worker.py 호환성)"""
+    if not results:
+        return []
+    
+    # 키워드 매칭 점수 계산
+    question_words = set(question.lower().split())
+    
+    scored_results = []
+    for result in results:
+        metadata = result.get("metadata", {})
+        content = metadata.get("summary", "") + " " + metadata.get("title", "")
+        content_words = set(content.lower().split())
+        
+        # 간단한 Jaccard 유사도
+        intersection = len(question_words & content_words)
+        union = len(question_words | content_words)
+        similarity = intersection / union if union > 0 else 0
+        
+        scored_results.append((result, similarity))
+    
+    # 점수로 정렬
+    scored_results.sort(key=lambda x: x[1], reverse=True)
+    return [result[0] for result in scored_results]
+
+def summarize_content_with_llm(content: str, language: str = "ko") -> str:
+    """간단한 요약 함수 (worker.py 호환성)"""
+    client = get_llm_client()
+    if not client:
+        return content
+    
+    try:
+        prompt = f"다음 내용을 {language}로 3줄로 요약해주세요:\n\n{content}"
+        response = generate_content_safe(client, prompt, timeout=8)
+        return response.text if hasattr(response, 'text') else str(response)
+    except Exception as e:
+        print(f"⚠️ 요약 실패: {e}")
+        return content
+
+def search_supabase(question: str, extracted_info: dict, keywords: list = []) -> list:
+    """search_supabase_async의 동기 버전"""
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    
+    if loop.is_running():
+        # 이미 루프가 실행 중인 경우 (워커에서는 이럴 일이 거의 없지만 안전을 위해)
+        import nest_asyncio
+        nest_asyncio.apply()
+        return loop.run_until_complete(search_supabase_async(question, extracted_info, keywords))
+    else:
+        return loop.run_until_complete(search_supabase_async(question, extracted_info, keywords))

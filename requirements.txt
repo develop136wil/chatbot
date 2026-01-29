@@ -1,0 +1,16 @@
+fastapi>=0.115.0
+uvicorn>=0.30.0
+python-dotenv
+redis
+supabase
+google-genai>=1.0.0
+notion-client
+tenacity
+groq
+requests
+httpx
+pydantic>=2.0.0
+itsdangerous
+apscheduler
+pytz
+grpcio>=1.60.0

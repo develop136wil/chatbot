@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "chatbot"
+version = "0.1.0"
+description = "FastAPI Chatbot Application"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
+    "python-dotenv",
+    "redis",
+    "supabase",
+    "google-genai>=1.0.0",
+    "notion-client",
+    "tenacity",
+    "groq",
+    "requests",
+    "httpx",
+    "pydantic>=2.0.0",
+    "itsdangerous",
+    "apscheduler",
+    "pytz",
+    "grpcio>=1.60.0",
+    "nest-asyncio"
+]
+
+[tool.rye]
+managed = true
+dev-dependencies = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0"
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]

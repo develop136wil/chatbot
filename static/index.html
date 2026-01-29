@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content">
+    <title>영유아 복지정보자료집</title>
+    <link rel="icon" href="/static/header-icon.png">
+
+    <link rel="preload" href="/static/ONE Mobile POP.ttf" as="font" type="font/ttf" crossorigin>
+    <link rel="preload" href="/static/SF-Pro.ttf" as="font" type="font/ttf" crossorigin>
+  
+    <link rel="stylesheet" href="/static/style.css?v=1.0">
+    
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="/static/script.js?v=1.0" defer></script>
+
+    <script>
+        window.currentLang = 'ko'; 
+    </script>
+
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://bluchany-dobong-welfare-bot.hf.space">
+    <meta property="og:title" content="영유아 복지 서비스 탐색기 👶">
+    <meta property="og:description" content="우리 아이에게 딱 맞는 도봉구 복지 혜택, 챗봇에게 물어보세요!">
+    <meta property="og:image" content="https://bluchany-dobong-welfare-bot.hf.space/static/og-image.png">
+    
+    <link rel="manifest" href="/static/manifest.json">
+    <meta name="theme-color" content="#FFFFFF">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="복지탐색기">
+    <link rel="apple-touch-icon" href="/static/header-icon.png">
+
+    <style>
+        .lang-floating-container {
+            position: absolute;
+            /* [수정] 70px -> 95px로 변경 (제목과 겹치지 않게 더 아래로) */
+            top: 95px;  
+            right: 12px;
+            z-index: 100;
+            display: flex;
+            flex-direction: column; 
+            gap: 8px; 
+        }
+        
+        .lang-btn {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            background-color: white;
+            border: 1px solid #eee;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.08);
+            font-size: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            padding: 0;
+        }
+        
+        .lang-btn:active {
+            transform: scale(0.9);
+        }
+        
+        .lang-btn.inactive {
+            opacity: 0.6;
+            filter: grayscale(100%);
+            border: 1px solid #f0f0f0;
+        }
+    </style>
+</head>
+<body>
+    <div id="splash-screen">
+        <div class="splash-content">
+            <img src="/static/header-icon.png" alt="로고" class="splash-logo">
+            <h1 class="splash-title">도봉구<br>영유아 복지정보자료집</h1>
+        </div>
+    </div>
+
+    <div style="display: none;">
+        <img src="/static/bot-icon.png" alt="">
+        <img src="/static/toggle-icon.png" alt="">
+    </div>
+  
+    <div class="chat-container" style="position: relative;">
+        <div class="chat-header">
+            <h2>
+                <img src="/static/header-icon.png" alt="icon" class="header-icon">
+                <span id="header-title">영유아 복지정보자료집</span>
+            </h2>
+        </div>
+
+        <div class="lang-floating-container">
+            <button onclick="changeLanguage('ko')" id="btn-ko" class="lang-btn">🇰🇷</button>
+            <button onclick="changeLanguage('en')" id="btn-en" class="lang-btn inactive">🇺🇸</button>
+            <button onclick="changeLanguage('vi')" id="btn-vi" class="lang-btn inactive">🇻🇳</button>
+            <button onclick="changeLanguage('zh')" id="btn-zh" class="lang-btn inactive">🇨🇳</button>
+        </div>
+
+        <div class="chat-box" id="chat-box">
+            <div class="message-row assistant">
+                <img src="/static/bot-icon.png" class="bot-profile-icon" alt="bot">
+                <div class="message assistant">
+                    <p id="welcome-msg">안녕하세요! 궁금한 복지 서비스를 질문해주세요.<br><br>
+                    ※ 나이(개월 수), 특성(예: 장애, 다문화, 한부모) 등을 포함하여 질문해주시면 더 정확한 정보를 찾을 수 있습니다.</p>
+                    
+                    <div style="text-align: right; margin-top: 8px;">
+                        <span id="time-notice" style="font-size: 11px; color: #888888; display: inline-block;">
+                            답변에는 약 15~30초 정도가 소요됩니다.
+                        </span>
+                    </div>
+                </div> </div>
+        </div>
+
+        <div class="suggestion-container" id="suggestion-container">
+            </div>
+
+        <button id="suggestion-toggle-btn" aria-label="추천 질문 토글">
+            <span class="toggle-text">접기</span> <span class="toggle-icon"></span>
+        </button>
+  
+        <button id="scroll-bottom-btn">가장 아래로 가기</button>
+
+        <div class="chat-input-box">
+            <textarea id="user-input" placeholder="무엇이 궁금하신가요?" rows="1" autocomplete="off"></textarea>
+            <button id="mic-btn" aria-label="음성 인식"></button>
+            <button id="send-btn" aria-label="전송" style="display: none;"></button>
+        </div>
+    </div> 
+    
+    <div id="toast-container"></div>
+
+    <script>
+        const translations = {
+            ko: {
+                title: "영유아 복지정보자료집",
+                welcome: "안녕하세요! 궁금한 복지 서비스를 질문해주세요.<br><br>※ 나이(개월 수), 특성(예: 장애, 다문화, 한부모) 등을 포함하여 질문해주시면 더 정확한 정보를 찾을 수 있습니다.",
+                time: "답변에는 약 15~30초 정도가 소요됩니다.",
+                placeholder: "무엇이 궁금하신가요?",
+                toggle_open: "추천 질문",  // 접혀있을 때
+                toggle_close: "접기",      // 펼쳐져 있을 때
+                chips: [
+                    { label: "🏥 발달 검사", text: "영유아 발달검사" },
+                    { label: "💰 아동수당", text: "아동수당 지급" },
+                    { label: "🍼 양육수당", text: "양육수당 지원" },
+                    { label: "🧒 아이돌봄", text: "아이돌봄 서비스" },
+                    { label: "🏫 보육료", text: "보육료 지원" },
+                    { label: "🧩 발달재활", text: "발달재활서비스 바우처" },
+                    { label: "🏠 가족양육지원", text: "장애아가족 양육지원" }
+                ]
+            },
+            en: {
+                title: "Child Welfare Info",
+                welcome: "Hello! Ask me about welfare services.<br><br>※ Please include age (months) and details (e.g. disability, multicultural) for better accuracy.",
+                time: "Answers take about 15~30 seconds.",
+                placeholder: "What are you looking for?",
+                toggle_open: "Suggested Questions",
+                toggle_close: "Collapse",
+                chips: [
+                    { label: "🏥 Dev. Test", text: "Development test" },
+                    { label: "💰 Child Allowance", text: "Child allowance" },
+                    { label: "🍼 Parenting Pay", text: "Parenting allowance" },
+                    { label: "🧒 Child Care", text: "Child care service" },
+                    { label: "🏫 Daycare Fee", text: "Childcare fee support" },
+                    { label: "🧩 Rehab Voucher", text: "Developmental rehabilitation" },
+                    { label: "🏠 Family Support", text: "Family support for disabled children" }
+                ]
+            },
+            vi: {
+                title: "Thông tin Phúc lợi",
+                welcome: "Xin chào! Hãy hỏi về các dịch vụ phúc lợi.<br><br>※ Vui lòng bao gồm tuổi (tháng) và chi tiết (khuyết tật, đa văn hóa) để có thông tin chính xác.",
+                time: "Câu trả lời mất khoảng 15~30 giây.",
+                placeholder: "Bạn đang tìm gì?",
+                toggle_open: "Câu hỏi gợi ý",
+                toggle_close: "Thu gọn",
+                chips: [
+                    { label: "🏥 Kiểm tra PT", text: "Kiểm tra phát triển" },
+                    { label: "💰 Trợ cấp trẻ em", text: "Trợ cấp trẻ em" },
+                    { label: "🍼 Trợ cấp nuôi dưỡng", text: "Trợ cấp nuôi dưỡng" },
+                    { label: "🧒 Chăm sóc trẻ", text: "Dịch vụ chăm sóc trẻ" },
+                    { label: "🏫 Phí nhà trẻ", text: "Hỗ trợ phí nhà trẻ" },
+                    { label: "🧩 PHCN", text: "Phiếu phục hồi chức năng" },
+                    { label: "🏠 Hỗ trợ gia đình", text: "Hỗ trợ gia đình trẻ khuyết tật" }
+                ]
+            },
+            zh: {
+                title: "婴幼儿福利信息",
+                welcome: "你好！请询问福利服务。<br><br>※ 请包含年龄（月龄）和特征（如残疾、多文化）以获取更准确的信息。",
+                time: "生成答案大约需要15~30秒。",
+                placeholder: "您想了解什么？",
+                toggle_open: "推荐提问",
+                toggle_close: "收起",
+                chips: [
+                    { label: "🏥 发育检查", text: "婴幼儿发育检查" },
+                    { label: "💰 儿童津贴", text: "儿童津贴" },
+                    { label: "🍼 养育津贴", text: "养育津贴" },
+                    { label: "🧒 儿童照护", text: "儿童照护服务" },
+                    { label: "🏫 保育费", text: "保育费支持" },
+                    { label: "🧩 康复代金券", text: "发育康复代金券" },
+                    { label: "🏠 家庭支持", text: "残疾儿童家庭养育支持" }
+                ]
+            }
+        };
+
+        function changeLanguage(lang) {
+            window.currentLang = lang;
+            const data = translations[lang];
+
+            const titleEl = document.getElementById('header-title');
+            const welcomeEl = document.getElementById('welcome-msg');
+            const timeEl = document.getElementById('time-notice');
+            const inputEl = document.getElementById('user-input');
+
+            if (titleEl) titleEl.innerText = data.title;
+            if (welcomeEl) welcomeEl.innerHTML = data.welcome;
+            if (timeEl) timeEl.innerText = data.time;
+            if (inputEl) inputEl.placeholder = data.placeholder;
+
+            // [신규] 토글 버튼 텍스트 즉시 변경
+            updateToggleText();
+
+            const container = document.getElementById('suggestion-container');
+            if (container) {
+                container.innerHTML = '';
+                data.chips.forEach(chip => {
+                    const btn = document.createElement('button');
+                    btn.className = 'suggestion-chip';
+                    btn.innerText = chip.label;
+                    btn.onclick = function() { 
+                        if (typeof sendSuggestion === 'function') {
+                            sendSuggestion(chip.text);
+                        }
+                    };
+                    container.appendChild(btn);
+                });
+            }
+
+            // 스타일 변경 (베이지색 테두리)
+            ['ko', 'en', 'vi', 'zh'].forEach(l => {
+                const btn = document.getElementById('btn-' + l);
+                if (btn) {
+                    if (l === lang) {
+                        btn.classList.remove('inactive');
+                        btn.style.opacity = '1';
+                        btn.style.filter = 'none';
+                        btn.style.border = '2px solid #E5D1B8'; 
+                        btn.style.boxShadow = '0 0 5px rgba(229, 209, 184, 0.5)';
+                    } else {
+                        btn.classList.add('inactive');
+                        btn.style.opacity = '0.5';
+                        btn.style.filter = 'grayscale(100%)';
+                        btn.style.border = '1px solid #eee';
+                        btn.style.boxShadow = 'none';
+                    }
+                }
+            });
+        }
+
+        // [신규] 토글 버튼 상태에 따라 텍스트 번역해주는 함수
+        function updateToggleText() {
+            const container = document.getElementById('suggestion-container');
+            const toggleTextSpan = document.querySelector('#suggestion-toggle-btn .toggle-text');
+            const data = translations[window.currentLang];
+            
+            if (container && toggleTextSpan && data) {
+                // script.js가 hidden 클래스를 넣었는지 확인
+                if (container.classList.contains('hidden')) {
+                    toggleTextSpan.textContent = data.toggle_open;  // "추천 질문"
+                } else {
+                    toggleTextSpan.textContent = data.toggle_close; // "접기"
+                }
+            }
+        }
+
+        window.onload = function() {
+            changeLanguage('ko');
+
+            // [핵심 트릭] script.js가 버튼을 눌러 텍스트를 한국어로 바꿔버린 직후,
+            // 0.05초 뒤에 우리가 다시 번역된 언어로 덮어씌웁니다.
+            const toggleBtn = document.getElementById('suggestion-toggle-btn');
+            if (toggleBtn) {
+                toggleBtn.addEventListener('click', function() {
+                    setTimeout(updateToggleText, 50); // script.js 실행 후 작동
+                });
+            }
+        };
+    </script>
+</body>
+</html>
