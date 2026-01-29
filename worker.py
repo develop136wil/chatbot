@@ -17,6 +17,7 @@ try:
         format_search_results, 
         get_llm_client,
         generate_content_safe,
+        summarize_content_with_llm,  # [추가] 다국어 번역에 필요
         redis_client,
         supabase,
         notion
