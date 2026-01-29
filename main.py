@@ -9,7 +9,7 @@ from typing import List, Dict, Optional, Literal
 from fastapi import FastAPI, Query, HTTPException, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 from starlette.middleware.sessions import SessionMiddleware
 from dotenv import load_dotenv
@@ -177,9 +177,16 @@ async def check_rate_limit(request: Request, limit: int = RATE_LIMIT_MAX_REQUEST
 
 # --- API 엔드포인트 ---
 
-@app.get("/")
+@app.get("/", response_class=HTMLResponse)
 async def read_root():
-    return FileResponse('static/index.html', media_type='text/html')
+    # [수정] FileResponse 대신 내용을 읽어서 HTML로 직접 반환 (다운로드 방지)
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    file_path = os.path.join(current_dir, "static/index.html")
+    
+    with open(file_path, "r", encoding="utf-8") as f:
+        html_content = f.read()
+        
+    return HTMLResponse(content=html_content)
 
 @app.post("/admin/clear_cache")
 def clear_all_caches(secret: str = Query(None)):
