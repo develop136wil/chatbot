@@ -855,9 +855,9 @@ def summarize_content_with_llm(context: str, original_question: str, chat_histor
     elif "strictly in Chinese" in original_question:
         target_lang = "Chinese"
     
-    # [중요] 캐시 키 버전을 v19로 변경 (포맷팅 보존 수정)
+    # [중요] 캐시 키 버전을 v20으로 변경 (Notion 스타일 간소화)
     context_hash = hashlib.md5((context + target_lang).encode('utf-8')).hexdigest()
-    cache_key = f"summary_v19_{target_lang}:{context_hash}"
+    cache_key = f"summary_v20_{target_lang}:{context_hash}"
     
     try:
         cached = redis_client.get(cache_key)
@@ -1265,64 +1265,79 @@ def clean_summary_text(text: str) -> str:
     # ============================================
 
     lines = text.split('\n')
-    final_lines = []
-
-    # [업그레이드] 다국어 헤더 키워드 통합
-    target_keywords = [
-        # 1. 한국어 (Korean)
-        "지원 내용", "대상", "지원 혜택", "지원 금액", "신청 방법", "문의처",
-        
-        # 2. 영어 (English)
-        "Support Content", "Target", "Benefits", "Support Amount", "How to Apply", "Contact",
-        
-        # 3. 베트남어 (Vietnamese)
-        "Nội dung hỗ trợ", "Đối tượng", "Lợi ích hỗ trợ", "Số tiền hỗ trợ", "Cách đăng ký", "Liên hệ",
-        
-        # 4. 중국어 (Chinese)
-        "支持内容", "对象", "支持福利", "支持金额", "申请方法", "咨询"
+    
+    # ============================================
+    # [Notion 스타일] 필수 섹션만 표시
+    # ============================================
+    SHOW_SECTIONS = [
+        # 한국어
+        "지원 내용", "대상", "신청 방법",
+        # 영어
+        "Support Content", "Target", "How to Apply",
+        # 베트남어
+        "Nội dung hỗ trợ", "Đối tượng", "Cách đăng ký",
+        # 중국어
+        "支持内容", "对象", "申请方法"
     ]
     
+    HIDE_SECTIONS = [
+        # 한국어
+        "신청 기간", "신청 절차", "참고 사항", "참고사항", "주요 검사", 
+        "전액 무료", "비용 부담", "지원 금액", "문의처", "주의사항",
+        # 영어
+        "Application Period", "Procedure", "Note", "Reference", "Cost", "Contact",
+        # 기타
+        "검사 도구", "찾아가는"
+    ]
     
-    # 정규식: * **제목** : 형태 감지
-    # ^\s*[\*\-]\s* : 줄 시작 부분에 공백, *, - 등이 오는지 확인
-    # \*\*(.+?)\*\* : 볼드체(**)로 감싸진 제목 추출
-    header_pattern = re.compile(r'^\s*[\*\-]\s*\*\*(.+?)\*\*.*$')
-
-    for i, line in enumerate(lines):
+    # 헤더 패턴
+    header_pattern = re.compile(r'^[\s\*\-•]*\*?\*?([^*:\n]+)\*?\*?\s*:?\s*(.*)$')
+    
+    final_lines = []
+    current_section = None
+    show_current = True
+    content_count = 0  # 신청 방법은 한 줄만 보여주기 위함
+    
+    for line in lines:
         stripped = line.strip()
-        
-        # 1. 노이즈 제거
         if not stripped: continue
         if stripped in ["---", "***", "```"]: continue
-        if "👉" in stripped or "세부 내용" in stripped: continue
-
-        # 2. 헤더 처리
-        match = header_pattern.match(stripped)
-        if match:
-            header_content = match.group(1) # 볼드 안의 텍스트
-            
-            # 유효한 헤더인지 확인
-            if any(k in header_content for k in target_keywords):
-                # 빈 헤더인지 확인 (Look-ahead)
-                has_content = False
-                for j in range(i + 1, len(lines)):
-                    next_line = lines[j].strip()
-                    if not next_line: continue 
-                    # 다음 줄도 헤더거나 링크라면 -> 현재 헤더는 빈 것
-                    if header_pattern.match(next_line) or "🔗" in next_line:
-                        has_content = False
-                    else:
-                        has_content = True
-                    break
+        
+        # 헤더 감지
+        is_header = False
+        for section in SHOW_SECTIONS + HIDE_SECTIONS:
+            if section in stripped:
+                is_header = True
                 
-                if not has_content: continue 
-
-                # [가독성] 헤더 앞에 빈 줄 추가 (첫 줄 제외)
-                if final_lines: 
-                    final_lines.append("") 
-
-        final_lines.append(line)
-
+                # 표시할 섹션인지 확인
+                if any(s in stripped for s in SHOW_SECTIONS):
+                    current_section = section
+                    show_current = True
+                    content_count = 0
+                    
+                    # 헤더 줄 추가 (깔끔하게 볼드 처리)
+                    # "* **지원 내용** : 내용" -> "**지원 내용**: 내용"
+                    clean_line = re.sub(r'^[\s\*\-•]+', '', stripped)
+                    final_lines.append(f"**{section}**")
+                else:
+                    # 숨길 섹션
+                    show_current = False
+                    current_section = None
+                break
+        
+        # 헤더가 아닌 일반 내용
+        if not is_header and show_current:
+            # 신청 방법은 첫 줄만 표시
+            if current_section and "신청" in current_section:
+                if content_count >= 1:
+                    continue  # 첫 줄 이후는 스킵
+            
+            # 불필요한 기호 정리
+            clean_line = re.sub(r'^[\s\*\-•①-⑮❶-❿0-9\.]+\s*', '', stripped)
+            if clean_line:
+                final_lines.append(f"  • {clean_line}")
+                content_count += 1
+    
     return "\n".join(final_lines).strip()
 
 def format_search_results(pages_metadata: list) -> str:
