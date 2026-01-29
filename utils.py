@@ -288,31 +288,21 @@ def get_gemini_embedding(text: str, task_type: str = "SEMANTIC_SIMILARITY") -> O
 
 # --- [신규] 비동기 임베딩 함수 ---
 async def get_gemini_embedding_async(text: str, task_type: str = "SEMANTIC_SIMILARITY") -> Optional[List[float]]:
-    """비동기 버전의 임베딩 함수"""
+    """비동기 버전의 임베딩 함수 (동기 함수를 비동기로 래핑)"""
+    import asyncio
     if not KEY_POOL: return None
     
     try:
-        # 비동기 클라이언트 생성
-        current_key = next(KEY_CYCLE)
-        client_aio = genai.Client(api_key=current_key)
-        
-        result = await client_aio.models.embed_content(
-            model='models/text-embedding-004', 
-            contents=text,
-            config=types.EmbedContentConfig(task_type=task_type)
+        # 동기 함수를 비동기로 래핑 (genai.Client는 sync-only)
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None, 
+            lambda: get_gemini_embedding(text, task_type)
         )
-        
-        # 결과 처리
-        if hasattr(result, 'embeddings') and result.embeddings:
-            return list(result.embeddings[0].values)
-        if hasattr(result, 'embedding') and result.embedding:
-            return list(result.embedding.values)
-            
-        return list(result.embedding) if hasattr(result, 'embedding') else []
+        return result
         
     except Exception as e:
         print(f"⚠️ Embed API 실패 (async): {e}")
-        rotate_api_key()
         raise e
 
 # --- [수정] 콘텐츠 생성 함수 (Client API 사용) ---
