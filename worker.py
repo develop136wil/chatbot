@@ -249,7 +249,7 @@ def process_job(job_data: Dict[str, Any]) -> Tuple[str, List[str], int]:
                 try:
                     translated_summary = summarize_content_with_llm(
                         content=original_summary,  
-                        language="ko"
+                        language=target_lang_code  # [수정] "ko" -> target_lang_code (실제 대상 언어로 번역)
                     )
                     doc["metadata"]["pre_summary"] = translated_summary
                     logger.debug(f"   -> '{original_title}' => '{new_title}' (번역 완료)")

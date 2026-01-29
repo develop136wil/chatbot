@@ -961,7 +961,9 @@ def expand_search_query(question: str) -> list:
         try:
             groq_response = call_groq_sync_simple(expansion_prompt, "You are a professional translator for welfare services.")
             if groq_response:
-                ai_keywords = [k.strip() for k in re.split(r'[,|\n]', groq_response) if k.strip()]
+                # 마크다운 문자 제거 (**, *, : 등)
+                clean_response = re.sub(r'\*+|[:\[\]]', '', groq_response)
+                ai_keywords = [k.strip() for k in re.split(r'[,|\n]', clean_response) if k.strip() and len(k.strip()) > 1]
                 print(f"⚡️ [Groq 확장] {ai_keywords}")
         except Exception as e:
             print(f"⚠️ Groq 확장 실패 (Gemini로 전환): {e}")
@@ -970,7 +972,9 @@ def expand_search_query(question: str) -> list:
     if not ai_keywords and LLM_MODEL:
         try:
             response = generate_content_safe(LLM_MODEL, expansion_prompt, timeout=30)
-            ai_keywords = [k.strip() for k in re.split(r'[,|\n]', response.text) if k.strip()]
+            # 마크다운 문자 제거 (**, *, : 등)
+            clean_response = re.sub(r'\*+|[:\[\]]', '', response.text)
+            ai_keywords = [k.strip() for k in re.split(r'[,|\n]', clean_response) if k.strip() and len(k.strip()) > 1]
             print(f"🐢 [Gemini 확장] {ai_keywords}")
         except Exception as e:
             print(f"⚠️ AI 확장 실패: {e}")
@@ -1598,17 +1602,37 @@ def _get_url(properties, prop_name: str) -> str:
 
 
 def summarize_content_with_llm(content: str, language: str = "ko") -> str:
-    """간단한 요약 함수 (worker.py 호환성)"""
+    """다국어 번역 함수 (worker.py에서 본문 번역에 사용)"""
     client = get_llm_client()
     if not client:
         return content
     
+    # 언어 코드 -> 전체 이름 매핑
+    LANG_NAMES = {
+        "ko": "한국어",
+        "en": "English",
+        "zh": "中文(简体)",
+        "vi": "Tiếng Việt"
+    }
+    
+    lang_name = LANG_NAMES.get(language, language)
+    
+    # 한국어면 번역 불필요
+    if language == "ko":
+        return content
+    
     try:
-        prompt = f"다음 내용을 {language}로 3줄로 요약해주세요:\n\n{content}"
-        response = generate_content_safe(client, prompt, timeout=8)
-        return response.text if hasattr(response, 'text') else str(response)
+        prompt = f"""다음 복지 서비스 설명을 {lang_name}로 번역해주세요. 
+설명만 출력하고, 다른 말은 하지 마세요.
+
+원문:
+{content}
+
+{lang_name} 번역:"""
+        response = generate_content_safe(client, prompt, timeout=10)
+        return response.text.strip() if hasattr(response, 'text') else str(response)
     except Exception as e:
-        print(f"⚠️ 요약 실패: {e}")
+        print(f"⚠️ 번역 실패: {e}")
         return content
 
 # [삭제됨] search_supabase 중복 정의 - 진짜 동기 버전은 파일 중간에 있음 (line ~1383)
