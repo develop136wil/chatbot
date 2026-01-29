@@ -8,7 +8,7 @@ except Exception:
     pass # Vercel 등 일부 환경에서는 stdout 설정 변경 불가
 
 # [버전 마커] 배포 확인용
-_UTILS_VERSION = "2026.01.29-v3"
+_UTILS_VERSION = "2026.01.29-v4"
 print(f"📦 Utils 모듈 로드 (버전: {_UTILS_VERSION})")
 
 try:
@@ -899,17 +899,36 @@ def expand_search_query(question: str) -> list:
     ]
 
     # ---------------------------------------------------------
-    # 2. 비상용 키워드 (Rule Base)
+    # 2. 비상용 키워드 (Rule Base) - 자주 검색되는 복지 용어
     # ---------------------------------------------------------
     fallback_keywords = []
     
     # 영어/한글 혼용 대응
     lower_q = question.lower()
+    
+    # [수당/급여 관련]
+    if any(w in clean_question for w in ["양육수당", "부모급여", "아동수당", "수당"]):
+        fallback_keywords.extend(["양육수당", "부모급여", "아동수당", "지급", "대상"])
+        
+    if "아동수당" in clean_question:
+        fallback_keywords.extend(["아동수당", "만 8세", "지급일", "입금"])
+        
+    if "부모급여" in clean_question:
+        fallback_keywords.extend(["부모급여", "영아수당", "지급액", "0세", "1세"])
+    
+    # [검사/진단 관련]
     if "test" in lower_q or "check" in lower_q or "검사" in clean_question: 
         fallback_keywords.extend(["검사", "비용", "지원", "진단서"])
         
+    if "발달" in clean_question:
+        fallback_keywords.extend(["발달", "영유아", "검사", "선별"])
+        
+    # [치료/재활 관련]
     if any(w in lower_q for w in ["therapy", "group", "social", "friend", "짝치료", "그룹"]):
         fallback_keywords.extend(["두리활동", "프로그램", "사회성"])
+        
+    if "치료" in clean_question or "재활" in clean_question:
+        fallback_keywords.extend(["발달재활", "바우처", "언어치료", "치료비"])
 
     # ---------------------------------------------------------
     # 3. AI 확장 (Smart Expansion - Hybrid: Groq 1순위 -> Gemini 백업)
@@ -1574,56 +1593,9 @@ def _get_multi_select(properties, prop_name: str) -> list:
 def _get_url(properties, prop_name: str) -> str:
      return properties.get(prop_name, {}).get("url", "")
 
-def expand_search_query(question: str) -> list:
-    """간단한 검색어 확장 함수 (worker.py 호환성)"""
-    # 기본 키워드 분리
-    import re
-    words = re.findall(r'\b\w+\b', question.lower())
-    
-    # 동의어 추가 (간단 버전)
-    synonyms = {
-        '육아': ['아기', '영유아', '유아'],
-        '아기': ['육아', '영유아', '유아'],
-        '영유아': ['육아', '아기', '유아'],
-        '발달': ['성장', '발육', '성장'],
-        '성장': ['발달', '발육', '발달'],
-        '질병': ['병', '질환', '증상'],
-        '예방접종': ['백신', '접종', '예방'],
-        '수면': ['잠', '취침', '수면습관'],
-    }
-    
-    expanded_words = []
-    for word in words:
-        expanded_words.append(word)
-        if word in synonyms:
-            expanded_words.extend(synonyms[word])
-    
-    return list(set(expanded_words))
+# [삭제됨] expand_search_query 중복 정의 - 진짜 버전은 line ~851에 있음 (Gemini 기반)
+# [삭제됨] rerank_search_results 중복 정의 - 진짜 버전은 line ~982에 있음 (AI 랭킹)
 
-def rerank_search_results(question: str, results: list) -> list:
-    """간단한 결과 재순위 함수 (worker.py 호환성)"""
-    if not results:
-        return []
-    
-    # 키워드 매칭 점수 계산
-    question_words = set(question.lower().split())
-    
-    scored_results = []
-    for result in results:
-        metadata = result.get("metadata", {})
-        content = metadata.get("summary", "") + " " + metadata.get("title", "")
-        content_words = set(content.lower().split())
-        
-        # 간단한 Jaccard 유사도
-        intersection = len(question_words & content_words)
-        union = len(question_words | content_words)
-        similarity = intersection / union if union > 0 else 0
-        
-        scored_results.append((result, similarity))
-    
-    # 점수로 정렬
-    scored_results.sort(key=lambda x: x[1], reverse=True)
-    return [result[0] for result in scored_results]
 
 def summarize_content_with_llm(content: str, language: str = "ko") -> str:
     """간단한 요약 함수 (worker.py 호환성)"""
