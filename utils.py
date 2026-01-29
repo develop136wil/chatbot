@@ -855,9 +855,9 @@ def summarize_content_with_llm(context: str, original_question: str, chat_histor
     elif "strictly in Chinese" in original_question:
         target_lang = "Chinese"
     
-    # [중요] 캐시 키 버전을 v20으로 변경 (Notion 스타일 간소화)
+    # [중요] 캐시 키 버전을 v21로 변경 (2줄 제한 + 서브아이템 숨김)
     context_hash = hashlib.md5((context + target_lang).encode('utf-8')).hexdigest()
-    cache_key = f"summary_v20_{target_lang}:{context_hash}"
+    cache_key = f"summary_v21_{target_lang}:{context_hash}"
     
     try:
         cached = redis_client.get(cache_key)
@@ -1155,9 +1155,13 @@ def rerank_search_results(question: str, candidates: list) -> list:
        - 예: "Baby allowance" -> "아동수당", "부모급여" 매칭 (O)
        
     2. **'검사/진단' 질문 시 (가장 중요):**
-       - 사용자가 '발달 검사', '장애 진단', '정밀 검사'를 찾고 있다면, 제목에 **'비용', '지원', '진단서', '검사비'**가 포함된 문서가 1순위입니다.
-       - **(감점/제외 대상):** 단순한 '교육 프로그램', '건강 교실', '부모 교육', '마사지 교실', '놀이 치료' 등은 검사가 아닙니다. 
-       - 질문에 '학교', '입학', '교육청'이 없다면, '특수교육대상자 선정' 문서는 후순위로 미루세요.
+       - 사용자가 '발달 검사', '장애 진단', '정밀 검사'를 찾고 있다면:
+         * 1순위: 제목에 **'검사'** 또는 **'진단'**이 직접 포함된 문서
+         * 2순위: '검사비 지원', '진단서 발급비' 같은 비용 지원 문서
+       - **(제외 대상 - 중요!):** 
+         * '○○복지관 아동지원사업' 같은 포괄적 지원 프로그램은 '검사'가 아닙니다.
+         * '교육 프로그램', '체험 프로그램', '맞춤형 지원' 등은 검사가 아닙니다.
+         * 제목에 '검사'나 '진단'이 없으면 순위를 낮추세요.
 
     3. **'치료/재활' 및 '사회성' 질문 시:**
        - '언어치료', '재활' -> '발달재활서비스 바우처' (1순위)
@@ -1267,75 +1271,46 @@ def clean_summary_text(text: str) -> str:
     lines = text.split('\n')
     
     # ============================================
-    # [Notion 스타일] 필수 섹션만 표시
+    # [Notion 스타일] 필수 섹션만 표시 + 줄 수 제한
     # ============================================
-    SHOW_SECTIONS = [
-        # 한국어
-        "지원 내용", "대상", "신청 방법",
-        # 영어
-        "Support Content", "Target", "How to Apply",
-        # 베트남어
-        "Nội dung hỗ trợ", "Đối tượng", "Cách đăng ký",
-        # 중국어
-        "支持内容", "对象", "申请方法"
-    ]
+    SHOW_SECTIONS = ["지원 내용", "대상", "신청 방법", "Support Content", "Target", "How to Apply"]
+    HIDE_SECTIONS = ["신청 기간", "신청 절차", "참고", "주요 검사", "전액 무료", "비용", "문의", "주의", "검사 도구", "찾아가는", "아동:", "보호자:", "사회적"]
     
-    HIDE_SECTIONS = [
-        # 한국어
-        "신청 기간", "신청 절차", "참고 사항", "참고사항", "주요 검사", 
-        "전액 무료", "비용 부담", "지원 금액", "문의처", "주의사항",
-        # 영어
-        "Application Period", "Procedure", "Note", "Reference", "Cost", "Contact",
-        # 기타
-        "검사 도구", "찾아가는"
-    ]
-    
-    # 헤더 패턴
-    header_pattern = re.compile(r'^[\s\*\-•]*\*?\*?([^*:\n]+)\*?\*?\s*:?\s*(.*)$')
+    # 섹션당 최대 줄 수
+    MAX_LINES_PER_SECTION = 2
     
     final_lines = []
     current_section = None
-    show_current = True
-    content_count = 0  # 신청 방법은 한 줄만 보여주기 위함
+    show_current = False
+    content_count = 0
     
     for line in lines:
         stripped = line.strip()
         if not stripped: continue
         if stripped in ["---", "***", "```"]: continue
         
-        # 헤더 감지
-        is_header = False
-        for section in SHOW_SECTIONS + HIDE_SECTIONS:
+        # 숨길 키워드가 있으면 스킵
+        if any(h in stripped for h in HIDE_SECTIONS):
+            continue
+        
+        # 표시할 섹션 헤더 감지
+        found_section = None
+        for section in SHOW_SECTIONS:
             if section in stripped:
-                is_header = True
-                
-                # 표시할 섹션인지 확인
-                if any(s in stripped for s in SHOW_SECTIONS):
-                    current_section = section
-                    show_current = True
-                    content_count = 0
-                    
-                    # 헤더 줄 추가 (깔끔하게 볼드 처리)
-                    # "* **지원 내용** : 내용" -> "**지원 내용**: 내용"
-                    clean_line = re.sub(r'^[\s\*\-•]+', '', stripped)
-                    final_lines.append(f"**{section}**")
-                else:
-                    # 숨길 섹션
-                    show_current = False
-                    current_section = None
+                found_section = section
                 break
         
-        # 헤더가 아닌 일반 내용
-        if not is_header and show_current:
-            # 신청 방법은 첫 줄만 표시
-            if current_section and "신청" in current_section:
-                if content_count >= 1:
-                    continue  # 첫 줄 이후는 스킵
-            
-            # 불필요한 기호 정리
+        if found_section:
+            # 새 섹션 시작
+            current_section = found_section
+            show_current = True
+            content_count = 0
+            final_lines.append(f"**{found_section}**")
+        elif show_current and content_count < MAX_LINES_PER_SECTION:
+            # 섹션 내용 (최대 2줄까지만)
             clean_line = re.sub(r'^[\s\*\-•①-⑮❶-❿0-9\.]+\s*', '', stripped)
-            if clean_line:
-                final_lines.append(f"  • {clean_line}")
+            if clean_line and len(clean_line) > 5:  # 너무 짧은 줄 제외
+                final_lines.append(f"• {clean_line}")
                 content_count += 1
     
     return "\n".join(final_lines).strip()
