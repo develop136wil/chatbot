@@ -855,9 +855,9 @@ def summarize_content_with_llm(context: str, original_question: str, chat_histor
     elif "strictly in Chinese" in original_question:
         target_lang = "Chinese"
     
-    # [중요] 캐시 키 버전을 v18로 변경 (최종 초기화)
+    # [중요] 캐시 키 버전을 v19로 변경 (포맷팅 보존 수정)
     context_hash = hashlib.md5((context + target_lang).encode('utf-8')).hexdigest()
-    cache_key = f"summary_v18_{target_lang}:{context_hash}"
+    cache_key = f"summary_v19_{target_lang}:{context_hash}"
     
     try:
         cached = redis_client.get(cache_key)
@@ -947,14 +947,13 @@ def summarize_content_with_llm(context: str, original_question: str, chat_histor
         else:
             summary = str(response).strip() # 혹시 문자열로 오면 그대로 사용
             
-        # [Step 2] 강제 청소 (Regex) - AI가 말을 안 들을 때를 대비
-        # 1. BMP 영역 (기본 다국어 평면)의 심볼/이모지 제거 (\u2000~\u3300: 문장부호, 딩뱃, 화살표, 괄호문자 등)
-        summary = re.sub(r'[\u2000-\u3300]', '', summary)
-        # 2. 이모지 유니코드 범위 (Astral Plane) 삭제
-        summary = re.sub(r'[\U00010000-\U0010ffff]', '', summary)
-        # 3. 특수 잔여물 제거 (혹시 남은 것들)
-        summary = re.sub(r'[^\w\s\(\)\.,가-힣]', ' ', summary).strip() 
-        # 주의: 한글, 영문, 숫자, 괄호, 점, 쉼표 제외하고 다 날림 (초강력)
+        # [Step 2] 이모지만 제거 (포맷팅 보존)
+        # 1. 컬러 이모지 (Astral Plane: 💵, 😥 등)
+        summary = re.sub(r'[\U0001F300-\U0001F9FF]', '', summary)
+        # 2. 심볼 이모지 (⛔, ⚠️ 등)
+        summary = re.sub(r'[\u2600-\u26FF]', '', summary)
+        summary = re.sub(r'[\u2700-\u27BF]', '', summary)
+        # 주의: 포맷팅 문자(*, -, :, [, ])는 보존
         
         try:
             redis_client.set(cache_key, summary.encode('utf-8'))
@@ -1252,17 +1251,17 @@ def clean_summary_text(text: str) -> str:
     if not text: return "요약 정보가 없습니다."
     
     # ============================================
-    # [NEW] 이모지/심볼 완전 제거 (Nuclear Regex)
-    # 화면 표시 전 모든 특수문자를 정리합니다.
+    # [FIX] 이모지만 제거 (포맷팅 문자 보존)
+    # 이전 버전이 너무 공격적이어서 불렛/화살표까지 지웠음
     # ============================================
-    # 1. BMP 영역 심볼 (딩뱃, 화살표, 원문자 등)
-    text = re.sub(r'[\u2000-\u27BF]', '', text)
-    # 2. 추가 BMP 심볼 (기타 기호)
-    text = re.sub(r'[\u2B00-\u2BFF]', '', text)
-    # 3. Astral Plane 이모지 (대부분의 컬러 이모지)
-    text = re.sub(r'[\U00010000-\U0010ffff]', '', text)
-    # 4. 특정 잔여물 (원문자, 괄호문자 등)
-    text = re.sub(r'[ⓐ-ⓩⒶ-Ⓩ㈀-㈞㉮-㉻]', '', text)
+    # 1. 컬러 이모지 (Astral Plane: 💵, 😥, 🔗 등)
+    text = re.sub(r'[\U0001F300-\U0001F9FF]', '', text)
+    # 2. 기타 심볼 이모지 (⛔, ⚠️, ✅ 등 - 구체적 범위만)
+    text = re.sub(r'[\u2600-\u26FF]', '', text)  # Misc Symbols
+    text = re.sub(r'[\u2700-\u27BF]', '', text)  # Dingbats
+    text = re.sub(r'[\u2300-\u23FF]', '', text)  # Misc Technical
+    # 3. 손가락/제스처 이모지
+    text = re.sub(r'[\U0001F400-\U0001F4FF]', '', text)
     # ============================================
 
     lines = text.split('\n')
