@@ -57,7 +57,7 @@ def scheduled_job():
     """매일 자동 인덱싱 작업"""
     logger.info("⏰ [Scheduler] 자동 인덱싱 작업 시작...")
     try:
-        from index import run_indexing # [이동] Lazy Import
+        from run_indexer import run_indexing # [이동] Lazy Import
         run_indexing()
         logger.info("⏰ [Scheduler] 자동 인덱싱 작업 완료!")
     except Exception as e:
