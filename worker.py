@@ -176,8 +176,9 @@ def process_job(job_data: Dict[str, Any]) -> Tuple[str, List[str], int]:
         try:
             raw_results = search_supabase(question, extracted_info_mock, keywords=target_keywords)
         except Exception as e:
-            logger.error(f"❌ Supabase 검색 실패: {e}")
-            return "시스템 오류가 발생했습니다. 잠시 후 다시 시도해주세요. 😥", [], 0
+            logger.error(f"❌ Supabase 검색 실패: {type(e).__name__}: {e}")
+            traceback.print_exc()  # 전체 스택 트레이스 출력
+            return f"시스템 오류가 발생했습니다. 잠시 후 다시 시도해주세요. 😥", [], 0
 
         if not raw_results: 
             return "관련 정보를 찾지 못했습니다. 😥", [], 0

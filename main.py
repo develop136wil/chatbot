@@ -213,6 +213,47 @@ async def read_root():
 def health_check():
     return {"status": "ok", "env": "vercel"}
 
+@app.get("/debug")
+def debug_check():
+    """진단용 엔드포인트: 각 연결 상태를 개별적으로 테스트"""
+    results = {}
+    
+    # 1. Supabase 연결 테스트
+    try:
+        if supabase:
+            resp = supabase.table("site_pages").select("id").limit(1).execute()
+            results["supabase"] = f"✅ OK (rows: {len(resp.data) if resp.data else 0})"
+        else:
+            results["supabase"] = "❌ Client not initialized"
+    except Exception as e:
+        results["supabase"] = f"❌ Error: {type(e).__name__}: {str(e)[:100]}"
+    
+    # 2. Gemini 임베딩 테스트
+    try:
+        from utils import get_gemini_embedding, KEY_POOL
+        if KEY_POOL:
+            embedding = get_gemini_embedding("테스트")
+            if embedding:
+                results["gemini_embed"] = f"✅ OK (dim: {len(embedding)})"
+            else:
+                results["gemini_embed"] = "❌ Returned None"
+        else:
+            results["gemini_embed"] = "❌ No API keys"
+    except Exception as e:
+        results["gemini_embed"] = f"❌ Error: {type(e).__name__}: {str(e)[:100]}"
+    
+    # 3. Redis 연결 테스트
+    try:
+        if redis_client:
+            redis_client.ping()
+            results["redis"] = "✅ OK"
+        else:
+            results["redis"] = "⚠️ Not configured (fallback mode active)"
+    except Exception as e:
+        results["redis"] = f"⚠️ Error: {type(e).__name__}: {str(e)[:50]}"
+    
+    return results
+
 @app.post("/admin/clear_cache")
 def clear_all_caches(secret: str = Query(None)):
     if secret != ADMIN_SECRET_KEY: raise HTTPException(status_code=401, detail="Unauthorized")
