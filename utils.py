@@ -855,9 +855,9 @@ def summarize_content_with_llm(context: str, original_question: str, chat_histor
     elif "strictly in Chinese" in original_question:
         target_lang = "Chinese"
     
-    # [중요] 캐시 키 버전을 v16으로 변경 (기존 한국어 캐시 무시)
+    # [중요] 캐시 키 버전을 v17로 변경 (기존 캐시 무시 + 이모지 강제 삭제 적용)
     context_hash = hashlib.md5((context + target_lang).encode('utf-8')).hexdigest()
-    cache_key = f"summary_v16_{target_lang}:{context_hash}"
+    cache_key = f"summary_v17_{target_lang}:{context_hash}"
     
     try:
         cached = redis_client.get(cache_key)
@@ -946,6 +946,12 @@ def summarize_content_with_llm(context: str, original_question: str, chat_histor
             summary = response.text.strip()
         else:
             summary = str(response).strip() # 혹시 문자열로 오면 그대로 사용
+            
+        # [Step 2] 강제 청소 (Regex) - AI가 말을 안 들을 때를 대비
+        # 1. 명시적 이모지 삭제
+        summary = re.sub(r'[💵💰⛔️⚠️👉✅]', '', summary)
+        # 2. 이모지 유니코드 범위 삭제 (일반적인 이모지 및 기호)
+        summary = re.sub(r'[\U00010000-\U0010ffff]', '', summary)
         
         try:
             redis_client.set(cache_key, summary.encode('utf-8'))
