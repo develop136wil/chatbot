@@ -179,7 +179,7 @@ async def check_rate_limit(request: Request, limit: int = RATE_LIMIT_MAX_REQUEST
 
 @app.get("/")
 async def read_root():
-    return FileResponse('static/index.html')
+    return FileResponse('static/index.html', media_type='text/html')
 
 @app.post("/admin/clear_cache")
 def clear_all_caches(secret: str = Query(None)):
