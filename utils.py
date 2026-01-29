@@ -8,7 +8,8 @@ except Exception:
     pass # Vercel 등 일부 환경에서는 stdout 설정 변경 불가
 
 # [버전 마커] 배포 확인용
-_UTILS_VERSION = "2026.01.29-v4"
+# [버전 마커] 배포 확인용
+_UTILS_VERSION = "2026.01.29-v5"
 print(f"📦 Utils 모듈 로드 (버전: {_UTILS_VERSION})")
 
 try:
@@ -639,6 +640,30 @@ def extract_info_from_question(question: str, chat_history: list[dict] = []) -> 
     except Exception as e: 
         return {"error": f"질문 분석 중 오류: {e}"}
 
+# --- [신규] Groq Async 호출 함수 (utils 내부용) ---
+async def call_groq_async_simple(prompt: str, system_message: str = "You are a helpful assistant.", max_retries: int = 2) -> Optional[str]:
+    """Helper for async Groq calls with retry"""
+    if not GROQ_CLIENT: return None
+    
+    for attempt in range(max_retries):
+        try:
+            chat_completion = await GROQ_CLIENT.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": system_message},
+                    {"role": "user", "content": prompt},
+                ],
+                model="llama-3.3-70b-versatile",
+                temperature=0.1,
+                max_tokens=1024,
+            )
+            return chat_completion.choices[0].message.content
+        except Exception as e:
+            if attempt == max_retries - 1:
+                print(f"⚠️ Groq Async Error (Final): {e}")
+            else:
+                await asyncio.sleep(1)
+    return None
+
 # --- [신규] 비동기 의도 분석 함수 ---
 async def extract_info_from_question_async(question: str, chat_history: list[dict] = []) -> dict:
     history_formatted = "(이전 대화 없음)"
@@ -693,11 +718,31 @@ async def extract_info_from_question_async(question: str, chat_history: list[dic
             for c in ["HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH", "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT"]
         ]
         
-        # [수정] 비동기 함수 호출
-        # lazy load된 client 사용
-        client = get_llm_client()
-        response = await generate_content_safe_async(client, prompt, timeout=60, safety_settings=safety_settings)
+        # [최적화] Groq 우선 시도 (Async)
+        response_text = None
+        if GROQ_CLIENT:
+            try:
+                # Groq는 빠르고 무료 티어 제한이 덜함
+                groq_resp = await call_groq_async_simple(prompt, "You are a precise JSON extractor.")
+                if groq_resp:
+                    response_text = groq_resp
+                    # print("⚡️ [Intent] Groq Fast Path Used") 
+            except Exception as e:
+                print(f"⚠️ Groq Intent Failed: {e}")
+
+        # Groq 실패 시 Gemini Fallback
+        if not response_text:
+            # lazy load된 client 사용
+            client = get_llm_client()
+            response = await generate_content_safe_async(client, prompt, timeout=60, safety_settings=safety_settings)
+            
+            # 텍스트 추출
+            if hasattr(response, 'text'):
+                response_text = response.text
+            else:
+                response_text = str(response)
         
+        # [중요] response.resolve()는 제거해야 합니다.
         # [중요] response.resolve()는 제거해야 합니다.
         # response는 이미 완료된 GenerateContentResponse 객체입니다.
         

@@ -3,8 +3,17 @@
 @import url("https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.8/dist/web/static/pretendard.css");
 
 /* 1. 폰트 설정 */
-@font-face { font-family: 'SF Pro'; src: url('SF-Pro.ttf') format('truetype'); font-weight: normal; }
-@font-face { font-family: 'ONE Mobile POP'; src: url('ONE Mobile POP.ttf') format('truetype'), url('ONE Mobile POP OTF.otf') format('opentype'); font-weight: normal; }
+@font-face {
+    font-family: 'SF Pro';
+    src: url('SF-Pro.ttf') format('truetype');
+    font-weight: normal;
+}
+
+@font-face {
+    font-family: 'ONE Mobile POP';
+    src: url('ONE Mobile POP.ttf') format('truetype'), url('ONE Mobile POP OTF.otf') format('opentype');
+    font-weight: normal;
+}
 
 /* 2. 변수 설정 */
 :root {
@@ -13,130 +22,217 @@
     --bg-color: #FFFFFF;
     --header-bg: rgba(245, 245, 245, 0.85);
     --chat-bg-bot: #F2F4F7;
-    --chat-bg-user: #FFF4C9; 
+    --chat-bg-user: #FFF4C9;
     --accent-color: #FDB022;
-    
+
     /* 글래스모피즘 효과 */
-    --glass-bg: rgba(240, 242, 245, 0.70); 
+    --glass-bg: rgba(240, 242, 245, 0.70);
     --glass-blur: blur(10px);
 
     /* [기본: 라이트 모드] 흰색 (255, 255, 255) */
-    --bg-rgb-values: 255, 255, 255; 
+    --bg-rgb-values: 255, 255, 255;
 }
 
-* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+* {
+    box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;
+}
 
 body {
     /* 기존 설정 유지 */
     font-family: 'SF Pro', 'Pretendard', sans-serif;
-    background-color: #f9fafb; margin: 0; padding: 0;
-    
+    background-color: #f9fafb;
+    margin: 0;
+    padding: 0;
+
     /* [수정] 높이 단위를 dvh로 변경 */
-    height: 100dvh; 
-    display: flex; justify-content: center; overflow: hidden;
+    height: 100dvh;
+    display: flex;
+    justify-content: center;
+    overflow: hidden;
     color: var(--text-primary);
 }
 
 .chat-container {
-    width: 100%; max-width: 600px; height: 100%; background-color: var(--bg-color);
-    position: relative; overflow: hidden; box-shadow: 0 0 25px rgba(0,0,0,0.05);
+    width: 100%;
+    max-width: 600px;
+    height: 100%;
+    background-color: var(--bg-color);
+    position: relative;
+    overflow: hidden;
+    box-shadow: 0 0 25px rgba(0, 0, 0, 0.05);
 }
 
 /* 3. 헤더 */
 .chat-header {
-    position: absolute; top: 0; left: 0; right: 0; z-index: 100;
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 100;
     background-color: var(--glass-bg);
-    backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
-    border-bottom: 1px solid rgba(0,0,0,0.05);
-    padding: 15px 0; text-align: center;
-    display: flex; justify-content: center; align-items: center; gap: 12px;
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
+    border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+    padding: 15px 0;
+    text-align: center;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 12px;
 }
+
 .chat-header h2 {
-    margin: 0; font-size: 1.45rem; font-weight: normal; color: var(--text-primary);
-    font-family: 'ONE Mobile POP', sans-serif; display: flex; align-items: center; gap: 8px;
+    margin: 0;
+    font-size: 1.45rem;
+    font-weight: normal;
+    color: var(--text-primary);
+    font-family: 'ONE Mobile POP', sans-serif;
+    display: flex;
+    align-items: center;
+    gap: 8px;
 }
-.header-icon { width: 40px; height: 40px; object-fit: cover; display: block; }
+
+.header-icon {
+    width: 40px;
+    height: 40px;
+    object-fit: cover;
+    display: block;
+}
 
 /* 4. 채팅 영역 */
 .chat-box {
-    position: absolute; top: 0; left: 0; right: 0; bottom: 0;
-    padding: 80px 16px; 
-    overflow-y: auto; background-color: var(--bg-color);
-    display: flex; flex-direction: column; scroll-behavior: smooth;
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    padding: 80px 16px;
+    overflow-y: auto;
+    background-color: var(--bg-color);
+    display: flex;
+    flex-direction: column;
+    scroll-behavior: smooth;
 }
-.chat-box::-webkit-scrollbar { display: none; }
+
+.chat-box::-webkit-scrollbar {
+    display: none;
+}
 
 /* 5. 메시지 레이아웃 */
 .message-row {
-    display: flex; align-items: flex-start; margin-bottom: 12px; width: 100%; 
+    display: flex;
+    align-items: flex-start;
+    margin-bottom: 12px;
+    width: 100%;
     animation: fadeInUp 0.3s ease-out forwards;
 }
-@keyframes fadeInUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 
-.message-row.assistant { justify-content: flex-start; }
-.message-row.user { justify-content: flex-end; }
+@keyframes fadeInUp {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.message-row.assistant {
+    justify-content: flex-start;
+}
+
+.message-row.user {
+    justify-content: flex-end;
+}
 
 .bot-profile-icon {
-    width: 38px; height: 38px; margin-right: 10px; object-fit: cover; flex-shrink: 0;
-    background-color: transparent; border: none; box-shadow: none;
+    width: 38px;
+    height: 38px;
+    margin-right: 10px;
+    object-fit: cover;
+    flex-shrink: 0;
+    background-color: transparent;
+    border: none;
+    box-shadow: none;
 }
 
 .message {
-    padding: 10px 15px; border-radius: 18px; max-width: 82%;
-    font-size: 15px; line-height: 1.5; word-wrap: break-word; position: relative;
+    padding: 10px 15px;
+    border-radius: 18px;
+    max-width: 82%;
+    font-size: 15px;
+    line-height: 1.5;
+    word-wrap: break-word;
+    position: relative;
     margin: 0 !important;
 }
-.message p { margin: 0; }
+
+.message p {
+    margin: 0;
+}
 
 /* =========================================================
    /* 챗봇 메시지 스타일 (모양 + 마크다운 꾸미기)
    ========================================================= */
 
 /* 1. 말풍선 기본 모양 & 텍스트 설정 */
-.message.assistant { 
-    background-color: var(--chat-bg-bot); /* [유지] 회색 배경 */
-    color: var(--text-primary);           /* [유지] 글자색 */
-    border-top-left-radius: 4px;          /* [유지] 왼쪽 위 뾰족하게 */
-    
+.message.assistant {
+    background-color: var(--chat-bg-bot);
+    /* [유지] 회색 배경 */
+    color: var(--text-primary);
+    /* [유지] 글자색 */
+    border-top-left-radius: 4px;
+    /* [유지] 왼쪽 위 뾰족하게 */
+
     /* [신규] 가독성 업그레이드 */
-    line-height: 1.65;       /* 줄 간격 넓게 */
-    word-break: keep-all;    /* 한글 단어 끊김 방지 */
+    line-height: 1.65;
+    /* 줄 간격 넓게 */
+    word-break: keep-all;
+    /* 한글 단어 끊김 방지 */
 }
 
-/* 2. 강조(Bold) 효과 - 형광펜 느낌 */
-.message.assistant strong { 
-    font-weight: 700; 
-    color: #B54708; /* 진한 주황색 글자 */
-    background: rgba(253, 176, 34, 0.15); /* 연한 주황색 배경 */
-    padding: 0 4px;
-    border-radius: 4px;
+/* 2. 강조(Bold) 효과 - 깔끔하게 수정 (배경/패딩 제거) */
+.message.assistant strong {
+    font-weight: 700;
+    color: #101828;
+    /* 아주 진한 회색 (가독성 위주) */
+    /* background: rgba(253, 176, 34, 0.15); <- 제거 (불필요한 공백/줄바꿈 원인) */
+    /* padding: 0 4px; <- 제거 */
+    /* border-radius: 4px; <- 제거 */
 }
 
 /* 3. 리스트 (ul, ol) 정돈 */
-.message.assistant ul, 
-.message.assistant ol { 
-    padding-left: 24px; 
-    margin: 8px 0; 
+.message.assistant ul,
+.message.assistant ol {
+    padding-left: 24px;
+    margin: 8px 0;
 }
-.message.assistant li { 
-    margin-bottom: 6px; 
+
+.message.assistant li {
+    margin-bottom: 6px;
     position: relative;
 }
 
 /* 4. 제목 스타일 (h1~h3) */
-.message.assistant h1, 
-.message.assistant h2, 
+.message.assistant h1,
+.message.assistant h2,
 .message.assistant h3 {
     margin-top: 24px;
     margin-bottom: 12px;
     font-size: 16px;
     font-weight: 700;
     color: #101828;
-    border-bottom: 1px solid #E4E7EC; 
+    border-bottom: 1px solid #E4E7EC;
     padding-bottom: 8px;
 }
-.message.assistant h1:first-child, 
-.message.assistant h2:first-child { margin-top: 0; }
+
+.message.assistant h1:first-child,
+.message.assistant h2:first-child {
+    margin-top: 0;
+}
 
 /* 5. 표(Table) 스타일 - ★복지 정보 표시에 필수★ */
 .message.assistant table {
@@ -147,9 +243,10 @@ body {
     background-color: #FFFFFF;
     border: 1px solid #E4E7EC;
     border-radius: 8px;
-    overflow: hidden; 
-    box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+    overflow: hidden;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
 }
+
 .message.assistant th {
     background-color: #F9FAFB;
     color: #475467;
@@ -158,18 +255,22 @@ body {
     padding: 10px 12px;
     border-bottom: 1px solid #E4E7EC;
 }
+
 .message.assistant td {
     padding: 10px 12px;
     border-bottom: 1px solid #E4E7EC;
     color: #344054;
 }
-.message.assistant tr:last-child td { border-bottom: none; }
+
+.message.assistant tr:last-child td {
+    border-bottom: none;
+}
 
 /* 6. 인용구/참고박스 */
 .message.assistant blockquote {
     margin: 16px 0;
     padding: 12px 16px;
-    background-color: #FFFDF5; 
+    background-color: #FFFDF5;
     border-left: 4px solid var(--accent-color);
     border-radius: 0 8px 8px 0;
     color: #475467;
@@ -192,80 +293,104 @@ body {
     padding: 16px;
     margin-bottom: 12px;
     box-shadow: none;
-    opacity: 0; /* 초기엔 숨김 (페이드인용) */
-    animation: fadeInUp 0.5s ease-out forwards; /* 등장 애니메이션 */
+    opacity: 0;
+    /* 초기엔 숨김 (페이드인용) */
+    animation: fadeInUp 0.5s ease-out forwards;
+    /* 등장 애니메이션 */
 }
+
 /* [수정] 카드 카테고리 배지 (파란색 -> 베이지/아이보리 계열) */
 .card-header-badge {
     display: inline-block;
     font-size: 12px;
     font-weight: bold;
-    
+
     /* [변경 1] 글자색: 진한 갈색/따뜻한 회색 */
-    color: #6B5B45; 
-    
+    color: #6B5B45;
+
     /* [변경 2] 배경색: 베이지/크림색 */
-    background-color: #FFF4C9; 
-    
+    background-color: #FFF4C9;
+
     /* [변경 3] 테두리 추가: 약간 진한 베이지색 테두리로 눈에 띄게 함 */
     border: 1px solid #F2E2B1;
-    
+
     padding: 4px 8px;
     border-radius: 6px;
     margin-bottom: 4px;
-    
+
     /* [추가] 약간의 그림자로 입체감 부여 (선택 사항) */
     /* box-shadow: 0 1px 2px rgba(107, 91, 69, 0.1); */
 }
+
 /* [수정] 카드 제목 (상단 여백 제거 및 줄 간격 조정) */
 .card-title {
     /* [핵심] 위쪽 여백을 0으로 확실하게 고정 */
-    margin-top: 0 !important; 
-    
-    margin-bottom: 12px; 
-    font-size: 16px; 
-    font-weight: 700; 
+    margin-top: 0 !important;
+
+    margin-bottom: 12px;
+    font-size: 16px;
+    font-weight: 700;
     color: #101828;
-    
+
     /* [추가] 제목 줄 간격을 살짝 좁혀서 위아래 붕 뜬 느낌 제거 */
-    line-height: 1.3; 
+    line-height: 1.3;
 }
-.card-body ul { padding-left: 20px; margin: 0; }
-.card-body li { font-size: 14px; color: #475467; margin-bottom: 4px; line-height: 1.5; }
+
+.card-body ul {
+    padding-left: 20px;
+    margin: 0;
+}
+
+.card-body li {
+    font-size: 14px;
+    color: #475467;
+    margin-bottom: 4px;
+    line-height: 1.5;
+}
 
 /* 카드 푸터 (자세히보기 + 공유하기) */
 .card-footer {
-    margin-top: 16px; padding-top: 12px; border-top: 1px solid #F2F4F7;
-    display: flex; align-items: center; 
-    gap: 10px; /* 버튼 사이 간격 */
+    margin-top: 16px;
+    padding-top: 12px;
+    border-top: 1px solid #F2F4F7;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    /* 버튼 사이 간격 */
 }
 
 /* 공통 스타일 */
-.detail-link, .card-share-btn {
-    display: flex; !important; 
-    align-items: center; 
-    justify-content: center; 
+.detail-link,
+.card-share-btn {
+    display: flex !important;
+    align-items: center;
+    justify-content: center;
     gap: 6px;
     padding: 0 8px !important;
 
     /* [핵심 1] 공간이 좁아도 글자 줄바꿈 절대 금지 */
     white-space: nowrap !important;
-    
-    height: 36px !important;       /* [요청] 42px -> 36px로 축소 */
+
+    height: 36px !important;
+    /* [요청] 42px -> 36px로 축소 */
     box-sizing: border-box;
-    line-height: 36px !important;  /* 글자 수직 중앙 정렬 */
-    
-    background-color: #F2F4F7; 
+    line-height: 36px !important;
+    /* 글자 수직 중앙 정렬 */
+
+    background-color: #F2F4F7;
     border-radius: 10px;
-    
-    font-size: 13px; 
-    font-weight: 600; 
-    color: #475467; !important; /* 글자색: 진한 회색 (공유하기와 동일) */
-    text-decoration: none; !important; /* 밑줄 제거 */
-    cursor: pointer; 
+
+    font-size: 13px;
+    font-weight: 600;
+    color: #475467 !important;
+    /* 글자색: 진한 회색 (공유하기와 동일) */
+    text-decoration: none !important;
+    /* 밑줄 제거 */
+    cursor: pointer;
     transition: background-color 0.2s;
-    
-    flex: 1; /* 50:50 비율 */
+
+    flex: 1;
+    /* 50:50 비율 */
 
     /* 기존 속성 상속 방지 */
     box-sizing: border-box;
@@ -275,32 +400,38 @@ body {
 /* 2. '자세히 보기' 버튼 전용 강력 스타일 (파란색/밑줄 박멸) */
 /* .message.assistant a.detail-link : 이 선택자는 기존 링크 스타일보다 우선순위가 높습니다 */
 .message.assistant a.detail-link {
-    color: #475467 !important;        /* [핵심] 글자색 강제 변경 (진한 회색) */
-    text-decoration: none !important; /* [핵심] 밑줄 강제 제거 */
+    color: #475467 !important;
+    /* [핵심] 글자색 강제 변경 (진한 회색) */
+    text-decoration: none !important;
+    /* [핵심] 밑줄 강제 제거 */
     border: none !important;
-    background-color: #F2F4F7;        /* 배경색 명시 */
+    background-color: #F2F4F7;
+    /* 배경색 명시 */
     box-shadow: none !important;
-    
+
     /* a 태그 특성상 display가 inline일 수 있어 flex로 강제 */
-    display: flex !important; 
+    display: flex !important;
 }
 
-.detail-link:hover, .card-share-btn:hover {
+.detail-link:hover,
+.card-share-btn:hover {
     background-color: #E4E7EC;
-    color: #101828 !important; /* 호버 시 더 진한 검정 */
+    color: #101828 !important;
+    /* 호버 시 더 진한 검정 */
     text-decoration: none !important;
 }
 
 /* 자세히 보기 (a 태그) */
 .detail-link {
-    border: none; 
+    border: none;
 }
+
 .detail-link::before {
-    content: ""; 
+    content: "";
     display: block;
     width: 14px;
     height: 14px;
-    background-image: url("/static/link-icon.png"); 
+    background-image: url("/static/link-icon.png");
     background-repeat: no-repeat;
     background-position: center;
     background-size: contain;
@@ -310,18 +441,23 @@ body {
 
 /* [핵심 수정] 공유하기 버튼 (테두리 제거) */
 .card-share-btn {
-    font-family: inherit; 
+    font-family: inherit;
     margin: 0;
 
     /* ★ 여기가 중요합니다! 기본 테두리와 그림자를 없앱니다 ★ */
-    border: none; 
+    border: none;
     box-shadow: none;
     outline: none;
 }
+
 .card-share-btn::before {
-    content: ""; display: block; width: 16px; height: 16px;
-    background-image: url("/static/share-icon.png"); 
-    background-repeat: no-repeat; background-size: contain; 
+    content: "";
+    display: block;
+    width: 16px;
+    height: 16px;
+    background-image: url("/static/share-icon.png");
+    background-repeat: no-repeat;
+    background-size: contain;
     margin-right: 3px;
     opacity: 0.7;
 }
@@ -330,161 +466,231 @@ body {
 /* 6. 입력창 영역 */
 .chat-input-box {
     /* [유지] 화면 하단에 고정 */
-    position: fixed; 
-    bottom: 0; 
-    
+    position: fixed;
+    bottom: 0;
+
     /* [추가] PC 화면에서 너무 퍼지지 않게 중앙 정렬 */
     left: 50%;
     transform: translateX(-50%);
-    
+
     /* [추가] 채팅창 너비(600px)와 똑같이 맞춤 */
     width: 100%;
-    max-width: 600px; 
-    
+    max-width: 600px;
+
     z-index: 100;
     background-color: var(--glass-bg);
-    backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
-    border-top: 1px solid rgba(0,0,0,0.05);
-    padding: 10px 16px; padding-bottom: calc(10px + env(safe-area-inset-bottom));
-    display: flex; gap: 10px; align-items: center;
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
+    border-top: 1px solid rgba(0, 0, 0, 0.05);
+    padding: 10px 16px;
+    padding-bottom: calc(10px + env(safe-area-inset-bottom));
+    display: flex;
+    gap: 10px;
+    align-items: center;
 }
+
 #user-input {
     flex: 1;
     /* height: 46px; <- 고정 높이 제거 */
-    min-height: 46px; /* 최소 높이 */
-    max-height: 120px; /* 너무 길어지면 그때부터 스크롤 생김 */
-    
-    border: none; 
-    border-radius: 23px; /* 타원형 유지 */
-    padding: 12px 18px; /* 위아래 패딩 조정 */
-    
-    font-size: 15px; 
-    background-color: rgba(153, 153, 153, 0.2); 
-    color: var(--text-primary); 
+    min-height: 46px;
+    /* 최소 높이 */
+    max-height: 120px;
+    /* 너무 길어지면 그때부터 스크롤 생김 */
+
+    border: none;
+    border-radius: 23px;
+    /* 타원형 유지 */
+    padding: 12px 18px;
+    /* 위아래 패딩 조정 */
+
+    font-size: 15px;
+    background-color: rgba(153, 153, 153, 0.2);
+    color: var(--text-primary);
     outline: none;
-    box-shadow: none; 
+    box-shadow: none;
     transition: background-color 0.2s, height 0.1s;
-    
+
     /* 텍스트에리어 전용 속성 */
-    resize: none;      /* 사용자가 임의로 늘리기 금지 */
-    overflow-y: hidden; /* 내용이 넘치기 전엔 스크롤 숨김 */
+    resize: none;
+    /* 사용자가 임의로 늘리기 금지 */
+    overflow-y: hidden;
+    /* 내용이 넘치기 전엔 스크롤 숨김 */
     font-family: inherit;
     line-height: 1.4;
 }
-#user-input:focus { background-color: rgba(153, 153, 153, 0.1); }
 
-#send-btn, #mic-btn {
-    width: 46px; height: 46px; border: none; background-color: transparent;
-    cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0; flex-shrink: 0;
+#user-input:focus {
+    background-color: rgba(153, 153, 153, 0.1);
 }
+
+#send-btn,
+#mic-btn {
+    width: 46px;
+    height: 46px;
+    border: none;
+    background-color: transparent;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    flex-shrink: 0;
+}
+
 #send-btn::after {
-    content: ""; display: block; width: 34px; height: 34px;
-    background-image: url("/static/send-icon.png"); background-repeat: no-repeat; background-size: contain;
+    content: "";
+    display: block;
+    width: 34px;
+    height: 34px;
+    background-image: url("/static/send-icon.png");
+    background-repeat: no-repeat;
+    background-size: contain;
 }
+
 #mic-btn::after {
-    content: ""; display: block; width: 28px; height: 28px;
-    background-image: url("/static/mic-icon.png"); background-repeat: no-repeat; background-size: contain;
+    content: "";
+    display: block;
+    width: 28px;
+    height: 28px;
+    background-image: url("/static/mic-icon.png");
+    background-repeat: no-repeat;
+    background-size: contain;
 }
-@keyframes pulse-red { 0% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.2); opacity: 0.7; } 100% { transform: scale(1); opacity: 1; } }
-#mic-btn.listening::after { animation: pulse-red 1.5s infinite; filter: invert(21%) sepia(93%) saturate(6863%) hue-rotate(357deg) brightness(103%) contrast(118%); }
+
+@keyframes pulse-red {
+    0% {
+        transform: scale(1);
+        opacity: 1;
+    }
+
+    50% {
+        transform: scale(1.2);
+        opacity: 0.7;
+    }
+
+    100% {
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+
+#mic-btn.listening::after {
+    animation: pulse-red 1.5s infinite;
+    filter: invert(21%) sepia(93%) saturate(6863%) hue-rotate(357deg) brightness(103%) contrast(118%);
+}
 
 /* [추천] 로딩 중 입력창 스타일 (블러 제거, 회색 처리) */
 #user-input:disabled {
     /* 1. 배경을 회색으로 바꿔서 '잠김' 느낌을 줌 */
-    background-color: #F2F4F7; 
-    
+    background-color: #F2F4F7;
+
     /* 2. 글자색을 연하게 하되, 읽을 수는 있게 함 (블러 X) */
-    color: #667085;            
-    
+    color: #667085;
+
     /* 3. 마우스를 올렸을 때 '금지' 표시 */
-    cursor: not-allowed;       
-    
+    cursor: not-allowed;
+
     /* 4. 테두리도 연하게 변경 */
     border-color: #F2F4F7;
-    
+
     /* (중요) 블러 효과가 있다면 제거해주세요! */
-    filter: none; 
-    opacity: 1; /* 투명도도 너무 낮추지 마세요 */
+    filter: none;
+    opacity: 1;
+    /* 투명도도 너무 낮추지 마세요 */
 }
 
 /* (참고) 입력창 안의 placeholder 색상도 조절 가능 */
 #user-input:disabled::placeholder {
-    color: #667085; /* 애니메이션 글씨 색상 */
-    -webkit-text-fill-color: #667085; /* 아이폰/사파리 대응 */
+    color: #667085;
+    /* 애니메이션 글씨 색상 */
+    -webkit-text-fill-color: #667085;
+    /* 아이폰/사파리 대응 */
 }
 
 /* 전송/마이크 버튼 비활성화 */
-#send-btn:disabled, #mic-btn:disabled {
-    opacity: 0.3;              /* 흐릿하게 */
+#send-btn:disabled,
+#mic-btn:disabled {
+    opacity: 0.3;
+    /* 흐릿하게 */
     cursor: not-allowed;
-    pointer-events: none;      /* 클릭 아예 불가능하게 */
-    filter: grayscale(100%);   /* 흑백 처리 */
+    pointer-events: none;
+    /* 클릭 아예 불가능하게 */
+    filter: grayscale(100%);
+    /* 흑백 처리 */
 }
 
 /* --- [수정] 피드백 컨테이너 (중앙 정렬 확실하게) --- */
 .feedback-container {
-    margin-top: 30px; /* 여백 확보 */
-    padding-top: 20px; 
+    margin-top: 30px;
+    /* 여백 확보 */
+    padding-top: 20px;
     border-top: 1px dashed #E4E7EC;
-    display: flex; 
-    flex-direction: column; /* 세로 정렬 */
-    align-items: center; /* 가로 중앙 */
+    display: flex;
+    flex-direction: column;
+    /* 세로 정렬 */
+    align-items: center;
+    /* 가로 중앙 */
     justify-content: center;
     gap: 15px;
-    width: 100%; /* 전체 너비 사용 */
+    width: 100%;
+    /* 전체 너비 사용 */
 }
 
 .feedback-container p {
     /* [수정] 크기 축소: 14px -> 12px */
-    font-size: 12px; 
-    
+    font-size: 12px;
+
     /* [수정] 굵기 얇게: 600(Bold) -> 400(Normal) */
-    font-weight: 400; 
-    
+    font-weight: 400;
+
     /* [수정] 색상 변경: 은은한 회색 (#98A2B3) */
-    color: #98A2B3; 
-    
+    color: #98A2B3;
+
     margin: 0;
-    margin-bottom: 4px; /* 버튼과의 간격 살짝 둠 */
+    margin-bottom: 4px;
+    /* 버튼과의 간격 살짝 둠 */
     text-align: center;
 }
 
 /* 피드백 버튼 그룹 */
 .feedback-btn-group {
-    display: flex; gap: 20px; /* 버튼 사이 간격 넓힘 */
+    display: flex;
+    gap: 20px;
+    /* 버튼 사이 간격 넓힘 */
 }
 
 /* --- [수정] 피드백 버튼 스타일 (a태그 -> button태그 변경) --- */
 .feedback-btn {
-    display: flex; 
-    align-items: center; 
+    display: flex;
+    align-items: center;
     justify-content: center;
-    
+
     /* 기본 버튼 스타일 제거 */
-    background-color: #FFFFFF; 
-    border: 1px solid #E4E7EC; 
+    background-color: #FFFFFF;
+    border: 1px solid #E4E7EC;
     outline: none;
-    
-    font-size: 18px; 
-    width: 36px; 
-    height: 36px; 
-    border-radius: 50%; 
-    
-    cursor: pointer; 
-    opacity: 0.7; 
+
+    font-size: 18px;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+
+    cursor: pointer;
+    opacity: 0.7;
     transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
-    
+
     /* 폰트 상속 */
     font-family: inherit;
 }
 
 /* 호버 효과 */
-.feedback-btn:hover { 
-    opacity: 1; 
-    border-color: var(--accent-color); 
-    background-color: #FFF4C9; 
-    transform: scale(1.15) rotate(5deg); /* 살짝 회전하며 커짐 */
-    box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+.feedback-btn:hover {
+    opacity: 1;
+    border-color: var(--accent-color);
+    background-color: #FFF4C9;
+    transform: scale(1.15) rotate(5deg);
+    /* 살짝 회전하며 커짐 */
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05);
 }
 
 /* 클릭 효과 */
@@ -493,7 +699,8 @@ body {
 }
 
 /* 전송 중 및 전송 완료 메시지 */
-.feedback-sending, .feedback-success {
+.feedback-sending,
+.feedback-success {
     font-size: 13px;
     color: var(--text-secondary);
     font-weight: 500;
@@ -502,28 +709,37 @@ body {
 }
 
 .feedback-success {
-    color: #039855; /* 성공 시 초록색 계열 */
+    color: #039855;
+    /* 성공 시 초록색 계열 */
 }
 
 @keyframes fadeIn {
-    from { opacity: 0; transform: translateY(5px); }
-    to { opacity: 1; transform: translateY(0); }
+    from {
+        opacity: 0;
+        transform: translateY(5px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
 }
 
 /* 알약 버튼 스타일 */
 .suggestion-chip {
-    flex-shrink: 0; /* 찌그러짐 방지 */
+    flex-shrink: 0;
+    /* 찌그러짐 방지 */
     background-color: #FFFFFF;
     border: 1px solid #E4E7EC;
     border-radius: 20px;
     padding: 8px 14px;
-    
+
     font-size: 13px;
     font-weight: 500;
     color: #475467;
-    
+
     cursor: pointer;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.03);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.03);
     transition: all 0.2s;
 }
 
@@ -545,27 +761,31 @@ body {
 /* 1. 토글 버튼 (PC 위치 이탈 방지 + 디자인 개선) */
 #suggestion-toggle-btn {
     /* 위치 및 레이아웃 (기존 로직 유지) */
-    position: fixed; 
-    bottom: 82px; 
-    right: 16px;  
+    position: fixed;
+    bottom: 82px;
+    right: 16px;
     z-index: 95;
-    
+
     /* [수정] 동그라미 -> 알약 모양(Pill shape) 변경 */
-    width: auto;           /* 너비 자동 조절 */
+    width: auto;
+    /* 너비 자동 조절 */
     height: 36px;
-    padding: 0 12px;       /* 좌우 여백 추가 */
-    border-radius: 18px;   /* 둥근 모서리 (높이의 절반) */
-    
+    padding: 0 12px;
+    /* 좌우 여백 추가 */
+    border-radius: 18px;
+    /* 둥근 모서리 (높이의 절반) */
+
     background-color: #FFFFFF;
     border: 1px solid #E4E7EC;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-    
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+
     cursor: pointer;
-    display: flex; 
-    align-items: center; 
+    display: flex;
+    align-items: center;
     justify-content: center;
-    gap: 6px; /* 글자와 아이콘 사이 간격 */
-    
+    gap: 6px;
+    /* 글자와 아이콘 사이 간격 */
+
     transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
 }
 
@@ -573,13 +793,13 @@ body {
 @media (min-width: 600px) {
     #suggestion-toggle-btn {
         /* 1. 기존의 왼쪽 기준 정렬을 해제합니다 */
-        left: auto;      
-        margin-left: 0;  
-        
+        left: auto;
+        margin-left: 0;
+
         /* 2. [핵심] 오른쪽 기준으로 정렬합니다 (수학적 계산)
            화면 절반(50%)에서 284px만큼 뺀 위치에 버튼의 오른쪽 끝을 맞춥니다.
            계산식: 300px(채팅창 반폭) - 16px(여백) = 284px */
-        right: calc(50% - 284px); 
+        right: calc(50% - 284px);
     }
 }
 
@@ -588,159 +808,187 @@ body {
     font-size: 13px;
     font-weight: 600;
     color: #475467;
-    white-space: nowrap; /* 줄바꿈 금지 */
+    white-space: nowrap;
+    /* 줄바꿈 금지 */
 }
 
 /* [신규] 버튼 내 아이콘 스타일 (별도 태그로 분리) */
 .toggle-icon {
     display: block;
-    width: 16px; 
+    width: 16px;
     height: 16px;
-    background-image: url("/static/toggle-icon.png"); 
-    background-repeat: no-repeat; 
-    background-position: center; 
+    background-image: url("/static/toggle-icon.png");
+    background-repeat: no-repeat;
+    background-position: center;
     background-size: contain;
-    opacity: 0.6; 
-    transition: transform 0.3s ease; /* 아이콘만 회전 */
+    opacity: 0.6;
+    transition: transform 0.3s ease;
+    /* 아이콘만 회전 */
 }
 
 /* 호버 효과 */
 #suggestion-toggle-btn:hover {
     background-color: #F9FAFB;
-    transform: translateY(-2px); /* 살짝 위로 떠오름 */
+    transform: translateY(-2px);
+    /* 살짝 위로 떠오름 */
 }
 
 /* 활성화(열림->닫힘 전환 시) 아이콘 회전 */
 #suggestion-toggle-btn.active .toggle-icon {
-    transform: rotate(180deg); 
+    transform: rotate(180deg);
 }
 
 /* 2. 추천 질문 컨테이너 (여백 확보 + 애니메이션 유지) */
 .suggestion-container {
     /* [핵심 3] 입력창과 똑같이 '가운데 정렬' 로직 적용 */
-    position: fixed; 
-    bottom: 76px; 
-    
-    left: 50%;                 /* 화면 중앙 */
-    transform: translateX(-50%); /* 정확히 가운데로 맞춤 */
-    
-    width: 100%; 
-    max-width: 600px;          /* PC에서 600px 넘지 않게 제한 */
+    position: fixed;
+    bottom: 76px;
+
+    left: 50%;
+    /* 화면 중앙 */
+    transform: translateX(-50%);
+    /* 정확히 가운데로 맞춤 */
+
+    width: 100%;
+    max-width: 600px;
+    /* PC에서 600px 넘지 않게 제한 */
     z-index: 90;
-    
-    display: flex; gap: 8px; 
+
+    display: flex;
+    gap: 8px;
     /* [핵심 1] 오른쪽 여백을 버튼 크기만큼 충분히 줍니다. 
        (버튼 뒤로 글자가 가더라도 클릭은 버튼이 받도록) */
     padding: 10px 100px 15px 16px;
-    
-    overflow-x: auto; 
+
+    overflow-x: auto;
     white-space: nowrap;
-    
+
     /* [수정 후] 투명도를 0.85로 낮추고, 시작점을 0%부터 서서히 올라오게 변경 */
-    background: linear-gradient(
-        to top, 
-        rgba(var(--bg-rgb-values), 0.9) 0%,   /* 변수 + 투명도 0.9 */
-        rgba(var(--bg-rgb-values), 0.5) 40%,  /* 변수 + 투명도 0.5 */
-        rgba(var(--bg-rgb-values), 0) 100%    /* 변수 + 투명도 0 */
-    );
+    background: linear-gradient(to top,
+            rgba(var(--bg-rgb-values), 0.9) 0%,
+            /* 변수 + 투명도 0.9 */
+            rgba(var(--bg-rgb-values), 0.5) 40%,
+            /* 변수 + 투명도 0.5 */
+            rgba(var(--bg-rgb-values), 0) 100%
+            /* 변수 + 투명도 0 */
+        );
 
     /* [추천 옵션] 뒤에 있는 글자가 흐릿하게 보여 가독성을 높여주는 '블러 효과' 추가 */
     backdrop-filter: blur(2px);
-    -webkit-backdrop-filter: blur(2px); /* 사파리 호환용 */
-  
+    -webkit-backdrop-filter: blur(2px);
+    /* 사파리 호환용 */
+
     /* [핵심 2] ★★★ 마법의 코드: 그라데이션 마스크 ★★★ */
     /* 오른쪽 85% 지점부터 투명해지기 시작해서 100% 지점(버튼 있는 곳)에서는 완전히 사라짐 */
     -webkit-mask-image: linear-gradient(to right, black 70%, transparent 100%);
     mask-image: linear-gradient(to right, black 70%, transparent 100%);
 
     /* 스크롤바 숨김 및 애니메이션 */
-    -ms-overflow-style: none; scrollbar-width: none; 
+    -ms-overflow-style: none;
+    scrollbar-width: none;
     transition: all 0.3s ease-in-out;
-    opacity: 1; pointer-events: auto;
+    opacity: 1;
+    pointer-events: auto;
 }
-.suggestion-container::-webkit-scrollbar { display: none; }
+
+.suggestion-container::-webkit-scrollbar {
+    display: none;
+}
 
 /* 숨김 상태 (.hidden 클래스가 붙으면) */
 .suggestion-container.hidden {
-    opacity: 0; 
-    transform: translate(-50%, 20px); /* 숨겨질 때도 중앙 정렬(-50%) 유지하며 아래로 */
-    pointer-events: none; 
+    opacity: 0;
+    transform: translate(-50%, 20px);
+    /* 숨겨질 때도 중앙 정렬(-50%) 유지하며 아래로 */
+    pointer-events: none;
 }
 
 /* --- [신규] 피드백 상세 입력창 스타일 --- */
 .feedback-input-wrapper {
-    display: flex; 
-    align-items: center; /* 세로 중앙 정렬 */
-    gap: 6px;            /* 간격 조금 좁힘 (8px -> 6px) */
-    width: 100%; 
-    margin-top: 10px; 
+    display: flex;
+    align-items: center;
+    /* 세로 중앙 정렬 */
+    gap: 6px;
+    /* 간격 조금 좁힘 (8px -> 6px) */
+    width: 100%;
+    margin-top: 10px;
     animation: fadeIn 0.3s ease-out;
-    
+
     /* [핵심] 내용물이 넘쳐도 밖으로 튀어나가지 않게 함 */
-    box-sizing: border-box; 
+    box-sizing: border-box;
 }
 
 /* 입력창 */
 .feedback-input {
     /* [핵심] flex: 1과 min-width: 0이 만나야 칸이 좁아질 때 입력창도 같이 줄어듭니다 */
-    flex: 1; 
-    min-width: 0; 
-    
-    padding: 8px 12px;     /* 패딩을 살짝 줄임 */
-    border: 1px solid #E4E7EC; 
-    border-radius: 20px; 
-    font-size: 13px;       /* 폰트 크기 살짝 줄임 (모바일 최적화) */
+    flex: 1;
+    min-width: 0;
+
+    padding: 8px 12px;
+    /* 패딩을 살짝 줄임 */
+    border: 1px solid #E4E7EC;
+    border-radius: 20px;
+    font-size: 13px;
+    /* 폰트 크기 살짝 줄임 (모바일 최적화) */
     outline: none;
     background-color: #FFFFFF;
     transition: border-color 0.2s;
 }
 
 .feedback-input:focus {
-    border-color: var(--accent-color); /* 포커스 시 강조색 */
+    border-color: var(--accent-color);
+    /* 포커스 시 강조색 */
     background-color: #FFFDF5;
 }
 
 .feedback-send-btn {
-    padding: 0 14px;       /* 버튼 좌우 여백 줄임 (18px -> 14px) */
-    height: 36px;          /* 높이 고정 (입력창과 맞춤) */
-    
-    background-color: var(--accent-color); 
-    color: #FFFFFF; 
-    border: none; 
-    border-radius: 20px; 
-    
-    font-size: 13px;       /* 버튼 글자 크기도 맞춤 */
-    font-weight: 700; 
+    padding: 0 14px;
+    /* 버튼 좌우 여백 줄임 (18px -> 14px) */
+    height: 36px;
+    /* 높이 고정 (입력창과 맞춤) */
+
+    background-color: var(--accent-color);
+    color: #FFFFFF;
+    border: none;
+    border-radius: 20px;
+
+    font-size: 13px;
+    /* 버튼 글자 크기도 맞춤 */
+    font-weight: 700;
     cursor: pointer;
-    white-space: nowrap;   /* 글자 줄바꿈 절대 금지 */
+    white-space: nowrap;
+    /* 글자 줄바꿈 절대 금지 */
     transition: background-color 0.2s, transform 0.1s;
-    flex-shrink: 0;        /* 버튼은 절대 찌그러지지 않게 고정 */
+    flex-shrink: 0;
+    /* 버튼은 절대 찌그러지지 않게 고정 */
 }
 
 .feedback-send-btn:hover {
-    background-color: #E39B10; /* 호버 시 약간 진하게 */
+    background-color: #E39B10;
+    /* 호버 시 약간 진하게 */
 }
 
 .feedback-send-btn:active {
-    transform: scale(0.95); /* 클릭 시 눌리는 효과 */
+    transform: scale(0.95);
+    /* 클릭 시 눌리는 효과 */
 }
 
 /* --- [신규] 싫어요 사유(Reason) 태그 스타일 --- */
 .reason-container {
-    display: flex; 
-    gap: 6px; 
-    flex-wrap: wrap; 
-    margin-top: 8px; 
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-top: 8px;
     animation: fadeIn 0.3s;
 }
 
 .reason-chip {
-    padding: 6px 12px; 
-    font-size: 12px; 
-    background-color: #FFFFFF; 
-    border: 1px solid #E4E7EC; 
-    border-radius: 16px; 
-    cursor: pointer; 
+    padding: 6px 12px;
+    font-size: 12px;
+    background-color: #FFFFFF;
+    border: 1px solid #E4E7EC;
+    border-radius: 16px;
+    cursor: pointer;
     color: #475467;
     transition: all 0.2s;
 }
@@ -750,7 +998,7 @@ body {
 }
 
 .reason-chip.selected {
-    background-color: #FFF4C9; 
+    background-color: #FFF4C9;
     border-color: #FDB022;
     color: #101828;
     font-weight: 600;
@@ -758,46 +1006,56 @@ body {
 
 /* 사용자 메시지 스타일 (여백 수정 버전) */
 .user-message {
-    background-color: #FFF4C9;   /* 노란색 배경 */
-    color: #000000;              /* 글자색 검정 */
-    
+    background-color: #FFF4C9;
+    /* 노란색 배경 */
+    color: #000000;
+    /* 글자색 검정 */
+
     /* 말풍선 꼬리 */
     border-radius: 15px 15px 0px 15px;
-    
-    padding: 10px 15px;          /* 내부 여백 */
-    display: inline-block;       
-    margin-left: auto;           /* 오른쪽 정렬 */
-    
+
+    padding: 10px 15px;
+    /* 내부 여백 */
+    display: inline-block;
+    margin-left: auto;
+    /* 오른쪽 정렬 */
+
     /* [수정 1] 불필요한 바깥 여백 제거 */
-    margin-bottom: 0;            
-    
-    max-width: 80%;              
-    box-shadow: 1px 1px 2px rgba(0,0,0,0.1); 
-    font-size: 16px;             
+    margin-bottom: 0;
+
+    max-width: 80%;
+    box-shadow: 1px 1px 2px rgba(0, 0, 0, 0.1);
+    font-size: 16px;
 }
 
 /* [수정 2] 글자 자체의 위아래 기본 여백을 없애서 납작하게 만듦 */
 .user-message p {
     margin: 0;
-    line-height: 1.5; /* 줄 간격은 적당히 유지 */
+    line-height: 1.5;
+    /* 줄 간격은 적당히 유지 */
 }
 
 /* 토스트 메시지 컨테이너 */
 #toast-container {
-    visibility: hidden; /* 평소엔 숨김 */
+    visibility: hidden;
+    /* 평소엔 숨김 */
     min-width: 250px;
-    background-color: #333; /* 검은색 배경 */
-    color: #fff;            /* 흰색 글씨 */
+    background-color: #333;
+    /* 검은색 배경 */
+    color: #fff;
+    /* 흰색 글씨 */
     text-align: center;
     border-radius: 8px;
     padding: 12px;
     position: fixed;
-    z-index: 1000;          /* 제일 위에 */
+    z-index: 1000;
+    /* 제일 위에 */
     left: 50%;
-    bottom: 30px;           /* 화면 하단에 위치 */
+    bottom: 30px;
+    /* 화면 하단에 위치 */
     transform: translateX(-50%);
     font-size: 14px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
     opacity: 0;
     transition: opacity 0.3s, bottom 0.3s;
 }
@@ -806,7 +1064,8 @@ body {
 #toast-container.show {
     visibility: visible;
     opacity: 1;
-    bottom: 50px; /* 살짝 위로 올라오며 등장 */
+    bottom: 50px;
+    /* 살짝 위로 올라오며 등장 */
 }
 
 /* =========================================
@@ -814,23 +1073,27 @@ body {
    ========================================= */
 #splash-screen {
     /* [핵심 1] !important를 붙여서 어떤 경우에도 '고정'되게 만듦 */
-    position: fixed !important; 
-    
+    position: fixed !important;
+
     /* [핵심 2] 화면 전체를 꽉 채우는 단위를 사용 (vw, vh) */
-    top: 0; left: 0;
-    width: 100vw; 
+    top: 0;
+    left: 0;
+    width: 100vw;
     height: 100vh;
-    
+
     background-color: #ffffff;
-    
+
     /* [핵심 3] z-index를 아주 높게 설정 */
-    z-index: 99999; 
-    
-    display: flex; align-items: center; justify-content: center;
+    z-index: 99999;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
     transition: opacity 0.6s ease-out;
-    
+
     /* 혹시 모를 마진/패딩 초기화 */
-    margin: 0; padding: 0;
+    margin: 0;
+    padding: 0;
     box-sizing: border-box;
 }
 
@@ -841,24 +1104,27 @@ body {
 }
 
 .splash-content {
-    display: flex; flex-direction: column; align-items: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
     animation: fadeInUp 0.8s ease-out;
 }
 
 .splash-logo {
-    width: 150px; 
+    width: 150px;
     height: 150px;
     object-fit: contain;
-    
+
     /* [수정] 아이콘과 글자 사이 간격을 24px -> 12px로 축소 */
-    margin-bottom: 12px; 
+    margin-bottom: 12px;
 }
 
 .splash-title {
     font-family: 'ONE Mobile POP', sans-serif;
     font-size: 24px;
     color: #101828;
-    line-height: 1.3; /* 줄 간격도 살짝 좁힘 */
+    line-height: 1.3;
+    /* 줄 간격도 살짝 좁힘 */
     text-align: center;
     margin: 0;
 }
@@ -868,23 +1134,23 @@ body {
    ========================================= */
 #scroll-bottom-btn {
     position: fixed;
-    z-index: 85; 
-    
+    z-index: 85;
+
     /* 위치: 가운데 정렬 */
     left: 50%;
     transform: translateX(-50%) translateY(10px);
-    bottom: 130px; 
-    
+    bottom: 130px;
+
     /* [핵심] 기본 스타일 완성 */
     display: inline-flex;
     align-items: center;
     justify-content: center;
     gap: 6px;
-    
+
     padding: 8px 16px;
     min-width: 120px;
     height: 36px;
-    
+
     /* 배경 및 테두리 */
     background-color: rgba(255, 255, 255, 0.85);
     backdrop-filter: blur(8px);
@@ -892,17 +1158,17 @@ body {
     border: 1px solid #E4E7EC;
     border-radius: 20px;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-    
+
     /* 폰트 */
     font-family: inherit;
     font-size: 13px;
     font-weight: 600;
     color: #475467;
     white-space: nowrap;
-    
+
     cursor: pointer;
     transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
-    
+
     /* [핵심] 기본적으로 숨김 - 스크롤이 필요할 때만 표시 */
     opacity: 0;
     pointer-events: none;
@@ -919,10 +1185,10 @@ body {
 
 /* 호버 시에는 더 잘 보이게 */
 #scroll-bottom-btn:hover {
-    background-color: rgba(255, 255, 255, 0.98); 
+    background-color: rgba(255, 255, 255, 0.98);
     color: #101828;
     box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
-    transform: translateX(-50%) translateY(-2px); 
+    transform: translateX(-50%) translateY(-2px);
 }
 
 /* 클릭 효과 */
@@ -935,13 +1201,47 @@ body {
     #scroll-bottom-btn {
         right: auto;
         left: 50%;
-        margin-left: 0; 
+        margin-left: 0;
     }
 }
 
 /* 기타 */
-.spinner { width: 20px; height: 20px; border: 2px solid #E4E7EC; border-top-color: var(--accent-color); border-radius: 50%; animation: spin 0.8s linear infinite; display: inline-block; vertical-align: middle; margin-right: 8px; }
-@keyframes spin { to { transform: rotate(360deg); } }
-.loading-text { font-size: 14px; color: var(--text-secondary); }
-.button-container { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
-.clarify-btn { padding: 6px 12px; font-size: 13px; background-color: #FFFFFF; border: 1px solid #D0D5DD; border-radius: 16px; color: #344054; cursor: pointer; }
+.spinner {
+    width: 20px;
+    height: 20px;
+    border: 2px solid #E4E7EC;
+    border-top-color: var(--accent-color);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    display: inline-block;
+    vertical-align: middle;
+    margin-right: 8px;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.loading-text {
+    font-size: 14px;
+    color: var(--text-secondary);
+}
+
+.button-container {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 4px;
+}
+
+.clarify-btn {
+    padding: 6px 12px;
+    font-size: 13px;
+    background-color: #FFFFFF;
+    border: 1px solid #D0D5DD;
+    border-radius: 16px;
+    color: #344054;
+    cursor: pointer;
+}
