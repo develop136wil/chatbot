@@ -911,9 +911,9 @@ def summarize_content_with_llm(context: str, original_question: str, chat_histor
     elif "strictly in Chinese" in original_question:
         target_lang = "Chinese"
     
-    # [중요] 캐시 키 버전을 v22로 변경 (확정 카테고리 + 제목 매칭)
+    # [중요] 캐시 키 버전을 v23으로 변경 (빈 섹션 제거 + 숨김 키워드 확장)
     context_hash = hashlib.md5((context + target_lang).encode('utf-8')).hexdigest()
-    cache_key = f"summary_v22_{target_lang}:{context_hash}"
+    cache_key = f"summary_v23_{target_lang}:{context_hash}"
     
     try:
         cached = redis_client.get(cache_key)
@@ -1308,29 +1308,32 @@ def clean_summary_text(text: str) -> str:
     lines = text.split('\n')
     
     # ============================================
-    # [Notion 스타일] 필수 섹션만 표시 + 줄 수 제한
+    # [Notion 스타일 v2] 필수 섹션만 + 빈 섹션 제거
     # ============================================
-    SHOW_SECTIONS = ["지원 내용", "대상", "신청 방법", "Support Content", "Target", "How to Apply"]
-    HIDE_SECTIONS = ["신청 기간", "신청 절차", "참고", "주요 검사", "전액 무료", "비용", "문의", "주의", "검사 도구", "찾아가는", "아동:", "보호자:", "사회적"]
+    SHOW_SECTIONS = ["지원 내용", "대상", "Support Content", "Target"]
+    HIDE_KEYWORDS = [
+        "신청 기간", "신청 절차", "신청 장소", "신청 방법",
+        "참고", "주요 검사", "전액 무료", "비용", "문의", "주의", 
+        "검사 도구", "찾아가는", "아동:", "보호자:", "사회적",
+        "지원 금액", "금액/규모", "금액", "규모"
+    ]
     
-    # 섹션당 최대 줄 수
-    MAX_LINES_PER_SECTION = 2
+    MAX_LINES = 2  # 섹션당 최대 줄 수
     
-    final_lines = []
+    sections = {}  # {section_name: [content_lines]}
     current_section = None
-    show_current = False
-    content_count = 0
     
     for line in lines:
         stripped = line.strip()
-        if not stripped: continue
-        if stripped in ["---", "***", "```"]: continue
-        
-        # 숨길 키워드가 있으면 스킵
-        if any(h in stripped for h in HIDE_SECTIONS):
+        if not stripped or stripped in ["---", "***", "```"]: 
             continue
         
-        # 표시할 섹션 헤더 감지
+        # 숨길 키워드 체크
+        if any(h in stripped for h in HIDE_KEYWORDS):
+            current_section = None  # 해당 섹션 무시
+            continue
+        
+        # 섹션 헤더 감지
         found_section = None
         for section in SHOW_SECTIONS:
             if section in stripped:
@@ -1338,19 +1341,24 @@ def clean_summary_text(text: str) -> str:
                 break
         
         if found_section:
-            # 새 섹션 시작
             current_section = found_section
-            show_current = True
-            content_count = 0
-            final_lines.append(f"**{found_section}**")
-        elif show_current and content_count < MAX_LINES_PER_SECTION:
-            # 섹션 내용 (최대 2줄까지만)
+            if current_section not in sections:
+                sections[current_section] = []
+        elif current_section and len(sections.get(current_section, [])) < MAX_LINES:
+            # 내용 줄 정리
             clean_line = re.sub(r'^[\s\*\-•①-⑮❶-❿0-9\.]+\s*', '', stripped)
-            if clean_line and len(clean_line) > 5:  # 너무 짧은 줄 제외
-                final_lines.append(f"• {clean_line}")
-                content_count += 1
+            if clean_line and len(clean_line) > 5:
+                sections[current_section].append(clean_line)
     
-    return "\n".join(final_lines).strip()
+    # 빈 섹션 제거하고 출력 생성
+    final_lines = []
+    for section in SHOW_SECTIONS:
+        if section in sections and sections[section]:
+            final_lines.append(f"**{section}**")
+            for content in sections[section][:MAX_LINES]:
+                final_lines.append(f"• {content}")
+    
+    return "\n".join(final_lines).strip() if final_lines else "요약 정보가 없습니다."
 
 def format_search_results(pages_metadata: list) -> str:
     cards_html = []
