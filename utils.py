@@ -9,7 +9,7 @@ except Exception:
 
 # [버전 마커] 배포 확인용
 # [버전 마커] 배포 확인용
-_UTILS_VERSION = "2026.01.29-v5"
+_UTILS_VERSION = "2026.01.29-v6"
 print(f"📦 Utils 모듈 로드 (버전: {_UTILS_VERSION})")
 
 try:
@@ -742,16 +742,7 @@ async def extract_info_from_question_async(question: str, chat_history: list[dic
             else:
                 response_text = str(response)
         
-        # [중요] response.resolve()는 제거해야 합니다.
-        # [중요] response.resolve()는 제거해야 합니다.
-        # response는 이미 완료된 GenerateContentResponse 객체입니다.
-        
-        # 텍스트 추출 (비동기 스트리밍이 아니므로 바로 접근 가능)
-        if hasattr(response, 'text'):
-            response_text = response.text
-        else:
-            # 혹시라도 awaitable이 반환되었다면 (거의 없지만)
-            response_text = str(response)
+
 
         json_block_start = response_text.find('{')
         json_block_end = response_text.rfind('}') + 1
