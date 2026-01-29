@@ -251,16 +251,22 @@ SYSTEM_INSTRUCTION_WORKER = (
 
 # --- 6. 핵심 로직 함수들 ---
 
+# [Vercel 환경 감지] 재시도 횟수 조정 (파일 디스크립터 고갈 방지)
+_IS_VERCEL = os.getenv("VERCEL_ENV") or os.getenv("FORCE_SYNC_MODE")
+_RETRY_ATTEMPTS = 2 if _IS_VERCEL else 5  # Vercel에서는 2번만, 로컬에서는 5번
+
 # --- [수정] 임베딩 함수 (Client API 사용) ---
 @lru_cache(maxsize=1000)
 @retry(
-    stop=stop_after_attempt(7), 
-    wait=wait_exponential(multiplier=1, min=3, max=15),
+    stop=stop_after_attempt(_RETRY_ATTEMPTS), 
+    wait=wait_exponential(multiplier=1, min=1, max=5),  # 대기 시간도 단축
     retry=retry_if_exception_type(Exception)
 )
 def get_gemini_embedding(text: str, task_type: str = "SEMANTIC_SIMILARITY") -> Optional[List[float]]:
-    client = get_llm_client() # Lazy Load
-    if not KEY_POOL or not client: return None
+    client = get_llm_client() # Lazy Load (싱글톤)
+    if not KEY_POOL or not client: 
+        print("⚠️ Embed: No API keys or client not initialized")
+        return None
     try:
         # Client 인스턴스 사용
         result = client.models.embed_content( # client 변수 사용
@@ -270,9 +276,6 @@ def get_gemini_embedding(text: str, task_type: str = "SEMANTIC_SIMILARITY") -> O
         )
         
         # 결과 처리 (Embedding 객체에서 values 추출)
-        # v1.0: result.embeddings[0].values (batch) or result.embedding.values (single)?
-        # 보통 single call 결과는 result.embedding.values 일 가능성 높음.
-        # 안전하게 속성 확인
         if hasattr(result, 'embeddings') and result.embeddings:
             return list(result.embeddings[0].values)
         if hasattr(result, 'embedding') and result.embedding:
@@ -282,7 +285,7 @@ def get_gemini_embedding(text: str, task_type: str = "SEMANTIC_SIMILARITY") -> O
         return list(result.embedding) if hasattr(result, 'embedding') else []
         
     except Exception as e:
-        print(f"⚠️ Embed API 실패: {e}")
+        print(f"⚠️ Embed API 실패: {type(e).__name__}: {e}")
         rotate_api_key() 
         raise e
 
@@ -307,8 +310,8 @@ async def get_gemini_embedding_async(text: str, task_type: str = "SEMANTIC_SIMIL
 
 # --- [수정] 콘텐츠 생성 함수 (Client API 사용) ---
 @retry(
-    stop=stop_after_attempt(7), 
-    wait=wait_exponential(multiplier=1, min=3, max=15),
+    stop=stop_after_attempt(_RETRY_ATTEMPTS),  # Vercel 환경에서 재시도 횟수 제한
+    wait=wait_exponential(multiplier=1, min=1, max=5),
     retry=retry_if_exception_type(Exception)
 )
 def generate_content_safe(client, prompt, timeout=8, **kwargs): 
