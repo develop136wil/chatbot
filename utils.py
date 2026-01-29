@@ -156,34 +156,59 @@ MAIN_ANSWER_CACHE_TTL = 3600
 
 if redis:
     try:
-        # [수정] 연결 테스트용: 1초 타임아웃 (Vercel Cold Start 최적화)
-        # Vercel에서는 외부 연결이 느릴 수 있으므로, 실패해도 치명적이지 않게 처리
-        test_r = redis.Redis(host=REDIS_HOST, port=6379, db=0, socket_timeout=1)
-        try:
-            if test_r.ping():
-                print("✅ Utils: Redis 연결 성공 (테스트 완료)")
-        except Exception:
-             print("⚠️ Utils: Redis 초기 연결 테스트 실패 (무시하고 진행)")
+        # [수정] Redis URL 형식 자동 감지 (redis://, rediss://)
+        if REDIS_HOST.startswith("redis://") or REDIS_HOST.startswith("rediss://"):
+            # 클라우드 Redis (Upstash, Redis Labs 등) - URL 형식
+            print(f"🔗 Utils: Redis URL 형식 감지 (Cloud)")
             
+            # 테스트 연결
+            try:
+                test_r = redis.from_url(REDIS_HOST, socket_timeout=2)
+                if test_r.ping():
+                    print("✅ Utils: Redis 연결 성공 (테스트 완료)")
+            except Exception:
+                print("⚠️ Utils: Redis 초기 연결 테스트 실패 (무시하고 진행)")
             
-        # [2단계] 실제 사용용: 타임아웃 제한 없음 (Worker가 오랫동안 대기할 수 있도록)
-        # socket_timeout을 빼거나 None으로 설정해야 BLPOP에서 에러가 안 납니다.
-        redis_client = redis.Redis(
-            host=REDIS_HOST, 
-            port=6379, 
-            db=0, 
-            decode_responses=False, 
-            socket_timeout=None  # <--- 핵심 수정! (제한 해제)
-        )
+            # 실제 사용용 클라이언트
+            redis_client = redis.from_url(
+                REDIS_HOST,
+                decode_responses=False,
+                socket_timeout=None
+            )
+            
+            # 비동기 클라이언트
+            redis_async_client = redis.asyncio.from_url(
+                REDIS_HOST,
+                decode_responses=False,
+                socket_timeout=None
+            )
+        else:
+            # 로컬 Redis - 호스트명만 제공된 경우
+            print(f"🔗 Utils: Redis 호스트 형식 감지 (Local/Custom)")
+            
+            test_r = redis.Redis(host=REDIS_HOST, port=6379, db=0, socket_timeout=1)
+            try:
+                if test_r.ping():
+                    print("✅ Utils: Redis 연결 성공 (테스트 완료)")
+            except Exception:
+                print("⚠️ Utils: Redis 초기 연결 테스트 실패 (무시하고 진행)")
+            
+            redis_client = redis.Redis(
+                host=REDIS_HOST, 
+                port=6379, 
+                db=0, 
+                decode_responses=False, 
+                socket_timeout=None
+            )
+            
+            redis_async_client = redis.asyncio.Redis(
+                host=REDIS_HOST,
+                port=6379,
+                db=0,
+                decode_responses=False,
+                socket_timeout=None
+            )
         
-        # [3단계] 비동기 클라이언트 (FastAPI용)
-        redis_async_client = redis.asyncio.Redis(
-            host=REDIS_HOST,
-            port=6379,
-            db=0,
-            decode_responses=False,
-            socket_timeout=None
-        )
         print("✅ Utils: Redis Async 연결 설정 완료")
 
     except Exception as e:
