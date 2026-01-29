@@ -1,2 +1,5 @@
 .vercel
 SECRET KEYS.txt
+__pycache__/
+*.pyc
+.env
