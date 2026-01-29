@@ -1015,29 +1015,30 @@ def expand_search_query(question: str) -> list:
     # 영어/한글 혼용 대응
     lower_q = question.lower()
     
-    # [수당/급여 관련]
-    if any(w in clean_question for w in ["양육수당", "부모급여", "아동수당", "수당"]):
-        fallback_keywords.extend(["양육수당", "부모급여", "아동수당", "지급", "대상"])
-        
-    if "아동수당" in clean_question:
-        fallback_keywords.extend(["아동수당", "만 8세", "지급일", "입금"])
-        
-    if "부모급여" in clean_question:
-        fallback_keywords.extend(["부모급여", "영아수당", "지급액", "0세", "1세"])
-    
-    # [검사/진단 관련]
+    # [수정] 수당/급여 - 키워드 오염 방지 (구체적인 것만 매핑)
+    if "양육수당" in clean_question:
+        fallback_keywords.extend(["양육수당", "가정양육"])
+    elif "부모급여" in clean_question:
+        fallback_keywords.extend(["부모급여", "영아수당", "0세", "1세"])
+    elif "아동수당" in clean_question:
+        fallback_keywords.extend(["아동수당", "8세"])
+    elif "수당" in clean_question: # 막연하게 '수당'이라고 했을 때만 전체 검색
+        fallback_keywords.extend(["양육수당", "부모급여", "아동수당"])
+
+    # [검사/진단 관련 - '지원' 단어 남발 금지]
     if "test" in lower_q or "check" in lower_q or "검사" in clean_question: 
-        fallback_keywords.extend(["검사", "비용", "지원", "진단서"])
+        # '비용', '지원' 등은 질문에 포함되지 않았다면 굳이 넣지 않습니다.
+        fallback_keywords.extend(["검사", "진단", "선별"])
         
     if "발달" in clean_question:
-        fallback_keywords.extend(["발달", "영유아", "검사", "선별"])
+        fallback_keywords.extend(["발달", "영유아"]) # '검사'는 위에서 처리
         
     # [치료/재활 관련]
     if any(w in lower_q for w in ["therapy", "group", "social", "friend", "짝치료", "그룹"]):
-        fallback_keywords.extend(["두리활동", "프로그램", "사회성"])
+        fallback_keywords.extend(["두리활동", "사회성"]) # '프로그램' 제거 (너무 흔함)
         
     if "치료" in clean_question or "재활" in clean_question:
-        fallback_keywords.extend(["발달재활", "바우처", "언어치료", "치료비"])
+        fallback_keywords.extend(["발달재활", "바우처", "언어치료"]) # '지원' 제거
 
     # ---------------------------------------------------------
     # 3. AI 확장 (Smart Expansion - Hybrid: Groq 1순위 -> Gemini 백업)
