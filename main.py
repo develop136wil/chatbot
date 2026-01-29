@@ -15,7 +15,8 @@ from starlette.middleware.sessions import SessionMiddleware
 from dotenv import load_dotenv
 from contextlib import asynccontextmanager
 from apscheduler.schedulers.background import BackgroundScheduler
-from index import run_indexing
+# [수정] run_indexing은 사용하는 곳에서 import (startup crash 방지)
+# from index import run_indexing 
 import pytz
 
 # utils에서 필요한 것만 딱 가져옵니다.
@@ -56,6 +57,7 @@ def scheduled_job():
     """매일 자동 인덱싱 작업"""
     logger.info("⏰ [Scheduler] 자동 인덱싱 작업 시작...")
     try:
+        from index import run_indexing # [이동] Lazy Import
         run_indexing()
         logger.info("⏰ [Scheduler] 자동 인덱싱 작업 완료!")
     except Exception as e:
