@@ -864,31 +864,73 @@ body {
 }
 
 /* =========================================
-   [수정] 하단 스크롤 버튼 (가독성 좋은 반투명)
+   [수정] 하단 스크롤 버튼 (완전한 스타일링)
    ========================================= */
 #scroll-bottom-btn {
     position: fixed;
     z-index: 85; 
     
+    /* 위치: 가운데 정렬 */
     left: 50%;
     transform: translateX(-50%) translateY(10px);
     bottom: 130px; 
+    
+    /* [핵심] 기본 스타일 완성 */
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    
+    padding: 8px 16px;
+    min-width: 120px;
+    height: 36px;
+    
+    /* 배경 및 테두리 */
+    background-color: rgba(255, 255, 255, 0.85);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid #E4E7EC;
+    border-radius: 20px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+    
+    /* 폰트 */
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    color: #475467;
+    white-space: nowrap;
+    
+    cursor: pointer;
+    transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+    
+    /* [핵심] 기본적으로 숨김 - 스크롤이 필요할 때만 표시 */
+    opacity: 0;
+    pointer-events: none;
+    visibility: hidden;
 }
 
+/* 스크롤 가능할 때만 표시 (.show 클래스 추가 시) */
 #scroll-bottom-btn.show {
     opacity: 1;
+    visibility: visible;
     pointer-events: auto;
     transform: translateX(-50%) translateY(0);
 }
 
-/* 호버 시에는 더 잘 보이게 (0.55 -> 0.95) */
+/* 호버 시에는 더 잘 보이게 */
 #scroll-bottom-btn:hover {
-    background-color: rgba(255, 255, 255, 0.95); 
+    background-color: rgba(255, 255, 255, 0.98); 
     color: #101828;
-    box-shadow: 0 6px 20px rgba(0,0,0,0.1);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
     transform: translateX(-50%) translateY(-2px); 
 }
 
+/* 클릭 효과 */
+#scroll-bottom-btn:active {
+    transform: translateX(-50%) scale(0.95);
+}
+
+/* PC 화면 대응 */
 @media (min-width: 600px) {
     #scroll-bottom-btn {
         right: auto;

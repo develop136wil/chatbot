@@ -14,30 +14,30 @@ window.addEventListener('load', () => {
                 splash.remove();
             }, 600);
         }
-    }, 1500); 
+    }, 1500);
 });
 
 // --- 1. 전역 변수 ---
 const chatBox = document.getElementById('chat-box');
 const userInput = document.getElementById('user-input');
 const sendBtn = document.getElementById('send-btn');
-const micBtn = document.getElementById('mic-btn'); 
+const micBtn = document.getElementById('mic-btn');
 
 const API_URL_CHAT = '/chat';
 const API_URL_RESULT = '/get_result/';
 const API_URL_FEEDBACK = '/feedback';
 
-let safetyTimeoutId = null;       
-let placeholderIntervalId = null; 
+let safetyTimeoutId = null;
+let placeholderIntervalId = null;
 
 let currentResultIds = [];
 let currentShownCount = 0;
 let currentTotalFound = 0;
 
-let pendingContext = null; 
-let currentQuestion = ""; 
-let chatHistory = []; 
-const MAX_HISTORY_TURNS = 2; 
+let pendingContext = null;
+let currentQuestion = "";
+let chatHistory = [];
+const MAX_HISTORY_TURNS = 2;
 
 // ============================================================
 // [★핵심] 다국어 데이터베이스 (UI_TEXT) - 꿀팁 통합됨
@@ -295,25 +295,25 @@ userInput.addEventListener('input', toggleInputButtons);
 // --- 4. 이벤트 리스너 ---
 sendBtn.addEventListener('click', () => {
     handleFormSubmit();
-    setTimeout(toggleInputButtons, 10); 
+    setTimeout(toggleInputButtons, 10);
 });
 
-userInput.addEventListener('input', function() {
-    this.style.height = 'auto'; 
-    this.style.height = (this.scrollHeight) + 'px'; 
+userInput.addEventListener('input', function () {
+    this.style.height = 'auto';
+    this.style.height = (this.scrollHeight) + 'px';
     if (this.scrollHeight > 120) {
         this.style.overflowY = "auto";
     } else {
         this.style.overflowY = "hidden";
     }
-    toggleInputButtons(); 
+    toggleInputButtons();
 });
 
 userInput.addEventListener('keydown', (event) => {
     if (event.key === 'Enter') {
-        if (!event.shiftKey) { 
-            event.preventDefault(); 
-            if (event.isComposing) return; 
+        if (!event.shiftKey) {
+            event.preventDefault();
+            if (event.isComposing) return;
             handleFormSubmit();
             setTimeout(() => {
                 userInput.style.height = 'auto';
@@ -331,12 +331,12 @@ chatBox.addEventListener('click', async (event) => {
     if (event.target.classList.contains('card-share-btn')) {
         const btn = event.target;
         const textToCopy = btn.dataset.copy;
-        
+
         if (navigator.share && !isInIframe) {
             try {
                 await navigator.share({ title: '복지 정보', text: textToCopy, url: window.location.href });
                 return;
-            } catch (err) {}
+            } catch (err) { }
         }
         try {
             await navigator.clipboard.writeText(textToCopy);
@@ -354,7 +354,7 @@ async function handleFormSubmit() {
     if (!question) return;
 
     pendingContext = null;
-    currentQuestion = question; 
+    currentQuestion = question;
     clearButtons();
     updateChatHistory("user", question);
     setLoadingState(true);
@@ -369,7 +369,7 @@ async function handleFormSubmit() {
     }
 
     let requestBody = {
-        question: serverQuestion, 
+        question: serverQuestion,
         last_result_ids: [],
         shown_count: 0,
         chat_history: chatHistory
@@ -380,7 +380,7 @@ async function handleFormSubmit() {
         requestBody.shown_count = currentShownCount;
     }
 
-    addMessageToBox('user', question); 
+    addMessageToBox('user', question);
     userInput.value = '';
     toggleInputButtons();
 
@@ -391,8 +391,8 @@ async function handleButtonClick(buttonText) {
     let newQuestion = pendingContext ? `${pendingContext} ${buttonText}` : buttonText;
     pendingContext = null;
     clearButtons();
-    addMessageToBox('user', newQuestion); 
-    currentQuestion = newQuestion; 
+    addMessageToBox('user', newQuestion);
+    currentQuestion = newQuestion;
     updateChatHistory("user", newQuestion);
     setLoadingState(true);
 
@@ -418,11 +418,11 @@ async function handleButtonClick(buttonText) {
 async function typeWriterEffect(element, htmlContent) {
     // 1. 기존 내용 비우기 (로딩 애니메이션 제거)
     element.innerHTML = "";
-    
+
     // 2. HTML을 임시 태그에 넣어 텍스트 노드와 엘리먼트 노드로 분리
     // (복잡한 HTML 구조를 유지하면서 타이핑하는 것은 매우 어려우므로,
     //  단순 텍스트는 타이핑하고, 태그(카드 등)는 통째로 페이드인 하는 방식을 사용)
-    
+
     // 만약 "결과 카드(result-card)"가 포함된 복잡한 HTML이라면
     // 타이핑 효과보다는 부드러운 페이드인(Fade-in)이 더 적합할 수 있음.
     // 하지만 요청대로 "글자" 위주의 타이핑 효과를 구현하되, 태그가 깨지지 않게 처리함.
@@ -431,7 +431,7 @@ async function typeWriterEffect(element, htmlContent) {
         // 카드가 포함된 경우: 그냥 페이드인으로 처리 (타이핑하면 카드 레이아웃이 깨짐)
         element.style.opacity = 0;
         element.innerHTML = htmlContent;
-        
+
         // CSS transition을 이용한 페이드인
         element.style.transition = "opacity 0.5s ease-in";
         requestAnimationFrame(() => {
@@ -444,7 +444,7 @@ async function typeWriterEffect(element, htmlContent) {
     // HTML 파싱
     const tempDiv = document.createElement("div");
     tempDiv.innerHTML = htmlContent;
-    
+
     const nodes = Array.from(tempDiv.childNodes);
     element.style.opacity = 1; // 보이게 설정
 
@@ -469,7 +469,7 @@ async function typeWriterEffect(element, htmlContent) {
 
 async function fetchChatResponse(requestBody) {
     const lang = window.currentLang || 'ko';
-    
+
     // [수정] 꿀팁이 없을 경우를 대비한 안전장치
     const langData = UI_TEXT[lang] || UI_TEXT['ko'];
     const actionMessages = langData.actions;
@@ -477,8 +477,8 @@ async function fetchChatResponse(requestBody) {
 
     const initialMsg = actionMessages[0];
     const rawInitialTip = currentTips[Math.floor(Math.random() * currentTips.length)];
-    const formattedInitialTip = rawInitialTip.replace(': ', ':<br>'); 
-  
+    const formattedInitialTip = rawInitialTip.replace(': ', ':<br>');
+
     // ... (기존 로딩 스켈레톤 코드 유지)
     const skeletonHTML = `
         <div class="skeleton-container">
@@ -500,17 +500,17 @@ async function fetchChatResponse(requestBody) {
     const loadingElement = addMessageToBox('assistant', skeletonHTML);
     const actionTextEl = loadingElement.querySelector('.action-text');
     const tipTextEl = loadingElement.querySelector('.tip-text');
-    
-    let toggleStep = 0; 
+
+    let toggleStep = 0;
     let messageIntervalId = setInterval(() => {
         toggleStep++;
-        
+
         if (toggleStep % 2 === 0) {
             const actionIndex = (toggleStep / 2) % actionMessages.length;
-            if(actionTextEl) actionTextEl.textContent = actionMessages[actionIndex];
+            if (actionTextEl) actionTextEl.textContent = actionMessages[actionIndex];
         } else {
             const randomTip = currentTips[Math.floor(Math.random() * currentTips.length)];
-            if(tipTextEl) {
+            if (tipTextEl) {
                 tipTextEl.innerHTML = randomTip.replace(': ', ':<br>');
             }
         }
@@ -528,34 +528,34 @@ async function fetchChatResponse(requestBody) {
 
         if (chatData.status === 'clarify') {
             clearInterval(messageIntervalId);
-            
+
             // [적용] 타이핑 효과
             const parsedHTML = marked.parse(chatData.answer);
             await typeWriterEffect(loadingElement, parsedHTML);
-            
-            pendingContext = currentQuestion; 
+
+            pendingContext = currentQuestion;
             createButtons(chatData.options);
             updateChatHistory("assistant", chatData.answer);
             setLoadingState(false);
         }
         else if (chatData.status === 'complete' || chatData.status === 'error') {
             clearInterval(messageIntervalId);
-            
+
             let finalHTML = "";
             if (chatData.answer.includes('result-card')) {
                 finalHTML = chatData.answer;
             } else {
                 finalHTML = marked.parse(chatData.answer);
             }
-            
+
             // [적용] 타이핑 효과 (카드면 페이드인, 텍스트면 타이핑)
             await typeWriterEffect(loadingElement, finalHTML);
-            
+
             currentResultIds = chatData.last_result_ids || [];
             currentTotalFound = chatData.total_found || 0;
             currentShownCount = chatData.shown_count || Math.min(2, currentResultIds.length);
             updateChatHistory("assistant", chatData.answer);
-            
+
             if (chatData.job_id) {
                 addFeedbackButtons(loadingElement, chatData.job_id, currentQuestion, chatData.answer);
             }
@@ -585,12 +585,12 @@ async function pollForResult(jobId, question, loadingElement, messageIntervalId,
         }
         try {
             const resultResponse = await fetch(`${API_URL_RESULT}${jobId}`);
-            if (!resultResponse.ok) return; 
+            if (!resultResponse.ok) return;
             const resultData = await resultResponse.json();
 
             if (resultData.status === 'complete') {
                 clearInterval(intervalId); clearInterval(messageIntervalId);
-                
+
                 let finalHTML = "";
                 if (resultData.answer.includes('result-card')) {
                     finalHTML = resultData.answer;
@@ -602,12 +602,12 @@ async function pollForResult(jobId, question, loadingElement, messageIntervalId,
                 await typeWriterEffect(loadingElement, finalHTML);
 
                 translateCardButtons(loadingElement);
-                
+
                 updateChatHistory("assistant", resultData.answer);
                 currentResultIds = resultData.last_result_ids || [];
                 currentTotalFound = resultData.total_found || 0;
-                currentShownCount = Math.min(2, currentResultIds.length); 
-                
+                currentShownCount = Math.min(2, currentResultIds.length);
+
                 addFeedbackButtons(loadingElement, jobId, question, resultData.answer);
                 setLoadingState(false);
             } else if (resultData.status === 'error') {
@@ -629,16 +629,16 @@ function addMessageToBox(role, content) {
 
     if (role === 'assistant') {
         const iconImg = document.createElement('img');
-        iconImg.src = "/static/bot-icon.png"; 
+        iconImg.src = "/static/bot-icon.png";
         iconImg.className = "bot-profile-icon";
         iconImg.alt = "bot";
         rowElement.appendChild(iconImg);
     }
 
     const messageBubble = document.createElement('div');
-    messageBubble.setAttribute('role', 'status'); 
+    messageBubble.setAttribute('role', 'status');
     messageBubble.setAttribute('aria-live', 'polite');
-  
+
     if (role === 'user') {
         messageBubble.classList.add('user-message');
     } else {
@@ -646,8 +646,8 @@ function addMessageToBox(role, content) {
     }
 
     if (content.includes('<div') || content.includes('<p>') || content.includes('<hr>')) {
-         messageBubble.innerHTML = content;
-    } else { 
+        messageBubble.innerHTML = content;
+    } else {
         const p = document.createElement('p');
         p.textContent = content;
         messageBubble.appendChild(p);
@@ -657,14 +657,14 @@ function addMessageToBox(role, content) {
     chatBox.appendChild(rowElement);
 
     translateCardButtons(messageBubble);
-  
+
     chatBox.scrollTop = chatBox.scrollHeight;
-    return messageBubble; 
+    return messageBubble;
 }
 
 function updateChatHistory(role, content) {
     chatHistory.push({ "role": role, "content": content });
-    if (chatHistory.length > MAX_HISTORY_TURNS * 2) chatHistory.shift(); 
+    if (chatHistory.length > MAX_HISTORY_TURNS * 2) chatHistory.shift();
 }
 
 function createButtons(optionsArray) {
@@ -721,9 +721,9 @@ function showFeedbackInput(container, jobId, question, answer, feedbackType) {
     const lang = window.currentLang || 'ko';
     const textData = UI_TEXT[lang].feedback;
 
-    container.innerHTML = ''; 
+    container.innerHTML = '';
     const reasonContainer = document.createElement('div');
-    reasonContainer.className = 'reason-container'; 
+    reasonContainer.className = 'reason-container';
 
     // 이유 태그도 번역된 걸로 표시
     const reasons = textData.reasons;
@@ -731,16 +731,16 @@ function showFeedbackInput(container, jobId, question, answer, feedbackType) {
     reasons.forEach(reasonText => {
         const chip = document.createElement('button');
         chip.textContent = reasonText;
-        chip.className = 'reason-chip'; 
-        
+        chip.className = 'reason-chip';
+
         chip.onclick = () => {
             Array.from(reasonContainer.children).forEach(c => c.classList.remove('selected'));
-            chip.classList.add('selected'); 
+            chip.classList.add('selected');
             if (!container.querySelector('.feedback-input-wrapper')) {
                 showCommentInput(container, jobId, question, answer, feedbackType, reasonText);
             } else {
                 const existingInput = container.querySelector('.feedback-input-wrapper');
-                if(existingInput) existingInput.remove();
+                if (existingInput) existingInput.remove();
                 showCommentInput(container, jobId, question, answer, feedbackType, reasonText);
             }
         };
@@ -755,7 +755,7 @@ function showCommentInput(container, jobId, question, answer, feedbackType, sele
     const textData = UI_TEXT[lang].feedback;
 
     const inputWrapper = document.createElement('div');
-    inputWrapper.className = 'feedback-input-wrapper'; 
+    inputWrapper.className = 'feedback-input-wrapper';
 
     const input = document.createElement('input');
     input.type = "text";
@@ -766,16 +766,16 @@ function showCommentInput(container, jobId, question, answer, feedbackType, sele
     const sendBtn = document.createElement('button');
     sendBtn.textContent = textData.send; // "전송" (번역됨)
     sendBtn.className = 'feedback-send-btn';
-    
+
     sendBtn.onclick = () => {
-        const historyStr = JSON.stringify(chatHistory.slice(-4)); 
+        const historyStr = JSON.stringify(chatHistory.slice(-4));
         submitFeedback(jobId, question, answer, feedbackType, container, input.value.trim(), selectedReason, historyStr);
     };
 
     inputWrapper.appendChild(input);
     inputWrapper.appendChild(sendBtn);
     container.appendChild(inputWrapper);
-    
+
     setTimeout(() => input.focus(), 100);
 }
 
@@ -796,8 +796,8 @@ async function submitFeedback(jobId, question, answer, feedbackType, containerEl
                 answer: answer,
                 feedback: feedbackType,
                 comment: comment,
-                reason: reason,        
-                chat_history: historyStr 
+                reason: reason,
+                chat_history: historyStr
             })
         });
 
@@ -815,36 +815,36 @@ function setLoadingState(isLoading) {
     if (isLoading) {
         userInput.disabled = true;
         sendBtn.disabled = true;
-        if(micBtn) micBtn.disabled = true;
+        if (micBtn) micBtn.disabled = true;
         userInput.blur();
 
         userInput.placeholder = baseText;
         let dotCount = 0;
-        
+
         if (placeholderIntervalId) clearInterval(placeholderIntervalId);
         placeholderIntervalId = setInterval(() => {
-            dotCount = (dotCount + 1) % 4;     
-            const dots = ".".repeat(dotCount); 
+            dotCount = (dotCount + 1) % 4;
+            const dots = ".".repeat(dotCount);
             userInput.placeholder = `${baseText}${dots}`;
         }, 500);
 
         if (safetyTimeoutId) clearTimeout(safetyTimeoutId);
         safetyTimeoutId = setTimeout(() => {
             console.warn("Response timeout: Force unlocking input.");
-            setLoadingState(false); 
+            setLoadingState(false);
             userInput.placeholder = "Timeout. Please try again.";
-        }, 45000); 
+        }, 45000);
 
     } else {
         userInput.disabled = false;
         sendBtn.disabled = false;
-        if(micBtn) micBtn.disabled = false;
-        
+        if (micBtn) micBtn.disabled = false;
+
         if (placeholderIntervalId) clearInterval(placeholderIntervalId);
         if (safetyTimeoutId) clearTimeout(safetyTimeoutId);
         placeholderIntervalId = null;
         safetyTimeoutId = null;
-        
+
         const placeholders = {
             ko: "무엇이 궁금하신가요?",
             en: "What are you looking for?",
@@ -857,11 +857,11 @@ function setLoadingState(isLoading) {
 
 // --- 7. 음성 인식 로직 ---
 let recognition;
-if (canUseMic) { 
+if (canUseMic) {
     recognition = new SpeechRecognition();
-    recognition.lang = 'ko-KR'; 
-    recognition.interimResults = false; 
-    recognition.maxAlternatives = 1; 
+    recognition.lang = 'ko-KR';
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
     micBtn.addEventListener('click', () => { if (micBtn.classList.contains('listening')) recognition.stop(); else recognition.start(); });
     recognition.addEventListener('start', () => { micBtn.classList.add('listening'); userInput.placeholder = "Listening..."; });
     recognition.addEventListener('end', () => { micBtn.classList.remove('listening'); userInput.placeholder = "Ready"; });
@@ -872,8 +872,8 @@ if (canUseMic) {
         setTimeout(() => { userInput.placeholder = "Ready"; }, 2000);
     });
 } else {
-    if(micBtn) micBtn.style.display = 'none';
-    if(sendBtn) sendBtn.style.display = 'flex';
+    if (micBtn) micBtn.style.display = 'none';
+    if (sendBtn) sendBtn.style.display = 'flex';
 }
 
 window.visualViewport.addEventListener('resize', () => {
@@ -884,7 +884,7 @@ window.visualViewport.addEventListener('resize', () => {
 
 function sendSuggestion(text) {
     const userInput = document.getElementById('user-input');
-    userInput.value = text; 
+    userInput.value = text;
     toggleInputButtons();
     setTimeout(() => {
         document.getElementById('send-btn').click();
@@ -906,8 +906,8 @@ function showToast(message) {
     const toast = document.getElementById("toast-container");
     toast.textContent = message;
     toast.className = "show";
-    setTimeout(() => { 
-        toast.className = toast.className.replace("show", ""); 
+    setTimeout(() => {
+        toast.className = toast.className.replace("show", "");
     }, 3000);
 }
 
@@ -925,42 +925,58 @@ window.addEventListener('online', () => {
 
 document.addEventListener('DOMContentLoaded', () => {
     const scrollBtn = document.getElementById('scroll-bottom-btn');
-    const chatBoxEl = document.getElementById('chat-box'); 
+    const chatBoxEl = document.getElementById('chat-box');
+
     if (scrollBtn && chatBoxEl) {
-        chatBoxEl.addEventListener('scroll', () => {
+        // 스크롤 버튼 표시 조건 체크 함수
+        const checkScrollButton = () => {
+            // [핵심 1] 스크롤이 가능한지 (내용이 화면보다 많은지) 확인
+            const isScrollable = chatBoxEl.scrollHeight > chatBoxEl.clientHeight + 50;
+
+            // [핵심 2] 사용자가 위로 스크롤했는지 확인 (하단에서 200px 이상 떨어졌는지)
             const isScrolledUp = chatBoxEl.scrollTop + chatBoxEl.clientHeight < chatBoxEl.scrollHeight - 200;
-            if (isScrolledUp) {
+
+            // 두 조건 모두 만족해야 버튼 표시
+            if (isScrollable && isScrolledUp) {
                 scrollBtn.classList.add('show');
             } else {
                 scrollBtn.classList.remove('show');
             }
-        });
+        };
+
+        // 스크롤 이벤트 리스너
+        chatBoxEl.addEventListener('scroll', checkScrollButton);
+
+        // 클릭 시 맨 아래로 이동
         scrollBtn.addEventListener('click', () => {
             chatBoxEl.scrollTo({
                 top: chatBoxEl.scrollHeight,
-                behavior: 'smooth' 
+                behavior: 'smooth'
             });
         });
+
+        // 초기 체크 (페이지 로드 시)
+        checkScrollButton();
     }
 });
 
 function translateCardButtons(container) {
     const lang = window.currentLang || 'ko';
-    if (lang === 'ko') return; 
+    if (lang === 'ko') return;
 
     const dict = {
         en: { detail: "View Details", share: "Share" },
         vi: { detail: "Xem chi tiết", share: "Chia sẻ" },
         zh: { detail: "查看详情", share: "分享" }
     };
-    
+
     const detailLinks = container.querySelectorAll('.detail-link');
     const shareBtns = container.querySelectorAll('.card-share-btn');
-    
+
     detailLinks.forEach(el => {
         el.innerText = dict[lang].detail;
     });
-    
+
     shareBtns.forEach(el => {
         el.innerText = dict[lang].share;
     });
