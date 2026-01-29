@@ -179,14 +179,39 @@ async def check_rate_limit(request: Request, limit: int = RATE_LIMIT_MAX_REQUEST
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root():
-    # [수정] FileResponse 대신 내용을 읽어서 HTML로 직접 반환 (다운로드 방지)
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    file_path = os.path.join(current_dir, "static/index.html")
-    
-    with open(file_path, "r", encoding="utf-8") as f:
-        html_content = f.read()
-        
-    return HTMLResponse(content=html_content)
+    # [수정] 파일 읽기 문제를 배제하기 위해 하드코딩된 HTML 반환
+    return """
+    <!DOCTYPE html>
+    <html lang="ko">
+    <head>
+        <meta charset="UTF-8">
+        <title>도봉구 영유아 복지톡</title>
+        <style>
+            body { font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #f0f2f5; }
+            .loader { border: 4px solid #f3f3f3; border-top: 4px solid #3498db; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; }
+            @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        </style>
+        <script>
+            // 1초 뒤 실제 메인 페이지 리소스 로드 시도
+            setTimeout(() => {
+                // static 파일이 잘 서빙되는지 확인하기 위해 redirection
+                window.location.href = '/static/index.html'; 
+            }, 1000);
+        </script>
+    </head>
+    <body>
+        <div style="text-align:center">
+            <h1>챗봇 로딩 중...</h1>
+            <div class="loader" style="margin: 20px auto;"></div>
+            <p>잠시만 기다려주세요.</p>
+        </div>
+    </body>
+    </html>
+    """
+
+@app.get("/health")
+def health_check():
+    return {"status": "ok", "env": "vercel"}
 
 @app.post("/admin/clear_cache")
 def clear_all_caches(secret: str = Query(None)):
