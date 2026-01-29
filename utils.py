@@ -154,7 +154,14 @@ redis_async_client = None
 MAIN_ANSWER_CACHE_KEY = "chatbot:main_answers"
 MAIN_ANSWER_CACHE_TTL = 3600
 
-if redis:
+# [핵심] Vercel 환경에서는 Redis 완전 비활성화 (파일 디스크립터 고갈 방지)
+_IS_VERCEL_ENV = os.getenv("VERCEL_ENV") or os.getenv("FORCE_SYNC_MODE")
+
+if _IS_VERCEL_ENV:
+    print("🔄 [Vercel] Redis 클라이언트 초기화 건너뜀 (서버리스 환경)")
+    redis_client = None
+    redis_async_client = None
+elif redis:
     try:
         # [수정] Redis URL 형식 자동 감지 (redis://, rediss://)
         if REDIS_HOST.startswith("redis://") or REDIS_HOST.startswith("rediss://"):
@@ -166,6 +173,7 @@ if redis:
                 test_r = redis.from_url(REDIS_HOST, socket_timeout=2)
                 if test_r.ping():
                     print("✅ Utils: Redis 연결 성공 (테스트 완료)")
+                test_r.close()  # 테스트 연결 닫기
             except Exception:
                 print("⚠️ Utils: Redis 초기 연결 테스트 실패 (무시하고 진행)")
             
@@ -190,6 +198,7 @@ if redis:
             try:
                 if test_r.ping():
                     print("✅ Utils: Redis 연결 성공 (테스트 완료)")
+                test_r.close()  # 테스트 연결 닫기
             except Exception:
                 print("⚠️ Utils: Redis 초기 연결 테스트 실패 (무시하고 진행)")
             
