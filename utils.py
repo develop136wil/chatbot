@@ -7,13 +7,16 @@ try:
 except Exception:
     pass # Vercel 등 일부 환경에서는 stdout 설정 변경 불가
 
+# [버전 마커] 배포 확인용
+_UTILS_VERSION = "2026.01.29-v3"
+print(f"📦 Utils 모듈 로드 (버전: {_UTILS_VERSION})")
+
 try:
     import redis
 except ImportError:
     redis = None
     
 import os
-import sys
 import json
 import time
 import hashlib
@@ -21,7 +24,7 @@ import asyncio
 import itertools
 import re  # [긴급 수정] 정규식 모듈 추가 (expand_search_query에서 사용)
 import secrets  # [추가] 보안 토큰 생성용
-import redis
+# redis는 위에서 이미 import됨 (중복 제거)
 import warnings
 
 # [설정] 구글 라이브러리 Deprecation 경고 숨김 (기능상 문제 없음)
@@ -1285,21 +1288,9 @@ def format_search_results(pages_metadata: list) -> str:
     
     return "".join(cards_html)
     
-# --- 8.5 동기 검색 함수 (Worker 호환용) ---
-
-def search_supabase(question: str, extracted_info: dict, keywords: list = []) -> list:
-    """
-    Worker용 동기 검색 함수 (비동기 버전의 래퍼)
-    """
-    import asyncio
-    
-    # 비동기 함수를 동기 컨텍스트에서 실행
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        return loop.run_until_complete(search_supabase_async(question, extracted_info, keywords))
-    finally:
-        loop.close()
+# --- 8.5 동기 함수들 (Worker 호환용) ---
+# 주의: search_supabase, get_gemini_embedding의 진짜 동기 버전은 
+# 이 파일의 다른 위치에 정의되어 있습니다. (중복 정의 제거됨)
 
 def check_semantic_cache(query_embedding: list) -> str | None:
     """
@@ -1314,18 +1305,7 @@ def check_semantic_cache(query_embedding: list) -> str | None:
     finally:
         loop.close()
 
-def get_gemini_embedding(text: str, task_type: str = "SEMANTIC_SIMILARITY") -> Optional[List[float]]:
-    """
-    Worker용 동기 임베딩 함수
-    """
-    import asyncio
-    
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        return loop.run_until_complete(get_gemini_embedding_async(text, task_type))
-    finally:
-        loop.close()
+# [삭제됨] get_gemini_embedding 중복 정의 - 진짜 동기 버전은 파일 상단에 있음 (line ~270)
 
 # --- 9. 의미 기반 캐시 (Semantic Cache) 함수 ---
 
@@ -1659,18 +1639,4 @@ def summarize_content_with_llm(content: str, language: str = "ko") -> str:
         print(f"⚠️ 요약 실패: {e}")
         return content
 
-def search_supabase(question: str, extracted_info: dict, keywords: list = []) -> list:
-    """search_supabase_async의 동기 버전"""
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    
-    if loop.is_running():
-        # 이미 루프가 실행 중인 경우 (워커에서는 이럴 일이 거의 없지만 안전을 위해)
-        import nest_asyncio
-        nest_asyncio.apply()
-        return loop.run_until_complete(search_supabase_async(question, extracted_info, keywords))
-    else:
-        return loop.run_until_complete(search_supabase_async(question, extracted_info, keywords))
+# [삭제됨] search_supabase 중복 정의 - 진짜 동기 버전은 파일 중간에 있음 (line ~1383)
