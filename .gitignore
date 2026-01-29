@@ -1,5 +1,35 @@
+# Git ignore
 .vercel
 SECRET KEYS.txt
 __pycache__/
 *.pyc
 .env
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Node
+node_modules/
+package-lock.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.log
+*.tmp
+
+# Test files (production에서 제외)
+test_*.py
+
+# Local data
+chroma-data/
