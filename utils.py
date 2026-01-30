@@ -1370,21 +1370,29 @@ def format_search_results(pages_metadata: list) -> str:
     ref_pattern = re.compile(r'^\s*[\*\-•]?\s*※\s*(.*)$')
     
     # ============================================
-    # 5. [신규] 동적 소제목 감지 - 한국어 헤더 키워드
+    # 5. [신규] 동적 소제목 감지 - 다국어 헤더 키워드
     # ============================================
-    KOREAN_HEADER_KEYWORDS = [
+    HEADER_KEYWORDS = [
+        # 한국어
         "지원 내용", "지원내용", "지원 금액", "지원금액", "금액/규모", "금액", "규모",
         "대상", "지원 대상", "지원대상", "신청 대상",
         "비용", "비용 부담", "본인부담금",
         "신청 방법", "신청방법", "신청 절차", "신청절차", "이용 방법", "이용방법",
         "신청 기간", "신청기간", "접수 기간",
         "서비스 내용", "서비스내용", "주요 내용",
-        "참고 사항", "참고사항", "주의사항", "유의사항", "기타"
+        "참고 사항", "참고사항", "주의사항", "유의사항", "기타",
+        # English
+        "Support Content", "Target", "Cost", "How to Apply", "Application Method",
+        "Eligibility", "Amount", "Service Details", "Notes", "Caution",
+        # Vietnamese
+        "Nội dung hỗ trợ", "Đối tượng", "Chi phí", "Cách đăng ký", "Số tiền",
+        # Chinese
+        "支持内容", "对象", "费用", "申请方法", "金额", "服务内容"
     ]
-    # 불렛(•, *, -)으로 시작하고, 키워드와 일치하는 경우 (콜론 포함 가능)
-    subheader_keywords_pattern = '|'.join(re.escape(k) for k in KOREAN_HEADER_KEYWORDS)
+    # [수정] 불렛으로 시작하고, 키워드로 시작하는 경우 (뒤에 콜론이나 추가 내용 허용)
+    subheader_keywords_pattern = '|'.join(re.escape(k) for k in HEADER_KEYWORDS)
     subheader_pattern = re.compile(
-        rf'^[\s•*\-]*({subheader_keywords_pattern})[\s:]*$', re.IGNORECASE
+        rf'^[\s•*\-]*({subheader_keywords_pattern})[\s:]*(.*)$', re.IGNORECASE
     )
 
     for meta in pages_metadata:
@@ -1454,15 +1462,22 @@ def format_search_results(pages_metadata: list) -> str:
                 html_rows.append(row)
                 last_li_index = len(html_rows) - 1
             
-            # (3.5) [신규] 동적 소제목 감지 - 한국어 헤더 키워드 매칭
+            # (3.5) [신규] 동적 소제목 감지 - 다국어 헤더 키워드 매칭
             elif match_subheader:
                 header_title = match_subheader.group(1).strip()
+                content_text = match_subheader.group(2).strip() if match_subheader.group(2) else ""
                 # 새 주제가 시작되었으므로 들여쓰기 초기화 (20px)
                 current_margin_left = "20px"
                 # 볼드 스타일 적용 (Main Header와 동일한 스타일)
                 row = f"<li style='list-style: none; margin-bottom: 6px; margin-top: 12px;'><span style='color: #101828; font-weight: 700; font-size: 1.05em;'>{header_title}</span></li>"
                 html_rows.append(row)
                 last_li_index = len(html_rows) - 1
+                
+                # 헤더 뒤에 내용이 있으면 별도 항목으로 추가
+                if content_text:
+                    row_content = f"<li style='color: #475467; margin-bottom: 4px; margin-left: {current_margin_left};'>{content_text}</li>"
+                    html_rows.append(row_content)
+                    last_li_index = len(html_rows) - 1
             
             # (4) 일반 내용 (불렛 포인트 등)
             elif line.startswith("* ") or line.startswith("- ") or line.startswith("• "):
