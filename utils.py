@@ -1342,9 +1342,6 @@ def clean_summary_text(text: str) -> str:
             # 내용 줄 정리
             clean_line = re.sub(r'^[\s\*\-•①-⑮❶-❿0-9\.]+\s*', '', stripped)
             if clean_line and len(clean_line) > 5:
-                # [NEW] 80자 제한 - 시각적 줄바꿈 방지
-                if len(clean_line) > 80:
-                    clean_line = clean_line[:77] + "..."
                 sections[current_section].append(clean_line)
     
     # 빈 섹션 제거하고 출력 생성
