@@ -1492,16 +1492,24 @@ def format_search_results(pages_metadata: list) -> str:
                 content_text = match_subheader.group(2).strip() if match_subheader.group(2) else ""
                 # 새 주제가 시작되었으므로 들여쓰기 초기화 (20px)
                 current_margin_left = "20px"
-                # 볼드 스타일 적용 (Main Header와 동일한 스타일)
-                row = f"<li style='list-style: none; margin-bottom: 6px; margin-top: 12px;'><span style='color: #101828; font-weight: 700; font-size: 1.05em;'>{header_title}</span></li>"
-                html_rows.append(row)
-                last_li_index = len(html_rows) - 1
                 
-                # 헤더 뒤에 내용이 있으면 별도 항목으로 추가
-                if content_text:
-                    row_content = f"<li style='color: #475467; margin-bottom: 4px; margin-left: {current_margin_left};'>{content_text}</li>"
-                    html_rows.append(row_content)
+                # [수정] 짧은 보조 텍스트(괄호, 20자 이하)는 헤더와 같은 줄에 표시
+                if content_text and len(content_text) <= 20 and (content_text.startswith("(") or content_text.startswith("：")):
+                    # 헤더 + 보조 텍스트를 한 줄에 표시
+                    row = f"<li style='list-style: none; margin-bottom: 6px; margin-top: 12px;'><span style='color: #101828; font-weight: 700; font-size: 1.05em;'>{header_title}</span> <span style='color: #667085; font-weight: 400; font-size: 0.9em;'>{content_text}</span></li>"
+                    html_rows.append(row)
                     last_li_index = len(html_rows) - 1
+                else:
+                    # 볼드 스타일 적용 (Main Header와 동일한 스타일)
+                    row = f"<li style='list-style: none; margin-bottom: 6px; margin-top: 12px;'><span style='color: #101828; font-weight: 700; font-size: 1.05em;'>{header_title}</span></li>"
+                    html_rows.append(row)
+                    last_li_index = len(html_rows) - 1
+                    
+                    # 헤더 뒤에 긴 내용이 있으면 별도 항목으로 추가
+                    if content_text:
+                        row_content = f"<li style='color: #475467; margin-bottom: 4px; margin-left: {current_margin_left};'>{content_text}</li>"
+                        html_rows.append(row_content)
+                        last_li_index = len(html_rows) - 1
             
             # (4) 일반 내용 (불렛 포인트 등)
             elif line.startswith("* ") or line.startswith("- ") or line.startswith("• "):
