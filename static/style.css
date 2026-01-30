@@ -308,6 +308,8 @@ body {
     /* [수정] 12px -> 11px */
     font-weight: 600;
     /* [수정] bold -> 600 */
+    line-height: 1.2;
+    /* [추가] 수직 가운데 정렬 개선 */
 
     /* 글자색: 진한 갈색/따뜻한 회색 */
     color: #6B5B45;
@@ -318,12 +320,14 @@ body {
     /* 테두리: 약간 진한 베이지색 */
     border: 1px solid #F2E2B1;
 
-    padding: 2px 6px;
-    /* [수정] 4px 8px -> 2px 6px 더 컴팩트하게 */
+    padding: 1px 6px;
+    /* [수정] 2px 6px -> 1px 6px 상하 더 축소 */
     border-radius: 4px;
     /* [수정] 6px -> 4px */
     margin-bottom: 6px;
     /* [수정] 4px -> 6px 제목과의 간격 확보 */
+    vertical-align: middle;
+    /* [추가] 수직 정렬 */
 }
 
 /* [수정] 카드 제목 (상단 여백 제거 및 줄 간격 조정) */
