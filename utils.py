@@ -1368,6 +1368,24 @@ def format_search_results(pages_metadata: list) -> str:
     
     # 4. [신규] 당구장(참고) 패턴 (※)
     ref_pattern = re.compile(r'^\s*[\*\-•]?\s*※\s*(.*)$')
+    
+    # ============================================
+    # 5. [신규] 동적 소제목 감지 - 한국어 헤더 키워드
+    # ============================================
+    KOREAN_HEADER_KEYWORDS = [
+        "지원 내용", "지원내용", "지원 금액", "지원금액", "금액/규모", "금액", "규모",
+        "대상", "지원 대상", "지원대상", "신청 대상",
+        "비용", "비용 부담", "본인부담금",
+        "신청 방법", "신청방법", "신청 절차", "신청절차", "이용 방법", "이용방법",
+        "신청 기간", "신청기간", "접수 기간",
+        "서비스 내용", "서비스내용", "주요 내용",
+        "참고 사항", "참고사항", "주의사항", "유의사항", "기타"
+    ]
+    # 불렛(•, *, -)으로 시작하고, 키워드와 일치하는 경우 (콜론 포함 가능)
+    subheader_keywords_pattern = '|'.join(re.escape(k) for k in KOREAN_HEADER_KEYWORDS)
+    subheader_pattern = re.compile(
+        rf'^[\s•*\-]*({subheader_keywords_pattern})[\s:]*$', re.IGNORECASE
+    )
 
     for meta in pages_metadata:
         title = meta.get("title", "제목 없음")
@@ -1394,6 +1412,7 @@ def format_search_results(pages_metadata: list) -> str:
             match_bold = header_pattern_bold.match(line)
             match_emoji = header_pattern_emoji.match(line)
             match_ref = ref_pattern.match(line)
+            match_subheader = subheader_pattern.match(line)  # [신규] 동적 소제목 매칭
             
             # (1) [Sub-Header] 번호 매기기 (①, 1. 등) -> 2번 사진처럼 진하게!
             if match_numbered:
@@ -1432,6 +1451,16 @@ def format_search_results(pages_metadata: list) -> str:
                 content = match_ref.group(1).strip()
                 # 스타일: 약간 작은 글씨, 아이콘 느낌 추가
                 row = f"<li style='color: #667085; font-size: 0.9em; margin-bottom: 4px; margin-left: {current_margin_left}; list-style: none;'>※ {content}</li>"
+                html_rows.append(row)
+                last_li_index = len(html_rows) - 1
+            
+            # (3.5) [신규] 동적 소제목 감지 - 한국어 헤더 키워드 매칭
+            elif match_subheader:
+                header_title = match_subheader.group(1).strip()
+                # 새 주제가 시작되었으므로 들여쓰기 초기화 (20px)
+                current_margin_left = "20px"
+                # 볼드 스타일 적용 (Main Header와 동일한 스타일)
+                row = f"<li style='list-style: none; margin-bottom: 6px; margin-top: 12px;'><span style='color: #101828; font-weight: 700; font-size: 1.05em;'>{header_title}</span></li>"
                 html_rows.append(row)
                 last_li_index = len(html_rows) - 1
             
