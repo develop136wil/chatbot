@@ -1373,24 +1373,27 @@ def format_search_results(pages_metadata: list) -> str:
     # 5. [신규] 동적 소제목 감지 - 다국어 헤더 키워드
     # ============================================
     HEADER_KEYWORDS = [
-        # 한국어
-        "지원 내용", "지원내용", "지원 금액", "지원금액", "금액/규모", "금액", "규모",
-        "대상", "지원 대상", "지원대상", "신청 대상",
-        "비용", "비용 부담", "본인부담금",
+        # 한국어 (긴 키워드 먼저 - regex alternation에서 우선 매칭)
+        "지원 금액/규모", "금액/규모", "지원금액/규모",  # 복합 키워드 우선
+        "지원 내용", "지원내용", "지원 금액", "지원금액", 
+        "지원 대상", "지원대상", "신청 대상", "대상",
+        "비용 부담", "본인부담금", "비용",
         "신청 방법", "신청방법", "신청 절차", "신청절차", "이용 방법", "이용방법",
         "신청 기간", "신청기간", "접수 기간",
         "서비스 내용", "서비스내용", "주요 내용",
-        "참고 사항", "참고사항", "주의사항", "유의사항", "기타",
+        "참고 사항", "참고사항", "주의사항", "유의사항", 
+        "금액", "규모", "기타",  # 짧은 키워드는 마지막에
         # English
-        "Support Content", "Target", "Cost", "How to Apply", "Application Method",
-        "Eligibility", "Amount", "Service Details", "Notes", "Caution",
+        "Support Content", "How to Apply", "Application Method", "Service Details",
+        "Eligibility", "Target", "Amount", "Cost", "Notes", "Caution",
         # Vietnamese
-        "Nội dung hỗ trợ", "Đối tượng", "Chi phí", "Cách đăng ký", "Số tiền",
+        "Nội dung hỗ trợ", "Cách đăng ký", "Đối tượng", "Chi phí", "Số tiền",
         # Chinese
-        "支持内容", "对象", "费用", "申请方法", "金额", "服务内容"
+        "支持内容", "申请方法", "服务内容", "对象", "费用", "金额"
     ]
-    # [수정] 불렛으로 시작하고, 키워드로 시작하는 경우 (뒤에 콜론이나 추가 내용 허용)
-    subheader_keywords_pattern = '|'.join(re.escape(k) for k in HEADER_KEYWORDS)
+    # [수정] 키워드를 길이 내림차순으로 정렬 (긴 것이 먼저 매칭되도록)
+    sorted_keywords = sorted(HEADER_KEYWORDS, key=len, reverse=True)
+    subheader_keywords_pattern = '|'.join(re.escape(k) for k in sorted_keywords)
     subheader_pattern = re.compile(
         rf'^[\s•*\-]*({subheader_keywords_pattern})[\s:]*(.*)$', re.IGNORECASE
     )
