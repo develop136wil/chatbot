@@ -1373,8 +1373,9 @@ def format_search_results(pages_metadata: list) -> str:
     # 5. [신규] 동적 소제목 감지 - 다국어 헤더 키워드
     # ============================================
     HEADER_KEYWORDS = [
-        # 한국어 (긴 키워드 먼저 - regex alternation에서 우선 매칭)
-        "지원 금액/규모", "금액/규모", "지원금액/규모",  # 복합 키워드 우선
+        # ============ 한국어 ============
+        # 복합 키워드 우선 (긴 것 먼저)
+        "지원 금액/규모", "금액/규모", "지원금액/규모",
         "지원 내용", "지원내용", "지원 금액", "지원금액", 
         "지원 대상", "지원대상", "신청 대상", "대상",
         "비용 부담", "본인부담금", "비용",
@@ -1382,14 +1383,34 @@ def format_search_results(pages_metadata: list) -> str:
         "신청 기간", "신청기간", "접수 기간",
         "서비스 내용", "서비스내용", "주요 내용",
         "참고 사항", "참고사항", "주의사항", "유의사항", 
-        "금액", "규모", "기타",  # 짧은 키워드는 마지막에
-        # English
-        "Support Content", "How to Apply", "Application Method", "Service Details",
-        "Eligibility", "Target", "Amount", "Cost", "Notes", "Caution",
-        # Vietnamese
-        "Nội dung hỗ trợ", "Cách đăng ký", "Đối tượng", "Chi phí", "Số tiền",
-        # Chinese
-        "支持内容", "申请方法", "服务内容", "对象", "费用", "金额"
+        "금액", "규모", "기타",
+        
+        # ============ English ============
+        "Support Content", "Service Content", "Service Details", "What's Included",
+        "Support Amount/Scale", "Amount/Scale", "Support Amount", "Amount", "Scale",
+        "Target Audience", "Eligibility", "Who Can Apply", "Target",
+        "Cost Information", "Cost/Fee", "User Fee", "Cost", "Fee",
+        "How to Apply", "Application Method", "Application Process", "How to Use",
+        "Application Period", "Registration Period",
+        "Important Notes", "Caution", "Notes", "Reference",
+        
+        # ============ Vietnamese (Tiếng Việt) ============
+        "Nội dung hỗ trợ", "Nội dung dịch vụ", "Chi tiết dịch vụ",
+        "Số tiền hỗ trợ", "Số tiền/Quy mô", "Số tiền", "Quy mô",
+        "Đối tượng hỗ trợ", "Đối tượng đăng ký", "Đối tượng",
+        "Chi phí", "Phí dịch vụ", "Phí",
+        "Cách đăng ký", "Phương pháp đăng ký", "Quy trình đăng ký", "Cách sử dụng",
+        "Thời gian đăng ký", "Kỳ đăng ký",
+        "Lưu ý", "Chú ý", "Ghi chú", "Tham khảo",
+        
+        # ============ Chinese (中文) ============
+        "支持内容", "服务内容", "服务详情", "包含内容",
+        "支持金额/规模", "金额/规模", "支持金额", "金额", "规模",
+        "支持对象", "申请对象", "目标人群", "对象",
+        "费用信息", "费用/收费", "用户费用", "费用", "收费",
+        "申请方法", "如何申请", "申请流程", "使用方法",
+        "申请期间", "登记期间",
+        "注意事项", "注意", "备注", "参考"
     ]
     # [수정] 키워드를 길이 내림차순으로 정렬 (긴 것이 먼저 매칭되도록)
     sorted_keywords = sorted(HEADER_KEYWORDS, key=len, reverse=True)
