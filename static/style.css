@@ -344,8 +344,10 @@ body {
 .card-body li {
     font-size: 14px;
     color: #475467;
-    margin-bottom: 4px;
-    line-height: 1.5;
+    margin-bottom: 8px;
+    /* [수정] 4px -> 8px (가독성 확보) */
+    line-height: 1.6;
+    /* [수정] 1.5 -> 1.6 (줄 간격 확보) */
 }
 
 /* 카드 푸터 (자세히보기 + 공유하기) */
