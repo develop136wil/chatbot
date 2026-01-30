@@ -25,10 +25,28 @@ import asyncio
 import itertools
 import re  # [긴급 수정] 정규식 모듈 추가 (expand_search_query에서 사용)
 import secrets  # [추가] 보안 토큰 생성용
+import logging  # [추가] 구조화된 로깅
 # redis는 위에서 이미 import됨 (중복 제거)
 import warnings
 
-# [설정] 구글 라이브러리 Deprecation 경고 숨김 (기능상 문제 없음)
+# [신규] 구조화된 로깅 설정
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("utils")
+
+def log_performance(operation: str, start_time: float, success: bool = True, extra: dict = None):
+    """
+    [신규] 성능 로깅 헬퍼 함수
+    
+    Args:
+        operation: 작업 이름 (예: "search", "embedding", "llm_call")
+        start_time: time.time()으로 측정한 시작 시간
+        success: 작업 성공 여부
+        extra: 추가 메타데이터 (예: {"cache_hit": True})
+    """
+    elapsed_ms = (time.time() - start_time) * 1000
+    status = "✅" if success else "❌"
+    extra_str = f" | {extra}" if extra else ""
+    logger.info(f"{status} [{operation}] {elapsed_ms:.1f}ms{extra_str}")
 warnings.filterwarnings("ignore", category=UserWarning, module="google.genai") # 신규 라이브러리 경고 방지
 
 from dotenv import load_dotenv
@@ -122,10 +140,44 @@ KEYWORD_CATEGORY_MAP = {
 
 # [NEW] 제목 매칭을 위한 핵심 키워드 (이 키워드가 제목에 없으면 순위 하락)
 TITLE_MATCH_KEYWORDS = {
-    "검사": ["검사", "진단", "선별"],
-    "치료": ["치료", "재활", "바우처"],
-    "수당": ["수당", "급여", "지원금"]
+    "검사": ["검사", "진단", "선별", "평가"],
+    "치료": ["치료", "재활", "바우처", "서비스"],
+    "수당": ["수당", "급여", "지원금", "현금"],
+    "돌봄": ["돌봄", "보육", "케어", "양육"],
+    "교육": ["교육", "특수", "학습", "발달"]
 }
+
+# [NEW] 언어 자동 감지 함수
+def detect_language(text: str) -> str:
+    """
+    텍스트의 언어를 자동으로 감지합니다.
+    
+    Returns:
+        str: 'ko', 'en', 'vi', 'zh' 중 하나
+    """
+    if not text:
+        return 'ko'
+    
+    # 문자 유형별 카운트
+    korean = sum(1 for c in text if '\uac00' <= c <= '\ud7a3' or '\u1100' <= c <= '\u11ff')
+    chinese = sum(1 for c in text if '\u4e00' <= c <= '\u9fff')
+    vietnamese = sum(1 for c in text if c in 'ăâđêôơưàảãáạằẳẵắặầẩẫấậèẻẽéẹềểễếệìỉĩíịòỏõóọồổỗốộờởỡớợùủũúụừửữứựỳỷỹýỵ')
+    
+    total = len(text)
+    if total == 0:
+        return 'ko'
+    
+    # 비율 계산
+    if korean / total > 0.3:
+        return 'ko'
+    elif chinese / total > 0.3:
+        return 'zh'
+    elif vietnamese > 5:  # 베트남어 특수 문자가 5개 이상
+        return 'vi'
+    elif all(ord(c) < 128 or c.isspace() for c in text):  # ASCII only = English
+        return 'en'
+    
+    return 'ko'  # 기본값
 
 def get_deterministic_category(question: str) -> str:
     """
@@ -141,17 +193,25 @@ def get_deterministic_category(question: str) -> str:
             return category
     return None
 
-def check_title_match(query: str, title: str) -> bool:
+def check_title_match(query: str, title: str) -> float:
     """
-    [NEW] 쿼리의 핵심 키워드가 제목에 포함되어 있는지 확인합니다.
+    [IMPROVED] 쿼리의 핵심 키워드가 제목에 포함되어 있는지 확인합니다.
     
     Returns:
-        bool: 제목에 관련 키워드가 있으면 True
+        float: 매칭 점수 (1.0 = 기본, 1.5 = 제목 매칭, 0.7 = 불일치)
     """
+    query_lower = query.lower()
+    title_lower = title.lower()
+    
     for query_keyword, title_keywords in TITLE_MATCH_KEYWORDS.items():
-        if query_keyword in query:
-            return any(tk in title for tk in title_keywords)
-    return True  # 매핑된 키워드가 없으면 기본적으로 True
+        if query_keyword in query_lower:
+            if any(tk in title_lower for tk in title_keywords):
+                return 1.5  # 제목 매칭 시 50% 부스트
+            else:
+                return 0.7  # 불일치 시 30% 감점
+    
+    return 1.0  # 매핑된 키워드가 없으면 기본값
+
 
 # --- 3. 클라이언트 초기화 ---
 LLM_CLIENT = None
