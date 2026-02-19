@@ -1555,3 +1555,85 @@ body {
         padding: 10px 14px;
     }
 }
+
+/* 
+   UI/UX Improvements (Toast, Skeleton, Horizontal Suggestions) 
+   Added by Antigravity
+*/
+
+/* 1. Horizontal Scroll for Suggestions */
+#suggestion-container {
+    display: flex;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    gap: 8px;
+    padding: 10px 4px;
+    /* Add padding for scrollbar/shadow */
+    margin-bottom: 8px;
+    -webkit-overflow-scrolling: touch;
+    /* Smooth scroll on iOS */
+    scrollbar-width: none;
+    /* Hide scrollbar Firefox */
+}
+
+#suggestion-container::-webkit-scrollbar {
+    display: none;
+    /* Hide scrollbar Chrome/Safari */
+}
+
+.suggestion-chip {
+    flex: 0 0 auto;
+    /* Don't shrink */
+    white-space: nowrap;
+}
+
+/* 2. Skeleton Box (Static - Shimmer Removed) */
+.skeleton-box {
+    background-color: #E0E0E0;
+    position: relative;
+    overflow: hidden;
+    height: 14px;
+    /* Default height */
+    border-radius: 4px;
+    margin-bottom: 6px;
+}
+
+/* Dark Mode Skeleton */
+@media (prefers-color-scheme: dark) {
+    .skeleton-box {
+        background-color: #333;
+    }
+}
+
+/* 3. Toast Notification */
+#toast-container {
+    position: fixed;
+    bottom: 80px;
+    /* Above input area */
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 2000;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    pointer-events: none;
+    /* Click through */
+}
+
+.toast {
+    background-color: rgba(0, 0, 0, 0.8);
+    color: white;
+    padding: 10px 20px;
+    border-radius: 20px;
+    font-size: 14px;
+    font-weight: 500;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    opacity: 0;
+    transform: translateY(20px);
+    transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.toast.show {
+    opacity: 1;
+    transform: translateY(0);
+}

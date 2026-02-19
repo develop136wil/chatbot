@@ -990,3 +990,38 @@ function translateCardButtons(container) {
         el.innerText = dict[lang].share;
     });
 }
+// --- [UI Improvements] Toast & Suggestions ---
+
+// 1. Toast Notification Function
+function showToast(message) {
+    let container = document.getElementById('toast-container');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'toast-container';
+        document.body.appendChild(container);
+    }
+    
+    const toast = document.createElement('div');
+    toast.className = 'toast';
+    toast.textContent = message;
+    container.appendChild(toast);
+    
+    // Trigger reflow for animation
+    void toast.offsetWidth; 
+    toast.classList.add('show');
+    
+    setTimeout(() => {
+        toast.classList.remove('show');
+        setTimeout(() => {
+            toast.remove();
+        }, 300);
+    }, 2000);
+}
+
+// 2. Suggestion Chip Scroll Fix (Prevent click jumping)
+document.addEventListener('click', function(e) {
+    if (e.target.classList.contains('suggestion-chip')) {
+        e.preventDefault(); // Prevent default focus jump
+        // Original onclick handler in createButtons/HTML will still fire
+    }
+});

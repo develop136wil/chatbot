@@ -24,7 +24,6 @@ from utils import (
     redis_client,
     redis_async_client, # [신규]
     MAIN_ANSWER_CACHE_KEY,
-    extract_info_from_question,
     extract_info_from_question_async, # [신규]
     notion,   
     supabase, 

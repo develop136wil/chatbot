@@ -33,20 +33,7 @@ import warnings
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("utils")
 
-def log_performance(operation: str, start_time: float, success: bool = True, extra: dict = None):
-    """
-    [신규] 성능 로깅 헬퍼 함수
-    
-    Args:
-        operation: 작업 이름 (예: "search", "embedding", "llm_call")
-        start_time: time.time()으로 측정한 시작 시간
-        success: 작업 성공 여부
-        extra: 추가 메타데이터 (예: {"cache_hit": True})
-    """
-    elapsed_ms = (time.time() - start_time) * 1000
-    status = "✅" if success else "❌"
-    extra_str = f" | {extra}" if extra else ""
-    logger.info(f"{status} [{operation}] {elapsed_ms:.1f}ms{extra_str}")
+
 warnings.filterwarnings("ignore", category=UserWarning, module="google.genai") # 신규 라이브러리 경고 방지
 
 from dotenv import load_dotenv
@@ -371,13 +358,6 @@ def rotate_api_key():
         print(f"❌ [Key Rotation] 키 교체 중 오류: {e}")
 
 # --- 5. 시스템 명령어 ---
-SYSTEM_INSTRUCTION_WORKER = (
-    "당신은 검색된 정보를 있는 그대로 전달하는 정직한 메신저입니다. "
-    "제공된 '검색된 컨텍스트(정보)'의 내용과 형식을 자의적으로 요약하거나 문장으로 바꾸지 마세요. "
-    "반드시 원본의 **불렛 포인트(- 지원 내용, - 대상 등)** 형식을 그대로 유지하여 답변해야 합니다. "
-    "각 검색 결과의 끝에는 반드시 [출처 번호]를 명시하세요."
-)
-
 # --- 6. 핵심 로직 함수들 ---
 
 # [Vercel 환경 감지] 재시도 횟수 조정 (파일 디스크립터 고갈 방지)
@@ -634,127 +614,6 @@ async def generate_content_safe_async(client, prompt, timeout=120, **kwargs):
             
     print("💀 [System] Gemini 모든 재시도 실패 → Groq 최종 호출")
     return await call_groq_backup(prompt)
-
-def extract_info_from_question(question: str, chat_history: list[dict] = []) -> dict:
-    history_formatted = "(이전 대화 없음)"
-    if chat_history:
-        recent_history = chat_history[-3:]
-        history_formatted = "\n".join([f"  - {t['role']}: {t['content']}" for t in recent_history])
-
-    cache_key = None
-    if not chat_history:
-        question_hash = hashlib.md5(question.encode('utf-8')).hexdigest()
-        cache_key = f"extract_v2:{question_hash}"
-        try:
-            cached = redis_client.get(cache_key)
-            if cached: return json.loads(cached.decode('utf-8'))
-        except Exception: pass
-
-    client = get_llm_client() # Lazy Load
-    if not client: return {"error": "Gemini 모델 로드 실패"}
-
-    # 2. 히스토리 요약 (최근 3개만)
-    recent_history = chat_history[-3:] 
-    history_str = "\n".join([f"{t['role']}: {t['content'][:300]}" for t in recent_history]) if recent_history else "None"
-
-    # 3. [최종 최적화 프롬프트] 
-    # 지시어는 영어(토큰 절약), 핵심 키워드는 한국어 예시(정확도 보장)
-    prompt = f"""
-    You are an intent classifier for a welfare chatbot.
-    Analyze the user's input based on history and extract JSON.
-    
-    [History]
-    {history_str}
-    
-    [Input]
-    "{question}"
-
-    [Task]
-    Return ONLY a JSON object with keys: "intent", "category", "sub_category", "age" (int), "keywords" (list).
-
-    [Rules]
-    1. **intent**:
-       - "show_more" (more info), "safety_block" (profanity), "exit", "reset", "out_of_scope" (weather, stocks), "small_talk".
-       - "clarify_category": If input has age/target but NO service keyword (e.g., "6개월 아기", "장애 영유아").
-       - null: Normal search.
-    
-    2. **age**:
-       - Convert years('살') or 'dol'('돌') to **MONTHS**. (e.g., "3살" -> 36, "두 돌" -> 24).
-       - If only months are given, use as is. Return integer or null.
-
-    3. **category** (CRITICAL, Match specific keywords, else null):
-       - ONLY assign a category for GENERIC queries (e.g., "병원비 지원", "보육료").
-       - **IF the user asks for a SPECIFIC SERVICE NAME (e.g., "아동수당", "양육수당", "부모급여", "기저귀 바우처", "발달재활서비스", "아이돌봄"), SET "category" TO null.**
-       - Reason: Specific services can belong to unexpected categories. Global search (null) is safer.
-       
-       - "의료/재활": 병원, 치료, 검사, 진단, 재활 (generic terms only).
-       - "교육/보육": 어린이집, 유치원, 교육, 보육, 학습 (generic terms only).
-       - "가족 지원": 상담, 부모, 가족 (generic terms only).
-       - "돌봄/양육": 돌봄, 양육, 활동지원 (generic terms only).
-       - "생활 지원": 바우처, 지원금, 수당, 셔틀, 교통, 차량, 기저귀, 통장 (generic terms only).
-       
-       * **Priority Rule:** If the input contains generic words like "복지(welfare)" or "서비스(service)" AND specific category keywords are absent, set "category" to null to broaden the search.
-
-    4. **sub_category**:
-       - Extract specific traits: "장애", "다문화", "한부모", "저소득", "발달지연".
-       - **IGNORE** generic words like "아이", "아기", "영유아" (child, baby).
-    
-    5. **keywords**:
-       - Extract core nouns for search.
-       - Resolve pronouns ("그거", "거기") using [History].
-
-    [Output Example]
-    {{
-        "intent": null,
-        "category": "null",
-        "sub_category": "null",
-        "age": 24,
-        "keywords": ["바우처", "신청"]
-    }}
-    """
-    try:
-        # [수정] google.genai.types.SafetySetting 객체 사용
-        safety_settings = [
-            types.SafetySetting(category=c, threshold="BLOCK_NONE")
-            for c in ["HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH", "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT"]
-        ]
-        
-        # 앞서 추가한 generate_content_safe 함수 사용
-        response = generate_content_safe(client, prompt, timeout=60, safety_settings=safety_settings) # client 전달
-        # response.resolve() 제거 (v1.0에서는 불필요)
-
-        
-        response_text = response.text
-        json_block_start = response_text.find('{')
-        json_block_end = response_text.rfind('}') + 1
-        
-        if json_block_start != -1 and json_block_end != -1:
-             # JSON 파싱
-            json_string = response_text[json_block_start:json_block_end]
-            default_info = {"age": None, "category": None, "sub_category": None, "intent": None, "keywords": None}
-            extracted_info = json.loads(json_string)
-            default_info.update(extracted_info)
-             
-            has_other_criteria = default_info.get("age") is not None or default_info.get("sub_category") is not None
-            
-            # [수정 2] if 문 아래 들여쓰기 수정
-            if has_other_criteria and default_info.get("category") is None and default_info.get("intent") is None and not default_info.get("keywords"): 
-                default_info["intent"] = "clarify_category"
-
-            # [수정 3] 캐시 저장 로직 들여쓰기 맞춤
-            if cache_key:
-                try:
-                     redis_client.set(cache_key, json.dumps(default_info).encode('utf-8'))
-                except Exception: pass
-                 
-            return default_info
-        
-        else: 
-             return {"error": "Gemini 응답 JSON 없음"}
-             
-    # [수정 4] try와 짝이 맞는 except 위치
-    except Exception as e: 
-        return {"error": f"질문 분석 중 오류: {e}"}
 
 # --- [신규] Groq Async 호출 함수 (utils 내부용) ---
 async def call_groq_async_simple(prompt: str, system_message: str = "You are a helpful assistant.", max_retries: int = 2) -> Optional[str]:
