@@ -106,8 +106,9 @@ NOTION_API_KEY="your-notion-secret"
 REDIS_HOST="localhost"
 
 # Security
-ADMIN_SECRET_KEY="admin-password"
-SESSION_SECRET_KEY="complex-session-key"
+ADMIN_SECRET_KEY="your-strong-admin-password"  # (필수) 설정하지 않으면 경고 로그가 출력됩니다.
+SESSION_SECRET_KEY="complex-session-key" # (권장) Vercel 환경 변수로 설정
+ADDITIONAL_CORS_ORIGIN="https://your-custom-domain.com" # (선택) 추가 허용 도메인
 ```
 
 ### 3. 설치 및 실행

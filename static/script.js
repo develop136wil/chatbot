@@ -454,14 +454,23 @@ async function typeWriterEffect(element, htmlContent) {
             const text = node.textContent;
             for (let i = 0; i < text.length; i++) {
                 element.append(text[i]);
-                chatBox.scrollTop = chatBox.scrollHeight;
+
+                // [Smart Scroll] 사용자가 바닥에 있을 때만 스크롤 (읽으려고 올려뒀으면 방해 X)
+                if (chatBox.scrollHeight - chatBox.scrollTop - chatBox.clientHeight < 100) {
+                    chatBox.scrollTop = chatBox.scrollHeight;
+                }
+
                 await new Promise(r => setTimeout(r, 15)); // 속도 조절 (15ms)
             }
         } else {
-            // 엘리먼트 노드 (예: <p>, <b>, <ul>...): 통째로 붙이되, 내부 텍스트가 있다면 그것도 타이핑?
-            // 복잡도를 낮추기 위해 엘리먼트 단위는 '덩어리'로 출력하고 약간의 딜레이만 줌
+            // 엘리먼트 노드: 통째로 붙임
             element.appendChild(node.cloneNode(true));
-            chatBox.scrollTop = chatBox.scrollHeight;
+
+            // [Smart Scroll]
+            if (chatBox.scrollHeight - chatBox.scrollTop - chatBox.clientHeight < 100) {
+                chatBox.scrollTop = chatBox.scrollHeight;
+            }
+
             await new Promise(r => setTimeout(r, 50)); // 태그 간 딜레이
         }
     }
