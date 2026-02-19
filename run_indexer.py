@@ -105,8 +105,8 @@ def run_indexing():
         logger.critical("❌ FATAL: Gemini 모델 로드 실패. 인덱싱을 중단합니다.")
         return
 
-    prev_state = load_state()  # 증분 업데이트 활성화
-    # prev_state = {}          # 전체 재인덱싱 (필요시 사용) 
+    # prev_state = load_state()  # 증분 업데이트 (비활성화 - 재인덱싱 중)
+    prev_state = {}          # 전체 재인덱싱 (필요시 사용) 
     current_state = {}
     total_processed = 0
     total_skipped = 0
@@ -279,7 +279,6 @@ def run_indexing():
                         }
 
                         records_to_insert.append({
-                            "id": chunk_id,
                             "page_id": page_id,
                             "content": full_text_for_summary,
                             "metadata": metadata,
@@ -291,7 +290,7 @@ def run_indexing():
 
                 if records_to_insert:
                     try:
-                        supabase.table("site_pages").upsert(records_to_insert).execute()
+                        supabase.table("site_pages").upsert(records_to_insert, on_conflict="page_id").execute()
                         total_processed += 1
                     except Exception as e:
                         logger.error(f"❌ Supabase 저장 실패: {e}")

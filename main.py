@@ -51,6 +51,8 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 ADMIN_SECRET_KEY = os.getenv("ADMIN_SECRET_KEY", "your_strong_admin_password_here")
+if ADMIN_SECRET_KEY == "your_strong_admin_password_here":
+    logger.warning("⚠️ [Security] ADMIN_SECRET_KEY가 설정되지 않아 기본값을 사용합니다. 프로덕션 환경에서는 반드시 설정해주세요.")
 
 # --- 스케줄러 설정 ---
 def scheduled_job():
@@ -105,7 +107,8 @@ origins = [
     "http://localhost:8080",
     "http://127.0.0.1:8080",
     "https://bluchany-dobong-welfare-bot.hf.space",
-    "https://huggingface.co"
+    "https://huggingface.co",
+    "https://chatbot-tau-bay.vercel.app"
 ]
 # 환경 변수로 추가 도메인 설정 가능
 if additional_origin := os.getenv("ADDITIONAL_CORS_ORIGIN"):
@@ -177,37 +180,9 @@ async def check_rate_limit(request: Request, limit: int = RATE_LIMIT_MAX_REQUEST
 
 # --- API 엔드포인트 ---
 
-@app.get("/", response_class=HTMLResponse)
+@app.get("/", response_class=FileResponse)
 async def read_root():
-    # [수정] 파일 읽기 문제를 배제하기 위해 하드코딩된 HTML 반환
-    return """
-    <!DOCTYPE html>
-    <html lang="ko">
-    <head>
-        <meta charset="UTF-8">
-        <title>도봉구 영유아 복지톡</title>
-        <style>
-            body { font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #f0f2f5; }
-            .loader { border: 4px solid #f3f3f3; border-top: 4px solid #3498db; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; }
-            @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-        </style>
-        <script>
-            // 1초 뒤 실제 메인 페이지 리소스 로드 시도
-            setTimeout(() => {
-                // static 파일이 잘 서빙되는지 확인하기 위해 redirection
-                window.location.href = '/static/index.html'; 
-            }, 1000);
-        </script>
-    </head>
-    <body>
-        <div style="text-align:center">
-            <h1>챗봇 로딩 중...</h1>
-            <div class="loader" style="margin: 20px auto;"></div>
-            <p>잠시만 기다려주세요.</p>
-        </div>
-    </body>
-    </html>
-    """
+    return FileResponse("static/index.html")
 
 @app.get("/health")
 def health_check():

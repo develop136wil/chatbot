@@ -1627,9 +1627,6 @@ def check_semantic_cache(query_embedding: list) -> str | None:
     finally:
         loop.close()
 
-# [삭제됨] get_gemini_embedding 중복 정의 - 진짜 동기 버전은 파일 상단에 있음 (line ~270)
-
-# --- 9. 의미 기반 캐시 (Semantic Cache) 함수 ---
 
 async def check_semantic_cache_async(query_embedding: list) -> str | None:
     """
@@ -1687,8 +1684,6 @@ def save_semantic_cache(question: str, answer: str, embedding: list):
         print("💾 [Semantic Cache] 새로운 대화 기억 저장 완료")
     except Exception as e:
         print(f"⚠️ 캐시 저장 실패: {e}")
-
-# [utils.py] 맨 아래 search_supabase 함수 교체
 
 # 원래 동기 함수 복구 (Worker 호환성)
 def search_supabase(question: str, extracted_info: dict, keywords: list = []) -> list:
@@ -1919,8 +1914,7 @@ def _get_multi_select(properties, prop_name: str) -> list:
 def _get_url(properties, prop_name: str) -> str:
      return properties.get(prop_name, {}).get("url", "")
 
-# [삭제됨] expand_search_query 중복 정의 - 진짜 버전은 line ~851에 있음 (Gemini 기반)
-# [삭제됨] rerank_search_results 중복 정의 - 진짜 버전은 line ~982에 있음 (AI 랭킹)
+
 
 
 def summarize_content_with_llm(content: str, language: str = "ko") -> str:
@@ -1957,4 +1951,4 @@ def summarize_content_with_llm(content: str, language: str = "ko") -> str:
         print(f"⚠️ 번역 실패: {e}")
         return content
 
-# [삭제됨] search_supabase 중복 정의 - 진짜 동기 버전은 파일 중간에 있음 (line ~1383)
+
