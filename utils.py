@@ -533,9 +533,9 @@ async def call_groq_backup(prompt):
         print(f"❌ [Groq] 백업 호출 실패: {e}")
         raise e
 
-def call_groq_sync_simple(prompt, system_message="You are a helpful assistant."):
+def call_groq_sync_fast(prompt, system_message="You are a helpful assistant."):
     """
-    [신규] 간단한 작업을 위한 Groq 동기 호출 함수 (검색어 확장 등)
+    [신규] 간단한 작업을 위한 Groq 동기 호출 함수 (8B 모델 - 속도 중심)
     """
     if not GROQ_SYNC_CLIENT: return None
     
@@ -781,7 +781,7 @@ async def call_groq_async_simple(prompt: str, system_message: str = "You are a h
     return None
 
 # --- [신규] Groq Sync 호출 함수 (run_indexer.py 등 동기 환경용) ---
-def call_groq_sync_simple(prompt: str, system_message: str = "You are a helpful assistant.") -> Optional[str]:
+def call_groq_sync_robust(prompt: str, system_message: str = "You are a helpful assistant.") -> Optional[str]:
     """Helper for sync Groq calls"""
     if not GROQ_SYNC_CLIENT: return None
     try:
@@ -824,7 +824,7 @@ def translate_content_multilingual_sync(title: str, content: str) -> dict:
     # 1. Groq 시도
     if GROQ_SYNC_CLIENT:
         try:
-            resp = call_groq_sync_simple(prompt, "You are a JSON translator.")
+            resp = call_groq_sync_robust(prompt, "You are a JSON translator.")
             if resp:
                  # JSON 추출
                 json_start = resp.find('{')
@@ -957,7 +957,7 @@ async def extract_info_from_question_async(question: str, chat_history: list[dic
     except Exception as e: 
         return {"error": f"질문 분석 중 오류: {e}"}
 
-def summarize_content_with_llm(context: str, original_question: str, chat_history: list[dict] = []) -> str:
+def generate_answer_from_context(context: str, original_question: str, chat_history: list[dict] = []) -> str:
     if not context: return ""
     
     # [수정] 언어 감지 로직 (느슨한 검사로 변경)
@@ -1188,7 +1188,7 @@ def expand_search_query(question: str) -> list:
     # [1순위] Groq (Llama-3.3) 시도 - 속도 빠름
     if GROQ_SYNC_CLIENT:
         try:
-            groq_response = call_groq_sync_simple(expansion_prompt, "You are a professional translator for welfare services.")
+            groq_response = call_groq_sync_fast(expansion_prompt, "You are a professional translator for welfare services.")
             if groq_response:
                 # 마크다운 문자 제거 (**, *, : 등)
                 clean_response = re.sub(r'\*+|[:\[\]]', '', groq_response)
@@ -1917,7 +1917,7 @@ def _get_url(properties, prop_name: str) -> str:
 
 
 
-def summarize_content_with_llm(content: str, language: str = "ko") -> str:
+def translate_content_simple(content: str, language: str = "ko") -> str:
     """다국어 번역 함수 (worker.py에서 본문 번역에 사용)"""
     client = get_llm_client()
     if not client:

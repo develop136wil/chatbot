@@ -17,7 +17,7 @@ try:
         format_search_results, 
         get_llm_client,
         generate_content_safe,
-        summarize_content_with_llm,  # [추가] 다국어 번역에 필요
+        translate_content_simple,  # [추가] 다국어 번역에 필요
         redis_client,
         supabase,
         notion
@@ -262,7 +262,7 @@ def process_job(job_data: Dict[str, Any]) -> Tuple[str, List[str], int]:
                 else:
                     # Fallback: 실시간 번역
                     try:
-                        translated_summary = summarize_content_with_llm(
+                        translated_summary = translate_content_simple(
                             content=original_summary,  
                             language=target_lang_code
                         )

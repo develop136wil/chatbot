@@ -9,7 +9,7 @@ from notion_client import Client as NotionClient
 from dotenv import load_dotenv
 from utils import (
     get_llm_client, # [수정] Lazy Loader Import
-    summarize_content_with_llm, 
+    translate_content_simple, 
     _get_title, 
     _get_number, 
     _get_rich_text,
@@ -237,10 +237,10 @@ def run_indexing():
 
                         # 1. 요약 (한국어) - [수정] utils Signature에 맞춤
                         try:
-                            pre_summary = summarize_content_with_llm(chunk_text, language="ko")
+                            pre_summary = translate_content_simple(chunk_text, language="ko")
                         except TypeError:
                             # 만약 utils가 수정되지 않았을 경우를 대비한 안전장치
-                            pre_summary = summarize_content_with_llm(chunk_text)
+                            pre_summary = translate_content_simple(chunk_text)
 
                         # [신규] 다국어 번역 (Phase 3)
                         transl_dict = translate_content_multilingual_sync(title, pre_summary)
