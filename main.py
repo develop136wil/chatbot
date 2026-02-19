@@ -184,6 +184,10 @@ async def check_rate_limit(request: Request, limit: int = RATE_LIMIT_MAX_REQUEST
 async def read_root():
     return FileResponse("static/index.html")
 
+@app.get("/robots.txt", response_class=FileResponse)
+async def read_robots():
+    return FileResponse("static/robots.txt")
+
 @app.get("/health")
 def health_check():
     return {"status": "ok", "env": "vercel"}
