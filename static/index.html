@@ -1,21 +1,23 @@
 <!DOCTYPE html>
 <html lang="ko">
+
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content">
+    <meta name="viewport"
+        content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content">
     <title>영유아 복지정보자료집</title>
     <link rel="icon" href="/static/header-icon.png">
 
     <link rel="preload" href="/static/ONE Mobile POP.ttf" as="font" type="font/ttf" crossorigin>
     <link rel="preload" href="/static/SF-Pro.ttf" as="font" type="font/ttf" crossorigin>
-  
-    <link rel="stylesheet" href="/static/style.css?v=2026.01.29">
-    
+
+    <link rel="stylesheet" href="/static/style.css?v=2026.02.19">
+
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="/static/script.js?v=2026.01.29" defer>></script>
 
     <script>
-        window.currentLang = 'ko'; 
+            window.currentLang = 'ko'; 
     </script>
 
     <meta property="og:type" content="website">
@@ -23,7 +25,7 @@
     <meta property="og:title" content="도봉구 영유아 복지톡 👶">
     <meta property="og:description" content="우리 아이에게 딱 맞는 도봉구 복지 혜택, 챗봇에게 물어보세요!">
     <meta property="og:image" content="https://chatbot-tau-bay.vercel.app/static/og-image.png">
-    
+
     <link rel="manifest" href="/static/manifest.json">
     <meta name="theme-color" content="#FFFFFF">
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -35,21 +37,21 @@
         .lang-floating-container {
             position: absolute;
             /* [수정] 70px -> 95px로 변경 (제목과 겹치지 않게 더 아래로) */
-            top: 95px;  
+            top: 95px;
             right: 12px;
             z-index: 100;
             display: flex;
-            flex-direction: column; 
-            gap: 8px; 
+            flex-direction: column;
+            gap: 8px;
         }
-        
+
         .lang-btn {
             width: 36px;
             height: 36px;
             border-radius: 50%;
             background-color: white;
             border: 1px solid #eee;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.08);
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.08);
             font-size: 20px;
             display: flex;
             align-items: center;
@@ -58,11 +60,11 @@
             transition: all 0.2s ease;
             padding: 0;
         }
-        
+
         .lang-btn:active {
             transform: scale(0.9);
         }
-        
+
         .lang-btn.inactive {
             opacity: 0.6;
             filter: grayscale(100%);
@@ -70,6 +72,7 @@
         }
     </style>
 </head>
+
 <body>
     <div id="splash-screen">
         <div class="splash-content">
@@ -82,7 +85,7 @@
         <img src="/static/bot-icon.png" alt="">
         <img src="/static/toggle-icon.png" alt="">
     </div>
-  
+
     <div class="chat-container" style="position: relative;">
         <div class="chat-header">
             <h2>
@@ -92,10 +95,18 @@
         </div>
 
         <div class="lang-floating-container">
-            <button onclick="changeLanguage('ko')" id="btn-ko" class="lang-btn">🇰🇷</button>
-            <button onclick="changeLanguage('en')" id="btn-en" class="lang-btn inactive">🇺🇸</button>
-            <button onclick="changeLanguage('vi')" id="btn-vi" class="lang-btn inactive">🇻🇳</button>
-            <button onclick="changeLanguage('zh')" id="btn-zh" class="lang-btn inactive">🇨🇳</button>
+            <button onclick="changeLanguage('ko')" id="btn-ko" class="lang-btn"><img
+                    src="https://flagcdn.com/w40/kr.png" alt="KR"
+                    style="width:22px;height:16px;border-radius:2px;"></button>
+            <button onclick="changeLanguage('en')" id="btn-en" class="lang-btn inactive"><img
+                    src="https://flagcdn.com/w40/us.png" alt="US"
+                    style="width:22px;height:16px;border-radius:2px;"></button>
+            <button onclick="changeLanguage('vi')" id="btn-vi" class="lang-btn inactive"><img
+                    src="https://flagcdn.com/w40/vn.png" alt="VN"
+                    style="width:22px;height:16px;border-radius:2px;"></button>
+            <button onclick="changeLanguage('zh')" id="btn-zh" class="lang-btn inactive"><img
+                    src="https://flagcdn.com/w40/cn.png" alt="CN"
+                    style="width:22px;height:16px;border-radius:2px;"></button>
         </div>
 
         <div class="chat-box" id="chat-box">
@@ -103,23 +114,24 @@
                 <img src="/static/bot-icon.png" class="bot-profile-icon" alt="bot">
                 <div class="message assistant">
                     <p id="welcome-msg">안녕하세요! 궁금한 복지 서비스를 질문해주세요.<br><br>
-                    ※ 나이(개월 수), 특성(예: 장애, 다문화, 한부모) 등을 포함하여 질문해주시면 더 정확한 정보를 찾을 수 있습니다.</p>
-                    
+                        ※ 나이(개월 수), 특성(예: 장애, 다문화, 한부모) 등을 포함하여 질문해주시면 더 정확한 정보를 찾을 수 있습니다.</p>
+
                     <div style="text-align: right; margin-top: 8px;">
                         <span id="time-notice" style="font-size: 11px; color: #888888; display: inline-block;">
                             답변에는 약 15~30초 정도가 소요됩니다.
                         </span>
                     </div>
-                </div> </div>
+                </div>
+            </div>
         </div>
 
         <div class="suggestion-container" id="suggestion-container">
-            </div>
+        </div>
 
         <button id="suggestion-toggle-btn" aria-label="추천 질문 토글">
             <span class="toggle-text">접기</span> <span class="toggle-icon"></span>
         </button>
-  
+
         <button id="scroll-bottom-btn">가장 아래로 가기</button>
 
         <div class="chat-input-box">
@@ -127,8 +139,8 @@
             <button id="mic-btn" aria-label="음성 인식"></button>
             <button id="send-btn" aria-label="전송" style="display: none;"></button>
         </div>
-    </div> 
-    
+    </div>
+
     <div id="toast-container"></div>
 
     <script>
@@ -227,7 +239,7 @@
                     const btn = document.createElement('button');
                     btn.className = 'suggestion-chip';
                     btn.innerText = chip.label;
-                    btn.onclick = function() { 
+                    btn.onclick = function () {
                         if (typeof sendSuggestion === 'function') {
                             sendSuggestion(chip.text);
                         }
@@ -244,7 +256,7 @@
                         btn.classList.remove('inactive');
                         btn.style.opacity = '1';
                         btn.style.filter = 'none';
-                        btn.style.border = '2px solid #E5D1B8'; 
+                        btn.style.border = '2px solid #E5D1B8';
                         btn.style.boxShadow = '0 0 5px rgba(229, 209, 184, 0.5)';
                     } else {
                         btn.classList.add('inactive');
@@ -262,7 +274,7 @@
             const container = document.getElementById('suggestion-container');
             const toggleTextSpan = document.querySelector('#suggestion-toggle-btn .toggle-text');
             const data = translations[window.currentLang];
-            
+
             if (container && toggleTextSpan && data) {
                 // script.js가 hidden 클래스를 넣었는지 확인
                 if (container.classList.contains('hidden')) {
@@ -273,18 +285,19 @@
             }
         }
 
-        window.onload = function() {
+        window.onload = function () {
             changeLanguage('ko');
 
             // [핵심 트릭] script.js가 버튼을 눌러 텍스트를 한국어로 바꿔버린 직후,
             // 0.05초 뒤에 우리가 다시 번역된 언어로 덮어씌웁니다.
             const toggleBtn = document.getElementById('suggestion-toggle-btn');
             if (toggleBtn) {
-                toggleBtn.addEventListener('click', function() {
+                toggleBtn.addEventListener('click', function () {
                     setTimeout(updateToggleText, 50); // script.js 실행 후 작동
                 });
             }
         };
     </script>
 </body>
+
 </html>
