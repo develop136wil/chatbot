@@ -401,7 +401,7 @@ def get_gemini_embedding(text: str, task_type: str = "SEMANTIC_SIMILARITY") -> O
         result = client.models.embed_content( # client 변수 사용
             model='models/gemini-embedding-001', 
             contents=text,
-            config=types.EmbedContentConfig(task_type=task_type)
+            config=types.EmbedContentConfig(task_type=task_type, output_dimensionality=768)
         )
         
         # 결과 처리 (Embedding 객체에서 values 추출)
