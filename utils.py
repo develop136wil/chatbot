@@ -1873,6 +1873,7 @@ async def search_supabase_async(
     final_query_text = " ".join(keywords) if keywords else question
     filter_category = extracted_info.get("category")
     
+    results = []
     try:
         loop = asyncio.get_running_loop()
         response = await loop.run_in_executor(
@@ -1889,10 +1890,36 @@ async def search_supabase_async(
                 }
             ).execute()
         )
-        return response.data
+        results = response.data
     except Exception as e:
-        logger.error(f"❌ Async Search Error: {e}")
-        return []
+        logger.error(f"❌ Async Search Error (1st try): {e}")
+
+    # --- 2차 시도 (결과 부족 시 전체 검색 - Fallback) ---
+    # 카테고리가 지정되어 있었고, 결과가 3개 미만이면 전체 검색 시도
+    if filter_category and len(results) < 3:
+        try:
+            logger.info("⚠️ [Async Search] 1차 결과 부족 → 카테고리 해제 후 재검색")
+            loop = asyncio.get_running_loop()
+            response = await loop.run_in_executor(
+                None, 
+                lambda: supabase.rpc(
+                    "hybrid_search_v3",
+                    {
+                        "query_text": final_query_text,
+                        "query_embedding": query_embedding,
+                        "match_threshold": 0.40,  # 문턱값 유지
+                        "match_count": 20,       # 개수 조금 늘림
+                        "filter_category": None, # 필터 해제!
+                        "keywords_arr": keywords
+                    }
+                ).execute()
+            )
+            return response.data
+        except Exception as e:
+             logger.error(f"❌ Async Search Error (Fallback): {e}")
+             return results # 1차 결과라도 반환
+
+    return results
 
 async def get_gemini_embedding_async(text: str) -> Optional[List[float]]:
     """[Async] Gemini 임베딩 생성"""
