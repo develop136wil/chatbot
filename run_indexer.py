@@ -172,17 +172,25 @@ def run_indexing():
                 if next_cursor: query_params["start_cursor"] = next_cursor
                 
                 try:
-                    # [Debug] notion.databases 속성 확인
-                    if hasattr(notion.databases, 'query'):
-                        pass
-                    else:
-                        logger.error(f"❌ [Debug] notion.databases has no 'query'. Dir: {dir(notion.databases)}")
+                    # [Fix] notion-client SDK 호환성 문제 -> 직접 HTTP 요청으로 대체
+                    headers = {
+                        "Authorization": f"Bearer {NOTION_KEY}",
+                        "Notion-Version": "2022-06-28", # Stable Version
+                        "Content-Type": "application/json"
+                    }
+                    url = f"https://api.notion.com/v1/databases/{db_id}/query"
+                    payload = {}
+                    if next_cursor: payload["start_cursor"] = next_cursor
                     
-                    response = notion.databases.query(**query_params)
+                    import requests
+                    resp = requests.post(url, headers=headers, json=payload)
+                    resp.raise_for_status()
+                    response = resp.json()
+                    
                     results.extend(response.get("results", []))
                     has_more = response.get("has_more")
                     next_cursor = response.get("next_cursor")
-                    time.sleep(0.3) # API 속도 제한 준수
+                    time.sleep(0.3) 
                 except Exception as e:
                     logger.error(f"❌ Notion API 호출 실패: {e}")
                     has_more = False
