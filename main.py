@@ -373,17 +373,16 @@ async def chat_with_bot(chat_request: ChatRequest, request: Request):
         "ai_category": ai_category
     }
 
-    # [핵심 수정] Redis가 죽었으면 -> 동기 모드(직접 실행)
+    # [핵심 수정] Redis가 죽었으면 -> Async 직접 실행 (Vercel 최적화)
     if is_redis_down:
-        logger.warning(f"⚠️ [Fallback] Redis 연결 불가. Worker를 우회하여 직접 처리합니다.")
+        logger.info(f"⚡️ [Direct Async] Worker 직접 실행 (Redis Bypass)")
         try:
-            from worker import process_job 
+            from worker import process_job_async
             
-            # 비동기 실행 (ThreadPoolExecutor에 위임하여 블로킹 방지)
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(None, process_job, job_data)
-            
+            # Async 함수 직접 호출 (이제 process_job_async는 진짜 async임)
             # result는 (final_answer, all_page_ids, total_found) 튜플
+            result = await process_job_async(job_data)
+            
             if isinstance(result, tuple) and len(result) == 3:
                 final_answer, page_ids, total_found = result
                 return {
@@ -394,11 +393,13 @@ async def chat_with_bot(chat_request: ChatRequest, request: Request):
                 }
             else:
                 # 예기치 않은 결과 형식
-                logger.error(f"❌ Fallback 결과 형식 오류: {type(result)} - {result}")
+                logger.error(f"❌ Async Worker 결과 형식 오류: {type(result)} - {result}")
                 return {"error": "처리 결과 형식 오류가 발생했습니다."}
             
         except Exception as e:
-            logger.error(f"❌ Fallback 처리 실패: {e}")
+            logger.error(f"❌ Async Worker 처리 실패: {e}")
+            import traceback
+            traceback.print_exc()
             return {"error": "일시적인 서비스 장애입니다."}
 
     # Redis가 살아있으면 -> 큐에 넣기 (Async)

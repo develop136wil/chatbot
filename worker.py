@@ -4,38 +4,36 @@ import time
 import traceback
 import gc
 import logging
+import asyncio
 from typing import List, Dict, Any, Tuple, Optional
 from supabase import create_client
 from dotenv import load_dotenv
 
+# [신규] PyRedis AsyncIO
+import redis.asyncio as redis
+
 # 기본 utils 임포트
 try:
     from utils import (
-        search_supabase,       
-        expand_search_query,   
-        rerank_search_results, 
+        search_supabase_async,       # [Async]
+        expand_search_query_async,   # [Async] 
+        rerank_search_results_async, # [Async]
         format_search_results, 
         get_llm_client,
         generate_content_safe,
-        translate_content_simple,  # [추가] 다국어 번역에 필요
-        redis_client,
+        translate_content_simple_async, # [Async]
         supabase,
         notion
     )
-    print("✅ utils 임포트 성공")
+    print("✅ utils (Async) 임포트 성공")
 except ImportError as e:
     print(f"❌ utils 임포트 실패: {e}")
-    # Vercel에서는 sys.exit() 대신 에러를 기록하고 계속 진행
+    # Vercel 환경 대비 Fallback
     logger.error(f"Utils import failed: {e}")
-    search_supabase = None
-    expand_search_query = None
-    rerank_search_results = None
-    format_search_results = None
-    get_llm_client = None
-    generate_content_safe = None
-    redis_client = None
-    supabase = None
-    notion = None
+    search_supabase_async = None
+    expand_search_query_async = None
+    rerank_search_results_async = None
+    translate_content_simple_async = None
 
 # 로깅 설정
 logging.basicConfig(
@@ -53,14 +51,11 @@ JOB_QUEUE_KEY = "chatbot:job_queue"
 JOB_RESULTS_KEY = "chatbot:job_results"
 NOTION_LOG_DB_ID = "2bf8ade502108000b6d6f4ad4d4d52b2"
 
-logger.info("[Worker] 클라이언트 초기화 중...")
-try:
-    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-except Exception as e:
-    logger.error(f"[Worker] Supabase 초기화 실패: {e}")
-    supabase = None
+# Redis 연결 설정
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost").strip()
+REDIS_PORT = 6379 
 
-logger.info("[Worker] 초기화 완료. 작업 대기 시작.")
+logger.info("[Worker] 클라이언트 초기화 중...")
 
 # [기존 유지] 고정 멘트 다국어 사전
 UI_TRANSLATIONS = {
@@ -95,96 +90,83 @@ UI_TRANSLATIONS = {
     }
 }
 
-# [★수정] 제목 일괄 번역 함수 (Batch Processing)
-def translate_titles_batch(titles: List[str], target_lang_code: str) -> List[str]:
-    """
-    여러 개의 제목을 한 번에 번역하여 API 호출 횟수를 1/N로 줄입니다.
-    """
+# [★신규] 제목 일괄 번역 함수 (Async Version)
+async def translate_titles_batch_async(titles: List[str], target_lang_code: str) -> List[str]:
+    """ [Async] 제목 일괄 번역 """
     client = get_llm_client()
     if not titles or not client: return titles
     
     lang_map = {"en": "English", "vi": "Vietnamese", "zh": "Chinese (Simplified)"}
     target_lang = lang_map.get(target_lang_code, "Korean")
     
-    # JSON 포맷을 강제하여 파싱하기 쉽게 만듦
     prompt = f"""
     Translate the following list of welfare service titles into {target_lang}.
-    
     [Input Titles]
     {json.dumps(titles, ensure_ascii=False)}
-    
     [Rules]
     1. Return ONLY a valid JSON list of strings.
     2. Maintain the exact same order.
-    3. No explanations, no markdown code blocks. Just the raw JSON list.
-    
-    [Output Example]
-    ["Translated Title 1", "Translated Title 2"]
+    3. No explanations.
     """
     
     try:
-        # 타임아웃 40초 (내용이 좀 더 많으므로)
-        response = generate_content_safe(client, prompt, timeout=40)
+        from google.genai import types
+        response = await client.aio.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=prompt,
+            config=types.GenerateContentConfig(temperature=0.0)
+        )
         
-        # [수정] 응답 객체 처리 방식 통일
-        if hasattr(response, 'text'):
-            response_text = response.text.strip()
-        else:
-            response_text = str(response).strip()
+        response_text = response.text.strip() if hasattr(response, 'text') else str(response).strip()
         
-        # Markdown code block 제거 (`json ... `)
+        # Markdown 제거
         if response_text.startswith("```"):
             response_text = response_text.split("\n", 1)[1]
             if response_text.endswith("```"):
                 response_text = response_text.rsplit("\n", 1)[0]
         
         translated_list = json.loads(response_text)
-        
         if isinstance(translated_list, list) and len(translated_list) == len(titles):
             return translated_list
-        else:
-            logger.warning("⚠️ [Batch Translation] 개수 불일치 또는 포맷 오류. 원본 제목을 사용합니다.")
-            return titles
-            
+        return titles
     except Exception as e:
-        logger.warning(f"⚠️ 제목 일괄 번역 실패: {e}")
+        logger.warning(f"⚠️ [Async] 제목 일괄 번역 실패: {e}")
         return titles
 
-# --- 메인 처리 함수 ---
-def process_job(job_data: Dict[str, Any]) -> Tuple[str, List[str], int]:
+# --- 메인 처리 함수 (Async) ---
+async def process_job_async(job_data: Dict[str, Any]) -> Tuple[str, List[str], int]:
     start_time = time.time()
     question = job_data.get("question", "")
     ai_category = job_data.get("ai_category")
-
-    logger.info(f"▶️ 작업 시작: {question}")
+    
+    logger.info(f"▶️ [Async] 작업 시작: {question}")
 
     try:
-        # [Step 1] 키워드 추출
+        # [Step 1] 키워드 추출 (Async)
         try:
-            target_keywords = expand_search_query(question)
+            target_keywords = await expand_search_query_async(question)
         except Exception as e:
             logger.error(f"❌ 키워드 확장 실패: {e}")
             target_keywords = []
 
-        # 원본 질문의 단어도 키워드에 추가 (보완책)
+        # 원본 보완
         for word in question.split():
             if len(word) > 1 and word not in target_keywords:
                 target_keywords.append(word)
         logger.info(f"🗝️ [검색 키워드] {target_keywords}")
 
-        # [Step 2] 검색
+        # [Step 2] 검색 (Async)
         extracted_info_mock = {"category": ai_category}
         try:
-            raw_results = search_supabase(question, extracted_info_mock, keywords=target_keywords)
+            raw_results = await search_supabase_async(question, extracted_info_mock, keywords=target_keywords)
         except Exception as e:
-            logger.error(f"❌ Supabase 검색 실패: {type(e).__name__}: {e}")
-            traceback.print_exc()  # 전체 스택 트레이스 출력
-            return f"시스템 오류가 발생했습니다. 잠시 후 다시 시도해주세요. 😥", [], 0
+            logger.error(f"❌ Supabase 검색 실패: {e}")
+            return f"시스템 오류가 발생했습니다. 😥", [], 0
 
         if not raw_results: 
             return "관련 정보를 찾지 못했습니다. 😥", [], 0
 
-        # [Step 3] 중복 제거
+        # [Step 3] 중복 제거 (CPU Bound - Fast enough)
         seen_ids = set()
         unique_results = []
         for doc in raw_results:
@@ -195,12 +177,11 @@ def process_job(job_data: Dict[str, Any]) -> Tuple[str, List[str], int]:
                 unique_results.append(doc)
         candidates = unique_results
 
-        # [Step 4] AI 랭킹
+        # [Step 4] AI 랭킹 (Async)
         logger.info(f"🤖 Gemini에게 {len(candidates)}개 문서의 랭킹을 요청합니다.")
         try:
-            reranked_results = rerank_search_results(question, candidates)
+            reranked_results = await rerank_search_results_async(question, candidates)
             if not reranked_results:
-                logger.warning("⚠️ AI 랭킹 결과 없음 -> 검색 엔진(SQL) 순서 사용")
                 reranked_results = candidates
         except Exception as e:
             logger.error(f"❌ AI 랭킹 중 오류: {e}")
@@ -210,7 +191,7 @@ def process_job(job_data: Dict[str, Any]) -> Tuple[str, List[str], int]:
         display_count = min(len(reranked_results), 2)
         display_results = reranked_results[:display_count]
         
-        # 언어 감지 로직
+        # 언어 감지
         target_lang_code = "ko" 
         if "strictly in English" in question: target_lang_code = "en"
         elif "strictly in Vietnamese" in question: target_lang_code = "vi"
@@ -219,61 +200,87 @@ def process_job(job_data: Dict[str, Any]) -> Tuple[str, List[str], int]:
         ui_text = UI_TRANSLATIONS.get(target_lang_code, UI_TRANSLATIONS["ko"])
 
         # ==================================================================
-        # [다국어 번역 적용] 본문 + 카테고리 + ★제목(Batch)★
+        # [Async] 다국어 번역 (Parallel Execution)
         # ==================================================================
         if target_lang_code != "ko":
-            logger.info(f"🌍 [Worker] 언어 감지: {target_lang_code} -> 내용/제목/UI 번역 시작")
+            logger.info(f"🌍 [Worker] 언어 감지: {target_lang_code} -> 병렬 번역 시작")
             
-            # 1. 제목 번역 (Pre-translated 확인 -> 없으면 Batch)
+            # 1. 제목 번역 준비
             docs_needing_title = []
             for i, doc in enumerate(display_results):
                 meta = doc.get("metadata", {})
-                # DB에 저장된 번역이 있는지 확인
                 pre_title = meta.get(f"title_{target_lang_code}")
                 if pre_title:
                     doc["metadata"]["title"] = pre_title
                 else:
                     docs_needing_title.append((i, meta.get("title", "")))
 
-            # 필요한 것만 Batch 번역
+            # 2. 본문/카테고리 번역 준비 (Coroutine List)
+            summary_tasks = []
+            for i, doc in enumerate(display_results):
+                meta = doc.get("metadata", {})
+                
+                # 카테고리 번역 (즉시 처리)
+                original_category = meta.get("category", "기타")
+                doc["metadata"]["category"] = ui_text["cats"].get(original_category, original_category)
+                
+                # 본문 번역
+                pre_summary_val = meta.get(f"pre_summary_{target_lang_code}")
+                if pre_summary_val:
+                    doc["metadata"]["pre_summary"] = pre_summary_val
+                    summary_tasks.append(None) # Task Placeholder (이미 완료)
+                else:
+                    # Async Task 생성
+                    original_summary = meta.get("pre_summary", "")
+                    summary_tasks.append(
+                        translate_content_simple_async(original_summary, target_lang_code)
+                    )
+
+            # 3. 비동기 병렬 실행 (제목 Batch + 본문 개별)
+            tasks_to_await = []
+            
+            # (A) 제목 Batch
             if docs_needing_title:
                 titles_to_translate = [t[1] for t in docs_needing_title]
-                translated_titles = translate_titles_batch(titles_to_translate, target_lang_code)
+                tasks_to_await.append(translate_titles_batch_async(titles_to_translate, target_lang_code))
+            else:
+                tasks_to_await.append(None) # Placeholder
+
+            # (B) 본문 Tasks (None 제외)
+            real_summary_tasks = [t for t in summary_tasks if t is not None]
+            if real_summary_tasks:
+                tasks_to_await.append(asyncio.gather(*real_summary_tasks))
+            else:
+                tasks_to_await.append(None) 
+            
+            # ★ Await All ★
+            results_gathered = await asyncio.gather(*[t for t in tasks_to_await if t is not None])
+            
+            # 결과 적용
+            result_idx = 0
+            
+            # (A) 제목 적용
+            if docs_needing_title:
+                translated_titles = results_gathered[result_idx]
+                result_idx += 1
                 for (idx, _), new_title in zip(docs_needing_title, translated_titles):
                     display_results[idx]["metadata"]["title"] = new_title
             
-            # 2. 본문 및 카테고리 번역
-            for i, doc in enumerate(display_results):
-                meta = doc.get("metadata", {})
-                original_summary = meta.get("pre_summary", "")
-                original_category = meta.get("category", "기타")
-                
-                # 카테고리 이름 번역 (사전 매핑)
-                translated_cat = ui_text["cats"].get(original_category, original_category)
-                doc["metadata"]["category"] = translated_cat
+            # (B) 본문 적용
+            if real_summary_tasks:
+                translated_summaries = results_gathered[result_idx]
+                # 원래 인덱스와 매칭
+                summary_result_ptr = 0
+                for i, task in enumerate(summary_tasks):
+                    if task is not None:
+                        display_results[i]["metadata"]["pre_summary"] = translated_summaries[summary_result_ptr]
+                        summary_result_ptr += 1
 
-                # 본문 번역 (Pre-translated 확인 -> 없으면 Realtime)
-                pre_summary_key = f"pre_summary_{target_lang_code}"
-                pre_summary_val = meta.get(pre_summary_key)
-
-                if pre_summary_val:
-                    doc["metadata"]["pre_summary"] = pre_summary_val
-                    # logger.debug(f"   ⚡️ [Pre-translated] Summary Used")
-                else:
-                    # Fallback: 실시간 번역
-                    try:
-                        translated_summary = translate_content_simple(
-                            content=original_summary,  
-                            language=target_lang_code
-                        )
-                        doc["metadata"]["pre_summary"] = translated_summary
-                    except Exception as e:
-                        logger.warning(f"   ⚠️ 본문 실시간 번역 실패: {e}")
         # ==================================================================
-
-        all_page_ids = [r.get("metadata", {}).get("page_id") for r in reranked_results]
         
+        all_page_ids = [r.get("metadata", {}).get("page_id") for r in reranked_results]
         final_display_metadata = [res.get("metadata", {}) for res in display_results]
+        
         try:
             body = format_search_results(final_display_metadata)
         except Exception as e:
@@ -287,22 +294,12 @@ def process_job(job_data: Dict[str, Any]) -> Tuple[str, List[str], int]:
             final_answer += f"<hr>{ui_text['footer_more']}"
 
         elapsed = time.time() - start_time
-        logger.info(f"✅ 답변 조립 완료 (소요시간: {elapsed:.2f}초)")
+        logger.info(f"✅ [Async] 답변 조립 완료 (소요시간: {elapsed:.2f}초)")
         
-        # 로그 저장 (비동기적으로 실패해도 메인 로직 영향 없도록 함)
+        # 로그 저장 (Notion은 Sync이므로 run_in_executor 사용 권장하나, 여기선 생략하고 Fire & Forget 흉내)
+        # 실제로는 별도 Task로 띄울 수 있음
         if notion and NOTION_LOG_DB_ID:
-            try:
-                final_category = ai_category if ai_category else "미분류"
-                notion.pages.create(
-                    parent={"database_id": NOTION_LOG_DB_ID},
-                    properties={
-                        "질문": {"title": [{"text": {"content": question}}]},
-                        "카테고리": {"select": {"name": final_category}},
-                        "키워드": {"multi_select": [{"name": k} for k in target_keywords[:5]]}
-                    }
-                )
-            except Exception as e:
-                logger.warning(f"⚠️ Notion 로그 저장 실패: {e}")
+            asyncio.create_task(save_notion_log_async(question, ai_category, target_keywords))
                 
         return final_answer, all_page_ids, len(all_page_ids)
 
@@ -311,49 +308,80 @@ def process_job(job_data: Dict[str, Any]) -> Tuple[str, List[str], int]:
         traceback.print_exc()
         return "죄송합니다. 오류가 발생하여 답변을 드릴 수 없습니다. 😥", [], 0
 
-# --- 메인 루프 ---
-def start_worker():
-    logger.info(f"🚀 Worker 가동! (PID: {os.getpid()})")
+# Notion 로그 저장을 위한 Async Wrapper
+async def save_notion_log_async(question, category, keywords):
+    try:
+        loop = asyncio.get_running_loop()
+        final_category = category if category else "미분류"
+        await loop.run_in_executor(
+            None,
+            lambda: notion.pages.create(
+                parent={"database_id": NOTION_LOG_DB_ID},
+                properties={
+                    "질문": {"title": [{"text": {"content": question}}]},
+                    "카테고리": {"select": {"name": final_category}},
+                    "키워드": {"multi_select": [{"name": k} for k in keywords[:5]]}
+                }
+            )
+        )
+    except Exception as e:
+        logger.warning(f"⚠️ Notion 로그 저장 실패: {e}")
+
+# 작업 핸들러 (Redis 응답용)
+async def handle_job(redis_client, queue_item):
+    try:
+        _, job_json = queue_item
+        job_data = json.loads(job_json.decode('utf-8'))
+        job_id = job_data.get("job_id")
+        
+        # Async Job Execution
+        answer_text, all_ids, total_found = await process_job_async(job_data)
+        
+        final_result = {
+            "status": "complete",
+            "answer": answer_text,
+            "last_result_ids": all_ids, 
+            "total_found": total_found 
+        }
+        
+        # 결과 저장
+        await redis_client.hset(JOB_RESULTS_KEY, job_id, json.dumps(final_result).encode('utf-8'))
+        # await redis_client.expire(f"job:{job_id}", 3600) # Optional
+        
+        logger.info(f"💾 완료: {job_data.get('question')}")
+        
+    except Exception as e:
+        logger.error(f"Handler Error: {e}")
+
+# --- 메인 루프 (Async) ---
+async def start_worker_async():
+    logger.info(f"🚀 Worker (Async) 가동! (PID: {os.getpid()})")
     
-    # Redis 연결 재시도 로직
+    # Redis Async Connection
+    r = redis.from_url(f"redis://{REDIS_HOST}:{REDIS_PORT}", decode_responses=False)
+    
+    # Connection Check
     while True:
         try:
-            if redis_client.ping():
-                break
+            await r.ping()
+            logger.info("✅ Redis 연결 성공")
+            break
         except Exception:
             logger.warning("⏳ Redis 연결 대기 중...")
-            time.sleep(2)
+            await asyncio.sleep(2)
             
     while True:
         try:
-            # 타임아웃 1초로 설정하여 주기적으로 루프 탈출 (종료 시그널 처리 등 가능)
-            result = redis_client.blpop(JOB_QUEUE_KEY, timeout=1)
+            # Async BLPOP
+            result = await r.blpop(JOB_QUEUE_KEY, timeout=1)
             if result:
-                _, job_json = result
-                job_data = json.loads(job_json.decode('utf-8'))
+                # Fire and Forget (Concurrency!)
+                # 각 작업은 독립된 Task로 실행되어, 다음 BLPOP을 즉시 수행함
+                asyncio.create_task(handle_job(r, result))
                 
-                answer_text, all_ids, total_found = process_job(job_data)
-
-                final_result = {
-                    "status": "complete",
-                    "answer": answer_text,
-                    "last_result_ids": all_ids, 
-                    "total_found": total_found 
-                }
-                
-                # 결과 저장 시 만료 시간(TTL) 설정 권장 (예: 1시간)
-                job_id = job_data.get("job_id")
-                redis_client.hset(JOB_RESULTS_KEY, job_id, json.dumps(final_result).encode('utf-8'))
-                # redis_client.expire(f"job:{job_id}", 3600) # (선택사항)
-                
-                logger.info(f"💾 완료: {job_data.get('question')}")
-
-                del job_data, answer_text, final_result
-                gc.collect()
-
         except Exception as e:
             logger.error(f"🔥 Worker Loop Error: {e}")
-            time.sleep(1)
+            await asyncio.sleep(1)
 
 if __name__ == "__main__":
-    start_worker()
+    asyncio.run(start_worker_async())

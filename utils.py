@@ -58,6 +58,12 @@ except ImportError:
     AsyncGroq = None
     Groq = None
     print("⚠️ Groq library not found. pip install groq")
+    
+# [Async] 클라이언트 초기화 Helper
+def get_async_groq_client():
+    if AsyncGroq and GROQ_API_KEY:
+        return AsyncGroq(api_key=GROQ_API_KEY)
+    return None
 
 # --- 1. 설정 로드 ---
 load_dotenv()
@@ -1347,14 +1353,8 @@ def format_search_results(pages_metadata: list) -> str:
         copy_text = f"[{category}] {title}\n\n{summary_raw}\n\n🔗 자세히 보기: {url}"
         safe_copy_text = copy_text.replace('"', '&quot;').replace("'", "&apos;")
 
-        html_rows = []
-        last_li_index = -1
-        
-        # [핵심] 현재 들여쓰기 레벨 상태 변수 (기본 20px)
-        # 번호 항목(①...)을 만나면 35px로 늘어납니다.
-        current_margin_left = "20px" 
-        
         for line in summary_raw.split('\n'):
+
             line = line.strip()
             if not line: continue
             
@@ -1808,6 +1808,228 @@ def translate_content_simple(content: str, language: str = "ko") -> str:
         return response.text.strip() if hasattr(response, 'text') else str(response)
     except Exception as e:
         print(f"⚠️ 번역 실패: {e}")
+
+async def translate_content_simple_async(content: str, language: str = "ko") -> str:
+    """[Async] 다국어 번역 함수"""
+    client = get_llm_client()
+    if not client: return content
+    
+    LANG_NAMES = {
+        "ko": "한국어", "en": "English",
+        "zh": "中文(简体)", "vi": "Tiếng Việt"
+    }
+    lang_name = LANG_NAMES.get(language, language)
+    
+    if language == "ko": return content
+    
+    try:
+        prompt = f"""다음 복지 서비스 설명을 {lang_name}로 번역해주세요. 
+설명만 출력하고, 다른 말은 하지 마세요.
+
+원문:
+{content}
+
+{lang_name} 번역:"""
+        
+        # Async Generate
+        response = await client.aio.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=prompt,
+            config=types.GenerateContentConfig(temperature=0.0)
+        )
+        return response.text.strip() if hasattr(response, 'text') else str(response)
+    except Exception as e:
+        logger.warning(f"⚠️ Async Translate Error: {e}")
         return content
+
+# ============================================
+# [Phase 4] Async Functions
+# ============================================
+
+async def search_supabase_async(
+    question: str, 
+    extracted_info: dict, 
+    keywords: List[str] = None
+) -> List[Dict[str, Any]]:
+    """
+    [Async] Supabase 벡터 검색 (비동기)
+    """
+    if not supabase: return []
+    
+    # 1. 임베딩 생성 (비동기)
+    query_embedding = await get_gemini_embedding_async(question)
+    if not query_embedding:
+        return []
+
+    # 2. RPC 호출 (postgrest-py의 .execute()는 동기 함수지만, 
+    # run_in_executor로 래핑하여 비동기처럼 동작하게 함)
+    # Supabase Python 클라이언트는 아직 완전한 async 지원이 experimental 단계임.
+    # 따라서 CPU-bound가 아닌 I/O-bound 작업이므로 스레드풀에서 실행.
+    
+    match_threshold = 0.40 
+    match_count = 15
+    
+    filter_metadata = {}
+    if extracted_info.get("category"):
+        filter_metadata["category"] = extracted_info["category"]
+
+    try:
+        loop = asyncio.get_running_loop()
+        response = await loop.run_in_executor(
+            None, 
+            lambda: supabase.rpc(
+                "match_site_pages",
+                {
+                    "query_embedding": query_embedding,
+                    "match_threshold": match_threshold,
+                    "match_count": match_count,
+                    "filter": filter_metadata,
+                }
+            ).execute()
+        )
+        return response.data
+    except Exception as e:
+        logger.error(f"❌ Async Search Error: {e}")
+        return []
+
+async def get_gemini_embedding_async(text: str) -> Optional[List[float]]:
+    """[Async] Gemini 임베딩 생성"""
+    client = get_llm_client()
+    if not client: return None
+    
+    try:
+        # google-genai 라이브러리의 async 메서드 사용 (client.aio)
+        result = await client.aio.models.embed_content(
+            model='models/gemini-embedding-001',
+            contents=text,
+            config=types.EmbedContentConfig(
+                task_type="RETRIEVAL_QUERY", 
+                output_dimensionality=768
+            )
+        )
+        if hasattr(result, 'embeddings') and result.embeddings:
+            return list(result.embeddings[0].values)
+        if hasattr(result, 'embedding') and result.embedding:
+            return list(result.embedding.values)
+        return []
+    except Exception as e:
+        logger.error(f"⚠️ Async Embed Error: {e}")
+        return None
+
+async def rerank_search_results_async(question: str, results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """[Async] 검색 결과 재정렬"""
+    if not results: return []
+    
+    # 상위 5개만 리랭킹 (비용/속도 최적화)
+    candidates = results[:5] 
+    
+    # 프롬프트 구성
+    candidate_texts = []
+    for i, doc in enumerate(candidates):
+        meta = doc.get("metadata", {})
+        title = meta.get("title", "No Title")
+        summary = meta.get("pre_summary", "No Content")
+        candidate_texts.append(f"[{i}] 제목: {title}\n내용: {summary}\n")
+    
+    start_text = "\n".join(candidate_texts)
+    
+    prompt = f"""
+    질문: {question}
+    
+    다음 후보 문서들 중 질문과 가장 관련성 높은 순서대로 번호(인덱스)만 나열하세요.
+    
+    후보:
+    {start_text}
+    
+    형식: [0, 2, 1]
+    """
+    
+    client = get_llm_client()
+    if not client: return candidates
+
+    try:
+        response = await client.aio.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=prompt,
+            config=types.GenerateContentConfig(temperature=0.0)
+        )
+        
+        text = response.text.strip()
+        # JSON 파싱 (숫자 리스트 추출)
+        import re
+        match = re.search(r'\[.*?\]', text)
+        if match:
+            indices = json.loads(match.group(0))
+            reranked = [candidates[i] for i in indices if i < len(candidates)]
+            # 리랭킹에 포함 안 된 나머지는 뒤에 붙임
+            remaining = [c for i, c in enumerate(candidates) if i not in indices]
+            return reranked + remaining + results[5:]
+            
+        return results
+    except Exception as e:
+        logger.error(f"⚠️ Async Rerank Error: {e}")
+        return results
+
+async def expand_search_query_async(question: str) -> list:
+    """[Async] 검색어 확장 (Groq -> Gemini Fallback)"""
+    # 1. 전처리 (Sync 로직 재사용 - 간단 버전)
+    import re
+    clean_question = re.sub(r'\s*\(System[\s\S]*?\)', '', question, flags=re.IGNORECASE).strip()
+    clean_question = re.sub(r'[^\w\s]', '', clean_question) 
+    
+    expansion_prompt = f"""
+    당신은 한국어 DB 검색을 위한 '다국어 통역기'입니다.
+    사용자의 질문(영어/중국어/베트남어)을 분석하여, 반드시 **'한국어 핵심 키워드'**로 변환하세요.
+    
+    [사용자 질문]
+    "{clean_question}"
+    
+    [★★★ 필수 변환 규칙 (어기면 안됨) ★★★]
+    1. **무조건 한국어로 출력:** 질문이 외국어라도 검색 키워드는 **반드시 한국어**여야 합니다.
+    2. **출력 형식:** - 설명 없이 오직 한국어 단어만 쉼표(,)로 구분하여 나열하세요.
+    """
+    
+    ai_keywords = []
+    
+    # 1순위: Groq Async
+    groq_client = get_async_groq_client()
+    if groq_client:
+        try:
+            chat_completion = await groq_client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": "You are a professional translator for welfare services."},
+                    {"role": "user", "content": expansion_prompt}
+                ],
+                model="llama-3.3-70b-versatile",
+                temperature=0,
+                max_tokens=100,
+                timeout=5
+            )
+            response_text = chat_completion.choices[0].message.content
+            clean_response = re.sub(r'\*+|[:\[\]]', '', response_text)
+            ai_keywords = [k.strip() for k in re.split(r'[,|\n]', clean_response) if k.strip() and len(k.strip()) > 1]
+        except Exception as e:
+            logger.warning(f"⚠️ Async Groq Failed: {e}")
+            
+    # 2순위: Gemini Async
+    if not ai_keywords:
+        client = get_llm_client()
+        if client:
+            try:
+                response = await client.aio.models.generate_content(
+                    model='gemini-2.5-flash',
+                    contents=expansion_prompt,
+                    config=types.GenerateContentConfig(temperature=0.0)
+                )
+                clean_response = re.sub(r'\*+|[:\[\]]', '', response.text)
+                ai_keywords = [k.strip() for k in re.split(r'[,|\n]', clean_response) if k.strip() and len(k.strip()) > 1]
+            except Exception as e:
+                 logger.warning(f"⚠️ Async Gemini Failed: {e}")
+
+    # Fallback
+    if not ai_keywords:
+         ai_keywords = clean_question.split()
+
+    return list(set(ai_keywords))
 
 
