@@ -70,7 +70,6 @@ chatbot/
 ├── worker.py             # ⚙️ 백그라운드 워커 (검색, 랭킹, 답변 생성 핵심 로직)
 ├── utils.py              # 🔧 공통 유틸리티 (LLM 래퍼, DB 클라이언트, 임베딩, 키 관리)
 ├── run_indexer.py        # 🔄 데이터 인덱서 (Notion -> Supabase 동기화)
-├── sync_notion.py        # 📋 (구버전) Notion 동기화 스크립트
 ├── requirements.txt      # 📦 Python 의존성 목록
 ├── vercel.json           # ☁️ Vercel 배포 설정
 ├── static/               # 🎨 프론트엔드 정적 파일 (HTML/CSS/JS)
