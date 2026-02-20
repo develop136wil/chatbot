@@ -73,9 +73,9 @@ DATABASE_IDS = {
     "생활 지원": "2738ade5021080579e5be527ff1e80b2"
 }
 NOTION_PROPERTY_NAMES = {
-    "title": "사업명", "support_detail": "지원 내용", "extra_req": "추가 자격요건",
-    "contact": "문의처", "start_age": "시작 연령(개월)", "end_age": "종료 연령(개월)",
-    "sub_category": "소분류(대상 특성)",
+    "title": "사업명", "support_detail": "상세 지원 내용", "extra_req": "추가 자격요건",
+    "contact": "문의처", "start_age": "시작 월령(개월)", "end_age": "종료 월령(개월)",
+    "sub_category": "대상 특성",
     "cost_info": "비용 부담", "notes": "주의사항"
 }
 
