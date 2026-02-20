@@ -1866,24 +1866,26 @@ async def search_supabase_async(
     # Supabase Python 클라이언트는 아직 완전한 async 지원이 experimental 단계임.
     # 따라서 CPU-bound가 아닌 I/O-bound 작업이므로 스레드풀에서 실행.
     
-    match_threshold = 0.40 
-    match_count = 15
+    # [Fix] hybrid_search_v3 사용 (기존 search_supabase와 동일한 로직적용)
+    if not keywords:
+        keywords = []
     
-    filter_metadata = {}
-    if extracted_info.get("category"):
-        filter_metadata["category"] = extracted_info["category"]
-
+    final_query_text = " ".join(keywords) if keywords else question
+    filter_category = extracted_info.get("category")
+    
     try:
         loop = asyncio.get_running_loop()
         response = await loop.run_in_executor(
             None, 
             lambda: supabase.rpc(
-                "match_site_pages",
+                "hybrid_search_v3",
                 {
+                    "query_text": final_query_text,
                     "query_embedding": query_embedding,
-                    "match_threshold": match_threshold,
-                    "match_count": match_count,
-                    "filter": filter_metadata,
+                    "match_threshold": 0.40,
+                    "match_count": 15,
+                    "filter_category": filter_category,
+                    "keywords_arr": keywords
                 }
             ).execute()
         )
