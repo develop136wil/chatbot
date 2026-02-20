@@ -76,23 +76,33 @@ NOTION_PROPERTY_NAMES = {
     "cost_info": "비용 부담", "notes": "주의사항"
 }
 
-STATE_FILE_PATH = "./chroma-data/indexing_state.json"
-
-def load_state() -> Dict[str, str]:
-    if os.path.exists(STATE_FILE_PATH):
-        try:
-            with open(STATE_FILE_PATH, "r", encoding="utf-8") as f: return json.load(f)
-        except Exception as e:
-            logger.warning(f"⚠️ 상태 파일 로드 실패: {e}")
-    return {}
-
-def save_state(state: Dict[str, str]):
+def load_state_from_db() -> Dict[str, str]:
+    """Supabase에서 현재 저장된 페이지들의 last_edited_time을 로드합니다."""
     try:
-        os.makedirs(os.path.dirname(STATE_FILE_PATH), exist_ok=True)
-        with open(STATE_FILE_PATH, "w", encoding="utf-8") as f:
-            json.dump(state, f, ensure_ascii=False, indent=2)
+        # [최적화] 필요한 필드만 조회 (page_id, metadata->last_edited_time)
+        # Supabase에서는 jsonb 내부 필드 접근 가능: metadata->>last_edited_time
+        # 하지만 Python client에서는 select("page_id, metadata") 후 파싱이 안전함
+        
+        # 데이터가 많을 수 있으므로 페이징 처리 필요할 수 있음.
+        # 일단 1000개 제한 (Welfare DB 규모상 충분할 수 있으나, 추후 loop 필요)
+        # 여기서는 간단히 전체 로드 시도 (limit 5000)
+        response = supabase.table("site_pages").select("page_id, metadata").limit(5000).execute()
+        
+        state = {}
+        for item in response.data:
+            pid = item.get("page_id")
+            # metadata가 없거나 last_edited_time이 없으면 None
+            meta = item.get("metadata") or {} 
+            last_edit = meta.get("last_edited_time")
+            
+            if pid and last_edit:
+                state[pid] = last_edit
+                
+        logger.info(f"📂 [State] DB에서 {len(state)}개의 기존 인덱싱 상태 로드 완료.")
+        return state
     except Exception as e:
-        logger.error(f"❌ 상태 파일 저장 실패: {e}")
+        logger.warning(f"⚠️ DB 상태 로드 실패 (초기화 진행): {e}")
+        return {}
 
 def run_indexing():
     # [수정] 실행 시점에 초기화 수행
@@ -105,8 +115,9 @@ def run_indexing():
         logger.critical("❌ FATAL: Gemini 모델 로드 실패. 인덱싱을 중단합니다.")
         return
 
-    # prev_state = load_state()  # 증분 업데이트 (비활성화 - 재인덱싱 중)
-    prev_state = {}          # 전체 재인덱싱 (필요시 사용) 
+    # [수정] DB 기반 상태 로드 (GitHub Actions 등 비상태 환경 대응)
+    prev_state = load_state_from_db()
+    
     current_state = {}
     total_processed = 0
     total_skipped = 0
@@ -144,6 +155,7 @@ def run_indexing():
                 
                 current_state[page_id] = last_edited
 
+                # [비교] DB에 있는 시간과 Notion 시간이 같으면 건너뜀
                 if page_id in prev_state and prev_state[page_id] == last_edited:
                     total_skipped += 1
                     continue
@@ -262,6 +274,7 @@ def run_indexing():
 
                         metadata = {
                             "page_id": page_id,
+                            "last_edited_time": last_edited, # [신규] 상태 관리를 위한 필드
                             "category": category_name,
                             "sub_category_list": targets,
                             "start_age": start_age,
@@ -292,6 +305,12 @@ def run_indexing():
                     try:
                         supabase.table("site_pages").upsert(records_to_insert, on_conflict="page_id").execute()
                         total_processed += 1
+                        
+                        # [변경] DB 상태 관리는 upsert 시 즉시 반영되므로 별도 save_state 불필요
+                        # 로깅만 수행
+                        if total_processed % 10 == 0:
+                            logger.info(f"💾 [Progress] {total_processed}건 처리 중...")
+                            
                     except Exception as e:
                         logger.error(f"❌ Supabase 저장 실패: {e}")
 
@@ -304,6 +323,8 @@ def run_indexing():
     if has_critical_error:
         logger.warning("\n[Indexer] ⚠️ 오류 발생으로 삭제 단계 건너뜀.")
     else:
+        # [수정] DB 상태 기반 삭제 감지
+        # prev_state(DB에 있던 것) - current_state(Notion에서 가져온 것) = 삭제된 것
         deleted_ids = list(set(prev_state.keys()) - set(current_state.keys()))
         if deleted_ids:
             logger.info(f"\n[Indexer] 🗑️ 삭제된 페이지 {len(deleted_ids)}건 정리 중...")
@@ -313,7 +334,7 @@ def run_indexing():
                 except Exception as e:
                     logger.warning(f"⚠️ 삭제 실패: {e}")
         
-        save_state(current_state)
+        # save_state(current_state) # 불필요 (DB metadata에 저장됨)
         logger.info(f"\n[Indexer] ✨ 완료. (업데이트: {total_processed}, 건너뜀: {total_skipped})")
 
 if __name__ == "__main__":
