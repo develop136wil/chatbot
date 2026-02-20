@@ -49,7 +49,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 from notion_client import Client as NotionClient
 from supabase import create_client, create_async_client
 from functools import lru_cache
-from typing import Optional, List
+from typing import Optional, List, Dict, Any, Tuple
 
 # Groq import (사용 가능한 경우에만)
 try:
