@@ -2,6 +2,10 @@ import os
 import json
 import time
 import traceback
+import sys
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 import logging
 from typing import Dict, Any, List, Optional
 from supabase import create_client
@@ -69,12 +73,43 @@ DATABASE_IDS = {
     "생활 지원": "2738ade5021080579e5be527ff1e80b2"
 }
 NOTION_PROPERTY_NAMES = {
-    "title": "사업명", "category": "분류", "sub_category": "대상 특성",
-    "start_age": "시작 월령(개월)", "end_age": "종료 월령(개월)", "support_detail": "상세 지원 내용",
-    "contact": "문의처", "url1": "관련 홈페이지 1", "url2": "관련 홈페이지 2",
-    "url3": "관련 홈페이지 3", "extra_req": "추가 자격요건",
+    "title": "사업명", "support_detail": "지원 내용", "extra_req": "추가 자격요건",
+    "contact": "문의처", "start_age": "시작 연령(개월)", "end_age": "종료 연령(개월)",
+    "sub_category": "소분류(대상 특성)",
     "cost_info": "비용 부담", "notes": "주의사항"
 }
+
+def send_email_alert(subject: str, body: str):
+    """
+    [신규] 인덱싱 실패 시 이메일 알림 발송 (Gmail SMTP)
+    """
+    smtp_user = os.getenv("SMTP_USER")       # 보내는 사람 이메일 (예: chanyoung@develop136.com)
+    smtp_password = os.getenv("SMTP_PASSWORD") # 앱 비밀번호 (Google App Password)
+    recipient = os.getenv("ALERT_EMAIL_RECIPIENT", smtp_user) # 받는 사람 (기본값: 보내는사람 본인)
+    
+    if not smtp_user or not smtp_password:
+        logger.warning("📧 [Email] SMTP 설정이 없어 알림을 건너뜠습니다. (SMTP_USER, SMTP_PASSWORD 확인 필요)")
+        return
+
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = smtp_user
+        msg['To'] = recipient
+        msg['Subject'] = subject
+        
+        msg.attach(MIMEText(body, 'plain'))
+        
+        # Gmail SMTP 서버 (보안 연결)
+        # 587: TLS (starttls 필요), 465: SSL
+        with smtplib.SMTP('smtp.gmail.com', 587) as server:
+            server.starttls()
+            server.login(smtp_user, smtp_password)
+            server.send_message(msg)
+            
+        logger.info(f"📧 [Email] 알림 발송 완료: {recipient}")
+        
+    except Exception as e:
+        logger.error(f"❌ [Email] 알림 발송 실패: {e}")
 
 def load_state_from_db() -> Dict[str, str]:
     """Supabase에서 현재 저장된 페이지들의 last_edited_time을 로드합니다."""
@@ -315,9 +350,10 @@ def run_indexing():
                         logger.error(f"❌ Supabase 저장 실패: {e}")
 
         except Exception as e:
-            logger.error(f"❌ 카테고리 '{category_name}' 처리 중 치명적 오류: {e}")
-            traceback.print_exc()
+            error_msg = f"❌ 카테고리 '{category_name}' 처리 중 치명적 오류: {e}\n{traceback.format_exc()}"
+            logger.error(error_msg)
             has_critical_error = True
+            send_email_alert(f"[Chatbot Indexer] 인덱싱 실패 알림 ({category_name})", error_msg)
 
     # 삭제 처리 로직
     if has_critical_error:
@@ -335,6 +371,8 @@ def run_indexing():
                     logger.warning(f"⚠️ 삭제 실패: {e}")
         
         # save_state(current_state) # 불필요 (DB metadata에 저장됨)
+        # 성공 알림 (옵션: 너무 자주 오면 귀찮으므로 주석 처리하거나, 요약 리포트로 발송 가능)
+        # send_email_alert("[Chatbot Indexer] 인덱싱 완료", f"총 {total_processed}건 업데이트됨.")
         logger.info(f"\n[Indexer] ✨ 완료. (업데이트: {total_processed}, 건너뜀: {total_skipped})")
 
 if __name__ == "__main__":
