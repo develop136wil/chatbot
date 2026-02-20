@@ -4,7 +4,7 @@ python-dotenv
 redis
 supabase
 google-genai>=1.0.0
-notion-client
+notion-client>=2.0.0
 tenacity
 groq
 requests

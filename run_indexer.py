@@ -172,6 +172,12 @@ def run_indexing():
                 if next_cursor: query_params["start_cursor"] = next_cursor
                 
                 try:
+                    # [Debug] notion.databases 속성 확인
+                    if hasattr(notion.databases, 'query'):
+                        pass
+                    else:
+                        logger.error(f"❌ [Debug] notion.databases has no 'query'. Dir: {dir(notion.databases)}")
+                    
                     response = notion.databases.query(**query_params)
                     results.extend(response.get("results", []))
                     has_more = response.get("has_more")
