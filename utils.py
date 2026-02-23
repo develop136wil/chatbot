@@ -77,12 +77,18 @@ REDIS_HOST = os.getenv("REDIS_HOST", "localhost").strip()
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "").strip()
 
-# [핵심] API 키 로테이션 로직
-_keys_env = os.getenv("GEMINI_API_KEYS", "")
+# [핵심] API 키 로테이션 로직 (단수/복수 모두 지원)
+_keys_env = os.getenv("GEMINI_API_KEYS", "") or os.getenv("GEMINI_API_KEY", "")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY") # [신규] Groq 키 로드
 
 # 콤마로 구분된 키를 리스트로 변환 (공백 제거)
 KEY_POOL = [k.strip() for k in _keys_env.split(",") if k.strip()]
+
+# 이전 환경변수 (GEMINI_API_KEY_1) 지원
+for i in range(1, 10):
+    env_k = os.getenv(f"GEMINI_API_KEY_{i}") or os.getenv(f"GEMINI_API_KEY{i}")
+    if env_k and env_k.strip() not in KEY_POOL:
+        KEY_POOL.append(env_k.strip())
 
 # [★신규] 키를 순서대로 무한 반복해서 제공하는 이터레이터 (Round Robin)
 # 랜덤이 아니므로, 1번->2번->3번... 순서가 보장되어 429 에러를 최소화합니다.
@@ -1352,6 +1358,8 @@ def format_search_results(pages_metadata: list) -> str:
         copy_text = f"[{category}] {title}\n\n{summary_raw}\n\n🔗 자세히 보기: {url}"
         safe_copy_text = copy_text.replace('"', '&quot;').replace("'", "&apos;")
 
+        html_rows = []
+        current_margin_left = "20px"
         for line in summary_raw.split('\n'):
 
             line = line.strip()
