@@ -250,12 +250,11 @@ notion = NotionClient(auth=NOTION_KEY) if NOTION_KEY else None
 
 if SUPABASE_URL and SUPABASE_KEY:
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-    try:
-        supabase_async = create_async_client(SUPABASE_URL, SUPABASE_KEY)
-        print("✅ Utils: Supabase Async 클라이언트 초기화 완료")
-    except Exception as e:
-        print(f"⚠️ Utils: Supabase Async 클라이언트 초기화 실패: {e}")
-        supabase_async = None
+    # [버그 수정] create_async_client는 async 함수라 await 없이 호출하면
+    # 코루틴 객체가 반환됨 (RuntimeWarning: coroutine was never awaited 원인).
+    # 동기 클라이언트를 재사용하고 run_in_executor로 비동기 처리합니다.
+    supabase_async = supabase
+    print("✅ Utils: Supabase Async 클라이언트 초기화 완료")
 else:
     print("⚠️ Utils: Supabase 설정이 없습니다.")
     supabase = None
@@ -1652,6 +1651,7 @@ def search_supabase(question: str, extracted_info: dict, keywords: list = []) ->
 async def search_supabase_async(question: str, extracted_info: dict, keywords: list = []) -> list:
     """
     [Upgrade] 키워드 리스트를 SQL에 직접 전달하여 정확도 향상
+    supabase_async는 동기 클라이언트이므로 run_in_executor로 비동기 처리합니다.
     """
     # 1. 임베딩 생성 (비동기)
     query_embedding = await get_gemini_embedding_async(question)
@@ -1668,21 +1668,25 @@ async def search_supabase_async(question: str, extracted_info: dict, keywords: l
     print(f"🔍 [Search] 키워드: {keywords} / 카테고리: {ai_category}")
 
     results = []
+    loop = asyncio.get_running_loop()
     
     # --- 1차 시도 (카테고리 필터 + 키워드 부스트) ---
     if ai_category:
         try:
-            response = await supabase_async.rpc(
-                "hybrid_search_v3",
-                {
-                    "query_text": final_query_text,
-                    "query_embedding": query_embedding,
-                    "match_threshold": 0.45,  # 기준 점수
-                    "match_count": 15,
-                    "filter_category": ai_category,
-                    "keywords_arr": keywords  # [핵심] 키워드 배열 전달
-                }
-            ).execute()
+            response = await loop.run_in_executor(
+                None,
+                lambda: supabase_async.rpc(
+                    "hybrid_search_v3",
+                    {
+                        "query_text": final_query_text,
+                        "query_embedding": query_embedding,
+                        "match_threshold": 0.45,  # 기준 점수
+                        "match_count": 15,
+                        "filter_category": ai_category,
+                        "keywords_arr": keywords  # [핵심] 키워드 배열 전달
+                    }
+                ).execute()
+            )
             results = response.data
         except Exception as e:
             print(f"⚠️ 1차 검색 실패: {e}")
@@ -1692,17 +1696,20 @@ async def search_supabase_async(question: str, extracted_info: dict, keywords: l
         msg = "🔄 [Fallback] 전체 검색 진행..." if ai_category else "🌍 [Global] 전체 검색 진행..."
         print(msg)
         try:
-            response = await supabase_async.rpc(
-                "hybrid_search_v3",
-                {
-                    "query_text": final_query_text,
-                    "query_embedding": query_embedding,
-                    "match_threshold": 0.4, 
-                    "match_count": 20,
-                    "filter_category": None, # 필터 해제
-                    "keywords_arr": keywords # [핵심] 키워드 배열 전달
-                }
-            ).execute()
+            response = await loop.run_in_executor(
+                None,
+                lambda: supabase_async.rpc(
+                    "hybrid_search_v3",
+                    {
+                        "query_text": final_query_text,
+                        "query_embedding": query_embedding,
+                        "match_threshold": 0.4, 
+                        "match_count": 20,
+                        "filter_category": None, # 필터 해제
+                        "keywords_arr": keywords # [핵심] 키워드 배열 전달
+                    }
+                ).execute()
+            )
             
             # 중복 제거 및 합치기
             existing_ids = {r['id'] for r in results}
@@ -1845,105 +1852,9 @@ async def translate_content_simple_async(content: str, language: str = "ko") -> 
 # ============================================
 # [Phase 4] Async Functions
 # ============================================
-
-async def search_supabase_async(
-    question: str, 
-    extracted_info: dict, 
-    keywords: List[str] = None
-) -> List[Dict[str, Any]]:
-    """
-    [Async] Supabase 벡터 검색 (비동기)
-    """
-    if not supabase: return []
-    
-    # 1. 임베딩 생성 (비동기)
-    query_embedding = await get_gemini_embedding_async(question)
-    if not query_embedding:
-        return []
-
-    # 2. RPC 호출 (postgrest-py의 .execute()는 동기 함수지만, 
-    # run_in_executor로 래핑하여 비동기처럼 동작하게 함)
-    # Supabase Python 클라이언트는 아직 완전한 async 지원이 experimental 단계임.
-    # 따라서 CPU-bound가 아닌 I/O-bound 작업이므로 스레드풀에서 실행.
-    
-    # [Fix] hybrid_search_v3 사용 (기존 search_supabase와 동일한 로직적용)
-    if not keywords:
-        keywords = []
-    
-    final_query_text = " ".join(keywords) if keywords else question
-    filter_category = extracted_info.get("category")
-    
-    results = []
-    try:
-        loop = asyncio.get_running_loop()
-        response = await loop.run_in_executor(
-            None, 
-            lambda: supabase.rpc(
-                "hybrid_search_v3",
-                {
-                    "query_text": final_query_text,
-                    "query_embedding": query_embedding,
-                    "match_threshold": 0.40,
-                    "match_count": 15,
-                    "filter_category": filter_category,
-                    "keywords_arr": keywords
-                }
-            ).execute()
-        )
-        results = response.data
-    except Exception as e:
-        logger.error(f"❌ Async Search Error (1st try): {e}")
-
-    # --- 2차 시도 (결과 부족 시 전체 검색 - Fallback) ---
-    # 카테고리가 지정되어 있었고, 결과가 3개 미만이면 전체 검색 시도
-    if filter_category and len(results) < 3:
-        try:
-            logger.info("⚠️ [Async Search] 1차 결과 부족 → 카테고리 해제 후 재검색")
-            loop = asyncio.get_running_loop()
-            response = await loop.run_in_executor(
-                None, 
-                lambda: supabase.rpc(
-                    "hybrid_search_v3",
-                    {
-                        "query_text": final_query_text,
-                        "query_embedding": query_embedding,
-                        "match_threshold": 0.40,  # 문턱값 유지
-                        "match_count": 20,       # 개수 조금 늘림
-                        "filter_category": None, # 필터 해제!
-                        "keywords_arr": keywords
-                    }
-                ).execute()
-            )
-            return response.data
-        except Exception as e:
-             logger.error(f"❌ Async Search Error (Fallback): {e}")
-             return results # 1차 결과라도 반환
-
-    return results
-
-async def get_gemini_embedding_async(text: str) -> Optional[List[float]]:
-    """[Async] Gemini 임베딩 생성"""
-    client = get_llm_client()
-    if not client: return None
-    
-    try:
-        # google-genai 라이브러리의 async 메서드 사용 (client.aio)
-        result = await client.aio.models.embed_content(
-            model='models/gemini-embedding-001',
-            contents=text,
-            config=types.EmbedContentConfig(
-                task_type="RETRIEVAL_QUERY", 
-                output_dimensionality=768
-            )
-        )
-        if hasattr(result, 'embeddings') and result.embeddings:
-            return list(result.embeddings[0].values)
-        if hasattr(result, 'embedding') and result.embedding:
-            return list(result.embedding.values)
-        return []
-    except Exception as e:
-        logger.error(f"⚠️ Async Embed Error: {e}")
-        return None
+# [버그 수정] search_supabase_async와 get_gemini_embedding_async의
+# 중복 정의를 제거하였습니다. (위 1652, 408라인의 정의를 사용합니다.)
+# 중복 정의 시 Python은 마지막 정의로 덮어쓰는 문제가 있었습니다.
 
 async def rerank_search_results_async(question: str, results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """[Async] 검색 결과 재정렬"""
