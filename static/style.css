@@ -114,6 +114,27 @@
         border-top-color: #3A3A3A;
     }
 
+    /* --- 검색 결과 카드 내부 텍스트 유틸리티 --- */
+    .card-list-header {
+        color: #F5F5F5;
+    }
+
+    .card-list-header-aux {
+        color: #A0A0A0;
+    }
+
+    .card-list-text {
+        color: #C8C8C8;
+    }
+
+    .card-list-ref {
+        color: #A0A0A0;
+    }
+
+    .card-list-numbered {
+        color: #F5F5F5;
+    }
+
     .detail-link,
     .card-share-btn {
         background-color: #333333;
@@ -590,6 +611,34 @@ body {
     /* [수정] 4px -> 8px (가독성 확보) */
     line-height: 1.6;
     /* [수정] 1.5 -> 1.6 (줄 간격 확보) */
+}
+
+/* --- 검색 결과 카드 내부 텍스트 유틸리티 (utils.py 연동) --- */
+.card-list-header {
+    color: #101828;
+    font-weight: 700;
+    font-size: 1.05em;
+}
+
+.card-list-header-aux {
+    color: #667085;
+    font-weight: 400;
+    font-size: 0.9em;
+}
+
+.card-list-text {
+    color: #475467;
+}
+
+.card-list-ref {
+    color: #667085;
+    font-size: 0.9em;
+    list-style: none;
+}
+
+.card-list-numbered {
+    color: #101828;
+    font-weight: 700;
 }
 
 /* 카드 푸터 (자세히보기 + 공유하기) */

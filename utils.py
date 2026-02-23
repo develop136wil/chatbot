@@ -1377,8 +1377,8 @@ def format_search_results(pages_metadata: list) -> str:
                 # 번호 항목이 나오면 들여쓰기 레벨을 깊게(35px) 변경할 준비를 합니다.
                 full_content = f"{match_numbered.group(1)} {match_numbered.group(2)}".replace("**", "").strip()
                 
-                # 스타일: 검은색(#101828), 굵게(700), 들여쓰기는 상위 레벨(20px) 유지
-                row = f"<li style='list-style: none; margin-bottom: 4px; margin-top: 8px; margin-left: 20px;'><span style='color: #101828; font-weight: 700;'>{full_content}</span></li>"
+                # 스타일: CSS 클래스로 분리 (다크모드 지원)
+                row = f"<li style='list-style: none; margin-bottom: 4px; margin-top: 8px; margin-left: 20px;'><span class='card-list-numbered'>{full_content}</span></li>"
                 html_rows.append(row)
                 last_li_index = len(html_rows) - 1
                 
@@ -1395,20 +1395,20 @@ def format_search_results(pages_metadata: list) -> str:
                 # 새 주제가 시작되었으므로 들여쓰기 초기화 (20px)
                 current_margin_left = "20px"
                 
-                row = f"<li style='list-style: none; margin-bottom: 6px; margin-top: 12px;'><span style='color: #101828; font-weight: 700; font-size: 1.05em;'>{header_title}</span></li>"
+                row = f"<li style='list-style: none; margin-bottom: 6px; margin-top: 12px;'><span class='card-list-header'>{header_title}</span></li>"
                 html_rows.append(row)
                 last_li_index = len(html_rows) - 1
                 
                 if content_text:
-                    row_content = f"<li style='color: #475467; margin-bottom: 4px; margin-left: {current_margin_left};'>{content_text}</li>"
+                    row_content = f"<li class='card-list-text' style='margin-bottom: 4px; margin-left: {current_margin_left};'>{content_text}</li>"
                     html_rows.append(row_content)
                     last_li_index = len(html_rows) - 1
 
             # (3) [Ref] 당구장 표시 (※) -> 깔끔한 참고 스타일
             elif match_ref:
                 content = match_ref.group(1).strip()
-                # 스타일: 약간 작은 글씨, 아이콘 느낌 추가
-                row = f"<li style='color: #667085; font-size: 0.9em; margin-bottom: 4px; margin-left: {current_margin_left}; list-style: none;'>※ {content}</li>"
+                # 스타일: 약간 작은 글씨, 아이콘 느낌 추가 (클래스로 분리)
+                row = f"<li class='card-list-ref' style='margin-bottom: 4px; margin-left: {current_margin_left};'>※ {content}</li>"
                 html_rows.append(row)
                 last_li_index = len(html_rows) - 1
             
@@ -1422,18 +1422,18 @@ def format_search_results(pages_metadata: list) -> str:
                 # [수정] 짧은 보조 텍스트(괄호, 20자 이하)는 헤더와 같은 줄에 표시
                 if content_text and len(content_text) <= 20 and (content_text.startswith("(") or content_text.startswith("：")):
                     # 헤더 + 보조 텍스트를 한 줄에 표시
-                    row = f"<li style='list-style: none; margin-bottom: 6px; margin-top: 12px;'><span style='color: #101828; font-weight: 700; font-size: 1.05em;'>{header_title}</span> <span style='color: #667085; font-weight: 400; font-size: 0.9em;'>{content_text}</span></li>"
+                    row = f"<li style='list-style: none; margin-bottom: 6px; margin-top: 12px;'><span class='card-list-header'>{header_title}</span> <span class='card-list-header-aux'>{content_text}</span></li>"
                     html_rows.append(row)
                     last_li_index = len(html_rows) - 1
                 else:
                     # 볼드 스타일 적용 (Main Header와 동일한 스타일)
-                    row = f"<li style='list-style: none; margin-bottom: 6px; margin-top: 12px;'><span style='color: #101828; font-weight: 700; font-size: 1.05em;'>{header_title}</span></li>"
+                    row = f"<li style='list-style: none; margin-bottom: 6px; margin-top: 12px;'><span class='card-list-header'>{header_title}</span></li>"
                     html_rows.append(row)
                     last_li_index = len(html_rows) - 1
                     
                     # 헤더 뒤에 긴 내용이 있으면 별도 항목으로 추가
                     if content_text:
-                        row_content = f"<li style='color: #475467; margin-bottom: 4px; margin-left: {current_margin_left};'>{content_text}</li>"
+                        row_content = f"<li class='card-list-text' style='margin-bottom: 4px; margin-left: {current_margin_left};'>{content_text}</li>"
                         html_rows.append(row_content)
                         last_li_index = len(html_rows) - 1
             
@@ -1441,7 +1441,7 @@ def format_search_results(pages_metadata: list) -> str:
             elif line.startswith("* ") or line.startswith("- ") or line.startswith("• "):
                 content = re.sub(r'^[\*\-•]\s*', '', line).strip()
                 # 현재 설정된 들여쓰기 값(current_margin_left)을 적용
-                row = f"<li style='color: #475467; margin-bottom: 4px; margin-left: {current_margin_left};'>{content}</li>"
+                row = f"<li class='card-list-text' style='margin-bottom: 4px; margin-left: {current_margin_left};'>{content}</li>"
                 html_rows.append(row)
                 last_li_index = len(html_rows) - 1
             
@@ -1453,10 +1453,10 @@ def format_search_results(pages_metadata: list) -> str:
                         new_content = prev_row[:-5] + " " + line + "</li>"
                         html_rows[last_li_index] = new_content
                     else:
-                        html_rows.append(f"<li style='color: #475467; margin-left: {current_margin_left};'>{line}</li>")
+                        html_rows.append(f"<li class='card-list-text' style='margin-left: {current_margin_left};'>{line}</li>")
                         last_li_index = len(html_rows) - 1
                 else:
-                    html_rows.append(f"<li style='color: #475467; margin-left: {current_margin_left};'>{line}</li>")
+                    html_rows.append(f"<li class='card-list-text' style='margin-left: {current_margin_left};'>{line}</li>")
                     last_li_index = len(html_rows) - 1
 
         html_summary = f'<ul style="padding: 0; margin: 0;">{"".join(html_rows)}</ul>'
