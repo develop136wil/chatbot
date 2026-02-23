@@ -1549,7 +1549,8 @@ def search_supabase(question: str, extracted_info: dict, keywords: list = []) ->
     [Upgrade v2] 확정적 카테고리 매핑 + 제목 매칭 부스트
     """
     # 1. 임베딩 생성
-    query_embedding = get_gemini_embedding(question)
+    # [핵심 수정] 인덱싱(RETRIEVAL_DOCUMENT) ↔ 검색(RETRIEVAL_QUERY) 벡터 공간 일치
+    query_embedding = get_gemini_embedding(question, task_type="RETRIEVAL_QUERY")
     if not query_embedding: return []
 
     # 2. 검색어 확장
@@ -1654,7 +1655,9 @@ async def search_supabase_async(question: str, extracted_info: dict, keywords: l
     supabase_async는 동기 클라이언트이므로 run_in_executor로 비동기 처리합니다.
     """
     # 1. 임베딩 생성 (비동기)
-    query_embedding = await get_gemini_embedding_async(question)
+    # [핵심 수정] 인덱싱 시 RETRIEVAL_DOCUMENT 사용 → 검색 쿼리는 반드시 RETRIEVAL_QUERY 사용
+    # SEMANTIC_SIMILARITY(기존 기본값)와 RETRIEVAL_DOCUMENT는 벡터 공간이 달라 유사도가 낮게 나옴
+    query_embedding = await get_gemini_embedding_async(question, task_type="RETRIEVAL_QUERY")
     if not query_embedding: return []
 
     # 2. 검색어 확장 (만약 입력된 keywords가 없으면 여기서 생성)
