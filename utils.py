@@ -88,10 +88,10 @@ def _env_flag(name: str, default: bool = False) -> bool:
     return os.getenv(name, str(default)).strip().lower() in {"1", "true", "yes", "on"}
 
 
-# 공급자 계정의 결제 상태는 코드로 확인할 수 없으므로, 애플리케이션 쪽에서는
-# 다른 키/공급자로 자동 전환하여 요청을 계속 보내는 경로를 기본 차단합니다.
+# 공급자 계정의 결제 상태는 코드로 확인할 수 없으므로, Gemini 키 순환은 막고
+# 무료 Groq 계정으로의 단일 백업 경로만 명시적으로 관리합니다.
 FREE_TIER_ONLY = _env_flag("FREE_TIER_ONLY", True)
-GROQ_FALLBACK_ENABLED = (not FREE_TIER_ONLY) or _env_flag("ALLOW_FREE_TIER_GROQ_FALLBACK", False)
+GROQ_FALLBACK_ENABLED = (not FREE_TIER_ONLY) or _env_flag("ALLOW_FREE_TIER_GROQ_FALLBACK", True)
 LIVE_TRANSLATION_ENABLED = (not FREE_TIER_ONLY) or _env_flag("ALLOW_LIVE_TRANSLATION", False)
 FREE_TIER_MAX_OUTPUT_TOKENS = max(64, min(int(os.getenv("FREE_TIER_MAX_OUTPUT_TOKENS", "400")), 1024))
 
@@ -767,6 +767,8 @@ async def generate_content_safe_async(client, prompt, timeout=15, **kwargs):
             if is_quota_error(error_msg):
                 consecutive_quota_errors += 1
                 if FREE_TIER_ONLY:
+                    if GROQ_FALLBACK_ENABLED:
+                        return await call_groq_backup(prompt)
                     raise FreeTierQuotaExceeded("Gemini 무료 할당량을 모두 사용했습니다.") from e
                 
                 retry_delay = 5 if _IS_VERCEL else 15
