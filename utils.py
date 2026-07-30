@@ -71,7 +71,8 @@ load_dotenv()
 NOTION_KEY = os.getenv("NOTION_API_KEY", os.getenv("NOTION_KEY"))
 
 # [수정] 설정값 로드 시 공백(.strip)을 제거하여 에러 방지
-REDIS_HOST = os.getenv("REDIS_HOST", "localhost").strip()
+REDIS_URL = os.getenv("REDIS_URL", "").strip()
+REDIS_HOST = REDIS_URL or os.getenv("REDIS_HOST", "localhost").strip()
 
 # Supabase 설정 로드 (혹시 모를 공백 제거)
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
@@ -816,7 +817,11 @@ async def extract_info_from_question_async(question: str, chat_history: list[dic
 
             if cache_key and redis_async_client:
                 try:
-                        await redis_async_client.set(cache_key, json.dumps(default_info).encode('utf-8'))
+                        await redis_async_client.set(
+                            cache_key,
+                            json.dumps(default_info).encode('utf-8'),
+                            ex=MAIN_ANSWER_CACHE_TTL,
+                        )
                 except Exception: pass
                     
             return default_info
@@ -937,7 +942,7 @@ def generate_answer_from_context(context: str, original_question: str, chat_hist
         # 주의: 포맷팅 문자(*, -, :, [, ])는 보존
         
         try:
-            redis_client.set(cache_key, summary.encode('utf-8'))
+            redis_client.set(cache_key, summary.encode('utf-8'), ex=MAIN_ANSWER_CACHE_TTL)
         except Exception: pass
         
         return summary

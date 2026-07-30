@@ -50,10 +50,13 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 JOB_QUEUE_KEY = "chatbot:job_queue"
 JOB_RESULTS_KEY = "chatbot:job_results"
 NOTION_LOG_DB_ID = "2bf8ade502108000b6d6f4ad4d4d52b2"
+JOB_RESULTS_TTL_SECONDS = int(os.getenv("JOB_RESULTS_TTL_SECONDS", "3600"))
+MAX_CONCURRENT_JOBS = max(1, int(os.getenv("MAX_CONCURRENT_JOBS", "2")))
 
 # Redis 연결 설정
+REDIS_URL = os.getenv("REDIS_URL", "").strip()
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost").strip()
-REDIS_PORT = 6379 
+REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 
 logger.info("[Worker] 클라이언트 초기화 중...")
 
@@ -328,7 +331,8 @@ async def save_notion_log_async(question, category, keywords):
         logger.warning(f"⚠️ Notion 로그 저장 실패: {e}")
 
 # 작업 핸들러 (Redis 응답용)
-async def handle_job(redis_client, queue_item):
+async def handle_job(redis_client, queue_item, semaphore):
+    job_id = None
     try:
         _, job_json = queue_item
         job_data = json.loads(job_json.decode('utf-8'))
@@ -346,19 +350,41 @@ async def handle_job(redis_client, queue_item):
         
         # 결과 저장
         await redis_client.hset(JOB_RESULTS_KEY, job_id, json.dumps(final_result).encode('utf-8'))
+        await redis_client.expire(JOB_RESULTS_KEY, JOB_RESULTS_TTL_SECONDS)
         # await redis_client.expire(f"job:{job_id}", 3600) # Optional
         
         logger.info(f"💾 완료: {job_data.get('question')}")
         
     except Exception as e:
         logger.error(f"Handler Error: {e}")
+        if job_id:
+            error_result = {
+                "status": "error",
+                "message": "처리 중 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
+            }
+            try:
+                await redis_client.hset(
+                    JOB_RESULTS_KEY,
+                    job_id,
+                    json.dumps(error_result, ensure_ascii=False).encode('utf-8'),
+                )
+                await redis_client.expire(JOB_RESULTS_KEY, JOB_RESULTS_TTL_SECONDS)
+            except Exception as store_error:
+                logger.error(f"Failed to save job error result: {store_error}")
+    finally:
+        semaphore.release()
 
 # --- 메인 루프 (Async) ---
 async def start_worker_async():
     logger.info(f"🚀 Worker (Async) 가동! (PID: {os.getpid()})")
     
     # Redis Async Connection
-    r = redis.from_url(f"redis://{REDIS_HOST}:{REDIS_PORT}", decode_responses=False)
+    if REDIS_URL:
+        r = redis.from_url(REDIS_URL, decode_responses=False)
+    else:
+        r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=False)
+
+    worker_semaphore = asyncio.Semaphore(MAX_CONCURRENT_JOBS)
     
     # Connection Check
     while True:
@@ -371,16 +397,20 @@ async def start_worker_async():
             await asyncio.sleep(2)
             
     while True:
+        await worker_semaphore.acquire()
         try:
             # Async BLPOP
             result = await r.blpop(JOB_QUEUE_KEY, timeout=1)
             if result:
                 # Fire and Forget (Concurrency!)
                 # 각 작업은 독립된 Task로 실행되어, 다음 BLPOP을 즉시 수행함
-                asyncio.create_task(handle_job(r, result))
+                asyncio.create_task(handle_job(r, result, worker_semaphore))
+            else:
+                worker_semaphore.release()
                 
         except Exception as e:
             logger.error(f"🔥 Worker Loop Error: {e}")
+            worker_semaphore.release()
             await asyncio.sleep(1)
 
 if __name__ == "__main__":

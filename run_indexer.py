@@ -4,6 +4,7 @@ import time
 import traceback
 import sys
 import smtplib
+import requests
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import logging
@@ -30,6 +31,9 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# 외부 API가 무한정 대기하지 않도록 인덱서 실행 시간을 제한합니다.
+NOTION_REQUEST_TIMEOUT_SECONDS = 30
 
 logger.info("[Indexer] 설정 로드 중...")
 load_dotenv()
@@ -166,6 +170,7 @@ def run_indexing():
             # [수정 2] 안전한 페이지네이션(Pagination) 로직
             has_more = True
             next_cursor = None
+            fetch_failed = False
             
             while has_more:
                 query_params = {"database_id": db_id}
@@ -182,8 +187,12 @@ def run_indexing():
                     payload = {}
                     if next_cursor: payload["start_cursor"] = next_cursor
                     
-                    import requests
-                    resp = requests.post(url, headers=headers, json=payload)
+                    resp = requests.post(
+                        url,
+                        headers=headers,
+                        json=payload,
+                        timeout=NOTION_REQUEST_TIMEOUT_SECONDS,
+                    )
                     resp.raise_for_status()
                     response = resp.json()
                     
@@ -193,7 +202,13 @@ def run_indexing():
                     time.sleep(0.3) 
                 except Exception as e:
                     logger.error(f"❌ Notion API 호출 실패: {e}")
+                    fetch_failed = True
                     has_more = False
+
+            # 일부 페이지만 가져온 상태에서 삭제 정리를 진행하면 기존 문서가
+            # 대량 삭제될 수 있으므로, 해당 카테고리 전체를 실패로 처리합니다.
+            if fetch_failed:
+                raise RuntimeError("Notion 페이지 조회가 완료되지 않았습니다.")
             
             logger.info(f" - {len(results)}개 페이지 발견.")
 
@@ -210,11 +225,6 @@ def run_indexing():
                     continue
 
                 logger.info(f"⚡️ 처리 시작 (ID: {page_id})")
-
-                try:
-                    supabase.table("site_pages").delete().eq("page_id", page_id).execute()
-                except Exception as e:
-                    logger.warning(f"⚠️ 기존 데이터 삭제 실패 (무시됨): {e}")
 
                 # 데이터 추출
                 try:
@@ -362,6 +372,8 @@ def run_indexing():
                             
                     except Exception as e:
                         logger.error(f"❌ Supabase 저장 실패: {e}")
+                        # 저장 실패 시 삭제 정리까지 수행하면 별도 문서까지 잃을 수 있습니다.
+                        has_critical_error = True
 
         except Exception as e:
             error_msg = f"❌ 카테고리 '{category_name}' 처리 중 치명적 오류: {e}\n{traceback.format_exc()}"

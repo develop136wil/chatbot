@@ -4,13 +4,14 @@ import json
 import uuid
 import logging
 import asyncio
+import time
 import secrets  # [추가] 보안 토큰 생성
 from typing import List, Dict, Optional, Literal
 from fastapi import FastAPI, Query, HTTPException, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, HTMLResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
 from dotenv import load_dotenv
 from contextlib import asynccontextmanager
@@ -43,15 +44,19 @@ INITIAL_RESULT_DISPLAY_COUNT = 2
 SUPABASE_KEEPALIVE_INTERVAL_HOURS = 12
 CACHE_TTL_SECONDS = 3600
 RESULTS_PER_PAGE = 2
+MAX_QUESTION_LENGTH = 2000
+MAX_CHAT_HISTORY_ITEMS = 4
+MAX_RESULT_IDS = 20
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 load_dotenv()
-ADMIN_SECRET_KEY = os.getenv("ADMIN_SECRET_KEY", "your_strong_admin_password_here")
-if ADMIN_SECRET_KEY == "your_strong_admin_password_here":
-    logger.warning("⚠️ [Security] ADMIN_SECRET_KEY가 설정되지 않아 기본값을 사용합니다. 프로덕션 환경에서는 반드시 설정해주세요.")
+ADMIN_SECRET_KEY = os.getenv("ADMIN_SECRET_KEY")
+DEBUG_ENDPOINT_ENABLED = os.getenv("ENABLE_DEBUG_ENDPOINT", "false").lower() == "true"
+if not ADMIN_SECRET_KEY:
+    logger.warning("⚠️ [Security] ADMIN_SECRET_KEY가 없어 캐시 삭제 엔드포인트를 비활성화합니다.")
 
 # --- 스케줄러 설정 ---
 def scheduled_job():
@@ -123,6 +128,8 @@ app.add_middleware(
 
 # [보안 강화] Session Secret Key 환경 변수화
 SESSION_SECRET = os.getenv("SESSION_SECRET_KEY", secrets.token_hex(32))
+if not os.getenv("SESSION_SECRET_KEY"):
+    logger.warning("⚠️ [Security] SESSION_SECRET_KEY가 없어 재시작 시 세션이 초기화됩니다.")
 app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET)
 
 # --- 정적 파일 서빙 ---
@@ -135,17 +142,33 @@ JOB_RESULTS_KEY = "chatbot:job_results"
 
 # --- 요청 모델 ---
 class ChatRequest(BaseModel):
-    question: str
-    last_result_ids: List[str] = [] # [수정] List 사용 (상단 import 덕분에 에러 없음)
-    shown_count: int = 0
-    chat_history: List[dict] = []   # [수정] List 사용
+    question: str = Field(min_length=1, max_length=MAX_QUESTION_LENGTH)
+    last_result_ids: List[str] = Field(default_factory=list, max_length=MAX_RESULT_IDS)
+    shown_count: int = Field(default=0, ge=0, le=MAX_RESULT_IDS)
+    chat_history: List[dict] = Field(default_factory=list, max_length=MAX_CHAT_HISTORY_ITEMS)
 
 # [main.py] 상단 함수 정의 부분에 추가
+
+_memory_rate_limits: Dict[str, List[float]] = {}
+_memory_rate_limit_lock = asyncio.Lock()
+
+
+async def _check_memory_rate_limit(key: str, limit: int, window: int):
+    """Redis가 없는 서버리스 환경에서도 최소한의 요청 제한을 유지합니다."""
+    now = time.monotonic()
+    async with _memory_rate_limit_lock:
+        recent = [timestamp for timestamp in _memory_rate_limits.get(key, []) if now - timestamp < window]
+        if len(recent) >= limit:
+            raise HTTPException(status_code=429, detail="요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.")
+        recent.append(now)
+        _memory_rate_limits[key] = recent
+
 
 async def check_rate_limit(request: Request, limit: int = RATE_LIMIT_MAX_REQUESTS, window: int = RATE_LIMIT_WINDOW_SECONDS):
     """
     [비동기] 도배 방지 (Rate Limiting) 함수
     """
+    key = "rate_limit:unknown"
     try:
         # 1. 사용자 IP 가져오기
         client_ip = request.headers.get("X-Forwarded-For")
@@ -171,11 +194,14 @@ async def check_rate_limit(request: Request, limit: int = RATE_LIMIT_MAX_REQUEST
             if not current_count:
                 await pipe.expire(key, window)
             await pipe.execute()
+            return
         
     except HTTPException:
         raise 
     except Exception as e:
-        logger.error(f"⚠️ Rate Limit 오류 (서버는 계속 작동): {e}")
+        logger.warning(f"⚠️ Redis Rate Limit 오류. 메모리 제한으로 전환: {e}")
+
+    await _check_memory_rate_limit(key, limit, window)
 
 # --- API 엔드포인트 ---
 
@@ -194,6 +220,8 @@ def health_check():
 @app.get("/debug")
 def debug_check():
     """진단용 엔드포인트: 각 연결 상태를 개별적으로 테스트"""
+    if not DEBUG_ENDPOINT_ENABLED:
+        raise HTTPException(status_code=404, detail="Not Found")
     results = {}
     
     # 1. Supabase 연결 테스트
@@ -234,7 +262,12 @@ def debug_check():
 
 @app.post("/admin/clear_cache")
 def clear_all_caches(secret: str = Query(None)):
-    if secret != ADMIN_SECRET_KEY: raise HTTPException(status_code=401, detail="Unauthorized")
+    if not ADMIN_SECRET_KEY:
+        raise HTTPException(status_code=404, detail="Not Found")
+    if not secret or not secrets.compare_digest(secret, ADMIN_SECRET_KEY):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    if not redis_client:
+        raise HTTPException(status_code=503, detail="Redis cache is not enabled")
     try:
         logger.warning("--- 🔒 관리자 요청: Redis 캐시 초기화 ---")
         keys_to_delete = []
@@ -261,6 +294,9 @@ async def chat_with_bot(chat_request: ChatRequest, request: Request):
     question = chat_request.question.strip()
     chat_history = chat_request.chat_history
     logger.info(f"받은 질문: {question}")
+
+    if not question:
+        raise HTTPException(status_code=422, detail="질문을 입력해 주세요.")
 
     if not notion: raise HTTPException(status_code=503, detail="Notion API Key 설정 오류")
 
@@ -426,13 +462,13 @@ FEEDBACK_DB_ID = os.getenv("NOTION_FEEDBACK_DB_ID", "2c18ade5021080448ab8d304b47
 
 # [수정] FeedbackRequest 모델 확장
 class FeedbackRequest(BaseModel):
-    job_id: str
-    question: str
-    answer: str
+    job_id: str = Field(min_length=1, max_length=128)
+    question: str = Field(min_length=1, max_length=4000)
+    answer: str = Field(min_length=1, max_length=12000)
     feedback: Literal["👍", "👎"]
-    reason: Optional[str] = ""     # [신규] 통계용 사유 (예: 정보부족)
-    comment: Optional[str] = ""    # 상세 의견
-    chat_history: Optional[str] = "" # [신규] 이전 대화 내역 (텍스트로 저장)
+    reason: Optional[str] = Field(default="", max_length=200)
+    comment: Optional[str] = Field(default="", max_length=2000)
+    chat_history: Optional[str] = Field(default="", max_length=20000)
 
 @app.post("/feedback")
 async def handle_feedback(feedback_data: FeedbackRequest):
@@ -440,7 +476,7 @@ async def handle_feedback(feedback_data: FeedbackRequest):
     
     try:
         notion.pages.create(
-            parent={"database_id": "2c18ade5021080448ab8d304b4777fe5"}, # 따옴표 확인!
+            parent={"database_id": FEEDBACK_DB_ID},
             properties={
                 "질문": {"title": [{"text": {"content": feedback_data.question[:2000]}}]},
                 "답변": {"rich_text": [{"text": {"content": feedback_data.answer[:2000]}}]},
