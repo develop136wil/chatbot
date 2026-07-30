@@ -34,6 +34,8 @@ from utils import (
     get_supabase_pages_by_ids_async,
     format_search_results,
     FreeTierQuotaExceeded,
+    get_response_cache_async,
+    save_response_cache_async,
     notion,   
     supabase, 
     # 임시: 비동기 함수들 import 오류 방지
@@ -186,6 +188,19 @@ def reserve_free_tier_request(session: dict) -> None:
     if used >= FREE_TIER_DAILY_REQUESTS_PER_SESSION:
         raise FreeTierDailyLimitExceeded()
     session["free_tier_usage_count"] = used + 1
+
+
+def is_initial_cacheable_request(chat_request: ChatRequest) -> bool:
+    """이전 대화나 '더 보기' 상태에 의존하지 않는 질문만 공유 캐시합니다."""
+    return not chat_request.chat_history and not chat_request.last_result_ids and chat_request.shown_count == 0
+
+
+async def cache_response_if_eligible(
+    chat_request: ChatRequest, question: str, language: str, response: dict
+) -> dict:
+    if is_initial_cacheable_request(chat_request):
+        await save_response_cache_async(question, language, response)
+    return response
 
 
 async def build_show_more_response(chat_request: ChatRequest, language: str) -> dict:
@@ -401,6 +416,13 @@ async def chat_with_bot(chat_request: ChatRequest, request: Request):
         logger.info("더 보기 빠른 경로 처리")
         return await build_show_more_response(chat_request, language)
 
+    # 정확 일치 캐시는 의도 분석·임베딩·LLM 호출보다 먼저 확인합니다.
+    if is_initial_cacheable_request(chat_request):
+        cached_response = await get_response_cache_async(question, language)
+        if cached_response:
+            logger.info("♻️ [Response Cache] Hit")
+            return cached_response
+
     try:
         reserve_free_tier_request(session)
     except FreeTierDailyLimitExceeded:
@@ -431,16 +453,24 @@ async def chat_with_bot(chat_request: ChatRequest, request: Request):
 
     # 4. 의도별 분기 (Small talk 등)
     if extracted_info.get("intent") == "safety_block":
-        return {"status": "complete", "answer": ui_text["safety_block"], "last_result_ids": [], "total_found": 0}
+        return await cache_response_if_eligible(chat_request, question, language, {
+            "status": "complete", "answer": ui_text["safety_block"], "last_result_ids": [], "total_found": 0
+        })
     
     if extracted_info.get("intent") == "exit":
-        return {"status": "complete", "answer": ui_text["exit"], "last_result_ids": [], "total_found": 0}
+        return await cache_response_if_eligible(chat_request, question, language, {
+            "status": "complete", "answer": ui_text["exit"], "last_result_ids": [], "total_found": 0
+        })
     
     if extracted_info.get("intent") == "reset":
-        return {"status": "complete", "answer": ui_text["reset"], "last_result_ids": [], "total_found": 0}
+        return await cache_response_if_eligible(chat_request, question, language, {
+            "status": "complete", "answer": ui_text["reset"], "last_result_ids": [], "total_found": 0
+        })
 
     if extracted_info.get("intent") == "out_of_scope":
-        return {"status": "complete", "answer": ui_text["out_of_scope"], "last_result_ids": [], "total_found": 0}
+        return await cache_response_if_eligible(chat_request, question, language, {
+            "status": "complete", "answer": ui_text["out_of_scope"], "last_result_ids": [], "total_found": 0
+        })
 
     if extracted_info.get("intent") == "small_talk":
         answer = ui_text["small_talk"]
@@ -452,11 +482,16 @@ async def chat_with_bot(chat_request: ChatRequest, request: Request):
         }
         if any(keyword in normalized_input for keyword in thanks_keywords[language]):
             answer = ui_text["thanks"]
-        return {"status": "complete", "answer": answer, "last_result_ids": [], "total_found": 0}
+        return await cache_response_if_eligible(chat_request, question, language, {
+            "status": "complete", "answer": answer, "last_result_ids": [], "total_found": 0
+        })
 
     if extracted_info.get("intent") == "clarify_category":
         category_options = [ui_text["cats"].get(category, category) for category in DATABASE_IDS]
-        return {"status": "clarify", "answer": ui_text["clarify"], "options": category_options, "last_result_ids": [], "total_found": 0}
+        return await cache_response_if_eligible(chat_request, question, language, {
+            "status": "clarify", "answer": ui_text["clarify"], "options": category_options,
+            "last_result_ids": [], "total_found": 0
+        })
 
     # 5. 캐시 확인 (Redis Async)
     if not is_redis_down:
@@ -479,7 +514,9 @@ async def chat_with_bot(chat_request: ChatRequest, request: Request):
         "question": question, 
         "language": language,
         "chat_history": chat_history,
-        "ai_category": ai_category
+        "ai_category": ai_category,
+        # Vercel 직접 실행은 아래에서 저장하고, Redis 작업 경로만 worker가 저장합니다.
+        "cacheable": is_initial_cacheable_request(chat_request) and not is_redis_down,
     }
 
     # [핵심 수정] Redis가 죽었으면 -> Async 직접 실행 (Vercel 최적화)
@@ -494,12 +531,13 @@ async def chat_with_bot(chat_request: ChatRequest, request: Request):
             
             if isinstance(result, tuple) and len(result) == 3:
                 final_answer, page_ids, total_found = result
-                return {
+                response = {
                     "status": "complete", 
                     "answer": final_answer,
                     "last_result_ids": page_ids,
                     "total_found": total_found
                 }
+                return await cache_response_if_eligible(chat_request, question, language, response)
             else:
                 # 예기치 않은 결과 형식
                 logger.error("Async Worker 결과 형식 오류: %s", type(result).__name__)

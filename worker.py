@@ -20,6 +20,7 @@ try:
         rerank_search_results_async, # [Async]
         format_search_results, 
         localize_result_pages_async,
+        save_response_cache_async,
         resolve_language,
         LOCALIZED_UI,
         supabase,
@@ -141,6 +142,18 @@ async def process_job_async(job_data: Dict[str, Any]) -> Tuple[str, List[str], i
 
         if len(reranked_results) > display_count:
             final_answer += f"<hr>{ui_text['footer_more']}"
+
+        if job_data.get("cacheable"):
+            await save_response_cache_async(
+                question,
+                target_lang_code,
+                {
+                    "status": "complete",
+                    "answer": final_answer,
+                    "last_result_ids": all_page_ids,
+                    "total_found": len(all_page_ids),
+                },
+            )
 
         elapsed = time.time() - start_time
         logger.info(f"✅ [Async] 답변 조립 완료 (소요시간: {elapsed:.2f}초)")

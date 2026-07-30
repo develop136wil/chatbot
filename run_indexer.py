@@ -22,7 +22,8 @@ from utils import (
     _get_url,
     get_gemini_embedding,
     _get_multi_select,
-    translate_content_multilingual_sync # [신규]
+    translate_content_multilingual_sync, # [신규]
+    invalidate_response_cache,
 )
 
 # 로깅 설정
@@ -382,12 +383,14 @@ def run_indexing():
             send_email_alert(f"[Chatbot Indexer] 인덱싱 실패 알림 ({category_name})", error_msg)
 
     # 삭제 처리 로직
+    deleted_count = 0
     if has_critical_error:
         logger.warning("\n[Indexer] ⚠️ 오류 발생으로 삭제 단계 건너뜀.")
     else:
         # [수정] DB 상태 기반 삭제 감지
         # prev_state(DB에 있던 것) - current_state(Notion에서 가져온 것) = 삭제된 것
         deleted_ids = list(set(prev_state.keys()) - set(current_state.keys()))
+        deleted_count = len(deleted_ids)
         if deleted_ids:
             logger.info(f"\n[Indexer] 🗑️ 삭제된 페이지 {len(deleted_ids)}건 정리 중...")
             for del_id in deleted_ids:
@@ -397,6 +400,10 @@ def run_indexing():
                     logger.warning(f"⚠️ 삭제 실패: {e}")
         
         # save_state(current_state) # 불필요 (DB metadata에 저장됨)
+        if total_processed or deleted_count:
+            # Notion 원문이 바뀌면 이전 캐시의 카드·링크가 오래될 수 있으므로,
+            # 인덱싱 성공 후에만 전체 응답 캐시를 무효화합니다.
+            invalidate_response_cache(supabase)
         # 성공 알림 (옵션: 너무 자주 오면 귀찮으므로 주석 처리하거나, 요약 리포트로 발송 가능)
         # send_email_alert("[Chatbot Indexer] 인덱싱 완료", f"총 {total_processed}건 업데이트됨.")
         logger.info(f"\n[Indexer] ✨ 완료. (업데이트: {total_processed}, 건너뜀: {total_skipped})")

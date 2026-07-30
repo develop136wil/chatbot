@@ -25,8 +25,10 @@ import asyncio
 import itertools
 import re  # [긴급 수정] 정규식 모듈 추가 (expand_search_query에서 사용)
 import html
+import unicodedata
 import secrets  # [추가] 보안 토큰 생성용
 import logging  # [추가] 구조화된 로깅
+from datetime import datetime, timedelta, timezone
 # redis는 위에서 이미 import됨 (중복 제거)
 import warnings
 
@@ -94,6 +96,13 @@ FREE_TIER_ONLY = _env_flag("FREE_TIER_ONLY", True)
 GROQ_FALLBACK_ENABLED = (not FREE_TIER_ONLY) or _env_flag("ALLOW_FREE_TIER_GROQ_FALLBACK", True)
 LIVE_TRANSLATION_ENABLED = (not FREE_TIER_ONLY) or _env_flag("ALLOW_LIVE_TRANSLATION", False)
 FREE_TIER_MAX_OUTPUT_TOKENS = max(64, min(int(os.getenv("FREE_TIER_MAX_OUTPUT_TOKENS", "400")), 1024))
+RESPONSE_CACHE_ENABLED = _env_flag("ENABLE_RESPONSE_CACHE", True)
+RESPONSE_CACHE_TABLE = "chatbot_response_cache"
+RESPONSE_CACHE_TTL_SECONDS = max(
+    300, min(int(os.getenv("CHAT_RESPONSE_CACHE_TTL_SECONDS", "604800")), 2_592_000)
+)
+RESPONSE_CACHE_SCHEMA_VERSION = "v1"
+_response_cache_error_logged = False
 
 
 class FreeTierQuotaExceeded(RuntimeError):
@@ -392,6 +401,97 @@ else:
     print("⚠️ Utils: Supabase 설정이 없습니다.")
     supabase = None
     supabase_async = None
+
+
+def _normalize_cache_question(question: str) -> str:
+    """표기 차이만 제거한 정확 일치 캐시용 질문입니다."""
+    visible_question = re.sub(r"\s*\(System[\s\S]*?\)", "", question, flags=re.IGNORECASE)
+    return " ".join(unicodedata.normalize("NFKC", visible_question).strip().casefold().split())
+
+
+def build_response_cache_key(question: str, language: str) -> str:
+    normalized_question = _normalize_cache_question(question)
+    material = f"{RESPONSE_CACHE_SCHEMA_VERSION}|{language}|{normalized_question}"
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def _is_valid_cached_response(response: Any) -> bool:
+    if not isinstance(response, dict):
+        return False
+    if response.get("status") not in {"complete", "clarify"}:
+        return False
+    return isinstance(response.get("answer"), str)
+
+
+def _log_response_cache_error_once(action: str, error: Exception) -> None:
+    global _response_cache_error_logged
+    if not _response_cache_error_logged:
+        _response_cache_error_logged = True
+        logger.warning("응답 캐시 %s을(를) 건너뜁니다: %s", action, type(error).__name__)
+
+
+async def get_response_cache_async(question: str, language: str) -> Optional[dict]:
+    """AI 호출 전에 Supabase의 정확 일치 응답 캐시를 조회합니다."""
+    if not RESPONSE_CACHE_ENABLED or not supabase:
+        return None
+    cache_key = build_response_cache_key(question, language)
+    now = datetime.now(timezone.utc).isoformat()
+
+    def _fetch() -> Optional[dict]:
+        result = (
+            supabase.table(RESPONSE_CACHE_TABLE)
+            .select("response")
+            .eq("cache_key", cache_key)
+            .gt("expires_at", now)
+            .limit(1)
+            .execute()
+        )
+        data = result.data or []
+        return data[0].get("response") if data else None
+
+    try:
+        response = await asyncio.get_running_loop().run_in_executor(None, _fetch)
+        return response if _is_valid_cached_response(response) else None
+    except Exception as error:
+        _log_response_cache_error_once("조회", error)
+        return None
+
+
+async def save_response_cache_async(question: str, language: str, response: dict) -> None:
+    """성공한 초기 질문의 전체 응답을 저장합니다. 저장 실패는 사용자 응답을 막지 않습니다."""
+    if not RESPONSE_CACHE_ENABLED or not supabase or not _is_valid_cached_response(response):
+        return
+    cache_key = build_response_cache_key(question, language)
+    expires_at = (datetime.now(timezone.utc) + timedelta(seconds=RESPONSE_CACHE_TTL_SECONDS)).isoformat()
+    record = {
+        "cache_key": cache_key,
+        "response": response,
+        "expires_at": expires_at,
+        "cache_version": RESPONSE_CACHE_SCHEMA_VERSION,
+    }
+
+    def _save() -> None:
+        supabase.table(RESPONSE_CACHE_TABLE).upsert(record, on_conflict="cache_key").execute()
+
+    try:
+        await asyncio.get_running_loop().run_in_executor(None, _save)
+    except Exception as error:
+        _log_response_cache_error_once("저장", error)
+
+
+def invalidate_response_cache(client=None) -> bool:
+    """재색인 성공 뒤 캐시를 비워 오래된 복지 정보를 반환하지 않게 합니다."""
+    database_client = client or supabase
+    if not RESPONSE_CACHE_ENABLED or not database_client:
+        return False
+    try:
+        # cache_key는 SHA-256 해시라 빈 값이 될 수 없습니다. PostgREST 삭제에는 필터가 필요합니다.
+        database_client.table(RESPONSE_CACHE_TABLE).delete().neq("cache_key", "").execute()
+        logger.info("응답 캐시 무효화 완료")
+        return True
+    except Exception as error:
+        _log_response_cache_error_once("무효화", error)
+        return False
 
 # --- 4. Redis 클라이언트 초기화 ---
 redis_client = None
