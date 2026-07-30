@@ -23,7 +23,8 @@ from utils import (
     get_gemini_embedding,
     _get_multi_select,
     translate_content_multilingual_sync, # [신규]
-    invalidate_response_cache,
+    bump_response_cache_scope_versions,
+    purge_expired_response_cache,
 )
 
 # 로깅 설정
@@ -116,7 +117,7 @@ def send_email_alert(subject: str, body: str):
     except Exception as e:
         logger.error(f"❌ [Email] 알림 발송 실패: {e}")
 
-def load_state_from_db() -> Dict[str, str]:
+def load_state_from_db() -> Dict[str, Dict[str, str]]:
     """Supabase에서 현재 저장된 페이지들의 last_edited_time을 로드합니다."""
     try:
         # [최적화] 필요한 필드만 조회 (page_id, metadata->last_edited_time)
@@ -134,9 +135,10 @@ def load_state_from_db() -> Dict[str, str]:
             # metadata가 없거나 last_edited_time이 없으면 None
             meta = item.get("metadata") or {} 
             last_edit = meta.get("last_edited_time")
+            category = meta.get("category")
             
             if pid and last_edit:
-                state[pid] = last_edit
+                state[pid] = {"last_edited_time": last_edit, "category": category}
                 
         logger.info(f"📂 [State] DB에서 {len(state)}개의 기존 인덱싱 상태 로드 완료.")
         return state
@@ -162,6 +164,7 @@ def run_indexing():
     total_processed = 0
     total_skipped = 0
     has_critical_error = False
+    changed_categories = set()
     
     for category_name, db_id in DATABASE_IDS.items():
         logger.info(f"\n[Indexer] '{category_name}' DB 확인 중...")
@@ -221,7 +224,7 @@ def run_indexing():
                 current_state[page_id] = last_edited
 
                 # [비교] DB에 있는 시간과 Notion 시간이 같으면 건너뜀
-                if page_id in prev_state and prev_state[page_id] == last_edited:
+                if page_id in prev_state and prev_state[page_id].get("last_edited_time") == last_edited:
                     total_skipped += 1
                     continue
 
@@ -365,6 +368,7 @@ def run_indexing():
                     try:
                         supabase.table("site_pages").upsert(records_to_insert, on_conflict="page_id").execute()
                         total_processed += 1
+                        changed_categories.add(category_name)
                         
                         # [변경] DB 상태 관리는 upsert 시 즉시 반영되므로 별도 save_state 불필요
                         # 로깅만 수행
@@ -396,14 +400,17 @@ def run_indexing():
             for del_id in deleted_ids:
                 try:
                     supabase.table("site_pages").delete().eq("page_id", del_id).execute()
+                    deleted_category = prev_state.get(del_id, {}).get("category")
+                    if deleted_category:
+                        changed_categories.add(deleted_category)
                 except Exception as e:
                     logger.warning(f"⚠️ 삭제 실패: {e}")
         
         # save_state(current_state) # 불필요 (DB metadata에 저장됨)
-        if total_processed or deleted_count:
-            # Notion 원문이 바뀌면 이전 캐시의 카드·링크가 오래될 수 있으므로,
-            # 인덱싱 성공 후에만 전체 응답 캐시를 무효화합니다.
-            invalidate_response_cache(supabase)
+        purge_expired_response_cache(supabase)
+        if changed_categories:
+            # 변경된 카테고리와 전체 범위 버전만 올려 관련된 응답 캐시만 무효화합니다.
+            bump_response_cache_scope_versions(supabase, list(changed_categories))
         # 성공 알림 (옵션: 너무 자주 오면 귀찮으므로 주석 처리하거나, 요약 리포트로 발송 가능)
         # send_email_alert("[Chatbot Indexer] 인덱싱 완료", f"총 {total_processed}건 업데이트됨.")
         logger.info(f"\n[Indexer] ✨ 완료. (업데이트: {total_processed}, 건너뜀: {total_skipped})")

@@ -99,9 +99,11 @@ FREE_TIER_MAX_OUTPUT_TOKENS = max(64, min(int(os.getenv("FREE_TIER_MAX_OUTPUT_TO
 RESPONSE_CACHE_ENABLED = _env_flag("ENABLE_RESPONSE_CACHE", True)
 RESPONSE_CACHE_TABLE = "chatbot_response_cache"
 RESPONSE_CACHE_TTL_SECONDS = max(
-    300, min(int(os.getenv("CHAT_RESPONSE_CACHE_TTL_SECONDS", "604800")), 2_592_000)
+    300, min(int(os.getenv("CHAT_RESPONSE_CACHE_TTL_SECONDS", "7776000")), 15_552_000)
 )
-RESPONSE_CACHE_SCHEMA_VERSION = "v1"
+RESPONSE_CACHE_SCHEMA_VERSION = "v2"
+RESPONSE_CACHE_SCOPE_TABLE = "chatbot_cache_scope_versions"
+GLOBAL_CACHE_SCOPE = "__all__"
 _response_cache_error_logged = False
 
 
@@ -415,6 +417,21 @@ def build_response_cache_key(question: str, language: str) -> str:
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
+def build_response_cache_scopes(results: List[Dict[str, Any]], ai_category: Optional[str] = None) -> List[str]:
+    """검색 결과가 실제로 의존하는 Notion 카테고리 범위를 계산합니다."""
+    scopes = set()
+    for result in results:
+        metadata = result.get("metadata", result) if isinstance(result, dict) else {}
+        category = metadata.get("category") if isinstance(metadata, dict) else None
+        if isinstance(category, str) and category.strip():
+            scopes.add(category.strip())
+
+    # 분류하지 못했거나 결과가 없으면 새 문서의 등장도 반영하도록 전체 범위를 봅니다.
+    if not scopes or not ai_category:
+        scopes.add(GLOBAL_CACHE_SCOPE)
+    return sorted(scopes)
+
+
 def _is_valid_cached_response(response: Any) -> bool:
     if not isinstance(response, dict):
         return False
@@ -440,26 +457,67 @@ async def get_response_cache_async(question: str, language: str) -> Optional[dic
     def _fetch() -> Optional[dict]:
         result = (
             supabase.table(RESPONSE_CACHE_TABLE)
-            .select("response")
+            .select("response,scope_versions,cache_version")
             .eq("cache_key", cache_key)
             .gt("expires_at", now)
             .limit(1)
             .execute()
         )
         data = result.data or []
-        return data[0].get("response") if data else None
+        return data[0] if data else None
 
     try:
-        response = await asyncio.get_running_loop().run_in_executor(None, _fetch)
-        return response if _is_valid_cached_response(response) else None
+        cached_row = await asyncio.get_running_loop().run_in_executor(None, _fetch)
+        if not cached_row or cached_row.get("cache_version") != RESPONSE_CACHE_SCHEMA_VERSION:
+            return None
+        response = cached_row.get("response")
+        scope_versions = cached_row.get("scope_versions") or {}
+        if not _is_valid_cached_response(response) or not isinstance(scope_versions, dict):
+            return None
+        current_versions = await get_response_cache_scope_versions_async(list(scope_versions))
+        if current_versions is None:
+            return None
+        if any(current_versions.get(scope, 0) != int(version) for scope, version in scope_versions.items()):
+            return None
+        return response
     except Exception as error:
         _log_response_cache_error_once("조회", error)
         return None
 
 
-async def save_response_cache_async(question: str, language: str, response: dict) -> None:
+async def get_response_cache_scope_versions_async(scopes: List[str]) -> Optional[Dict[str, int]]:
+    """캐시가 의존하는 카테고리별 재색인 버전을 조회합니다."""
+    if not scopes:
+        return {}
+    if not RESPONSE_CACHE_ENABLED or not supabase:
+        return None
+
+    def _fetch_versions() -> Dict[str, int]:
+        result = (
+            supabase.table(RESPONSE_CACHE_SCOPE_TABLE)
+            .select("scope,version")
+            .in_("scope", scopes)
+            .execute()
+        )
+        return {row["scope"]: int(row["version"]) for row in (result.data or [])}
+
+    try:
+        loaded_versions = await asyncio.get_running_loop().run_in_executor(None, _fetch_versions)
+        return {scope: loaded_versions.get(scope, 0) for scope in scopes}
+    except Exception as error:
+        _log_response_cache_error_once("버전 조회", error)
+        return None
+
+
+async def save_response_cache_async(
+    question: str, language: str, response: dict, scopes: Optional[List[str]] = None
+) -> None:
     """성공한 초기 질문의 전체 응답을 저장합니다. 저장 실패는 사용자 응답을 막지 않습니다."""
     if not RESPONSE_CACHE_ENABLED or not supabase or not _is_valid_cached_response(response):
+        return
+    scope_list = sorted(set(scopes or []))
+    scope_versions = await get_response_cache_scope_versions_async(scope_list)
+    if scope_versions is None:
         return
     cache_key = build_response_cache_key(question, language)
     expires_at = (datetime.now(timezone.utc) + timedelta(seconds=RESPONSE_CACHE_TTL_SECONDS)).isoformat()
@@ -468,6 +526,7 @@ async def save_response_cache_async(question: str, language: str, response: dict
         "response": response,
         "expires_at": expires_at,
         "cache_version": RESPONSE_CACHE_SCHEMA_VERSION,
+        "scope_versions": scope_versions,
     }
 
     def _save() -> None:
@@ -491,6 +550,38 @@ def invalidate_response_cache(client=None) -> bool:
         return True
     except Exception as error:
         _log_response_cache_error_once("무효화", error)
+        return False
+
+
+def bump_response_cache_scope_versions(client, scopes: List[str]) -> bool:
+    """변경된 카테고리만 원자적으로 버전 증가시켜 관련 캐시만 만료시킵니다."""
+    if not RESPONSE_CACHE_ENABLED or not client or not scopes:
+        return False
+    unique_scopes = sorted(set(scopes) | {GLOBAL_CACHE_SCOPE})
+    try:
+        client.rpc(
+            "bump_chatbot_cache_scope_versions",
+            {"p_scopes": unique_scopes},
+        ).execute()
+        logger.info("응답 캐시 범위 버전 갱신 완료 (범위=%s)", len(unique_scopes))
+        return True
+    except Exception as error:
+        _log_response_cache_error_once("범위 버전 갱신", error)
+        return False
+
+
+def purge_expired_response_cache(client=None) -> bool:
+    """TTL이 지난 행만 정리합니다. TTL은 신선도 판단이 아닌 저장공간 정리용입니다."""
+    database_client = client or supabase
+    if not RESPONSE_CACHE_ENABLED or not database_client:
+        return False
+    try:
+        database_client.table(RESPONSE_CACHE_TABLE).delete().lt(
+            "expires_at", datetime.now(timezone.utc).isoformat()
+        ).execute()
+        return True
+    except Exception as error:
+        _log_response_cache_error_once("만료 행 정리", error)
         return False
 
 # --- 4. Redis 클라이언트 초기화 ---

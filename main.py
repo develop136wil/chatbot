@@ -515,8 +515,8 @@ async def chat_with_bot(chat_request: ChatRequest, request: Request):
         "language": language,
         "chat_history": chat_history,
         "ai_category": ai_category,
-        # Vercel 직접 실행은 아래에서 저장하고, Redis 작업 경로만 worker가 저장합니다.
-        "cacheable": is_initial_cacheable_request(chat_request) and not is_redis_down,
+        # 직접 실행과 Redis 작업 경로 모두 worker가 결과의 카테고리 범위까지 저장합니다.
+        "cacheable": is_initial_cacheable_request(chat_request),
     }
 
     # [핵심 수정] Redis가 죽었으면 -> Async 직접 실행 (Vercel 최적화)
@@ -537,7 +537,7 @@ async def chat_with_bot(chat_request: ChatRequest, request: Request):
                     "last_result_ids": page_ids,
                     "total_found": total_found
                 }
-                return await cache_response_if_eligible(chat_request, question, language, response)
+                return response
             else:
                 # 예기치 않은 결과 형식
                 logger.error("Async Worker 결과 형식 오류: %s", type(result).__name__)

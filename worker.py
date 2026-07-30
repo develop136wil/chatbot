@@ -21,6 +21,7 @@ try:
         format_search_results, 
         localize_result_pages_async,
         save_response_cache_async,
+        build_response_cache_scopes,
         resolve_language,
         LOCALIZED_UI,
         supabase,
@@ -99,6 +100,13 @@ async def process_job_async(job_data: Dict[str, Any]) -> Tuple[str, List[str], i
             return ui_text["system_error"], [], 0
 
         if not raw_results: 
+            if job_data.get("cacheable"):
+                await save_response_cache_async(
+                    question,
+                    target_lang_code,
+                    {"status": "complete", "answer": ui_text["not_found"], "last_result_ids": [], "total_found": 0},
+                    scopes=["__all__"],
+                )
             return ui_text["not_found"], [], 0
 
         # [Step 3] 중복 제거 (CPU Bound - Fast enough)
@@ -125,6 +133,8 @@ async def process_job_async(job_data: Dict[str, Any]) -> Tuple[str, List[str], i
         # [Step 5] 최종 결과 조립
         display_count = min(len(reranked_results), 2)
         display_results = reranked_results[:display_count]
+        # 화면 현지화가 원본 카테고리명을 바꾸기 전에 캐시 무효화 범위를 고정합니다.
+        cache_scopes = build_response_cache_scopes(reranked_results, ai_category)
         
         display_results = await localize_result_pages_async(display_results, target_lang_code)
 
@@ -153,6 +163,7 @@ async def process_job_async(job_data: Dict[str, Any]) -> Tuple[str, List[str], i
                     "last_result_ids": all_page_ids,
                     "total_found": len(all_page_ids),
                 },
+                scopes=cache_scopes,
             )
 
         elapsed = time.time() - start_time
