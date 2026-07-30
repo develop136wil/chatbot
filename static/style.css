@@ -372,6 +372,12 @@ body {
     scroll-behavior: smooth;
 }
 
+/* 추천 질문 바가 펼쳐진 상태에서도 마지막 카드와 안내 문구를
+   바 위로 끝까지 스크롤할 수 있도록 하단 공간을 확보합니다. */
+.chat-box.suggestions-visible {
+    padding-bottom: calc(162px + env(safe-area-inset-bottom));
+}
+
 .chat-box::-webkit-scrollbar {
     display: none;
 }
@@ -1651,6 +1657,24 @@ body {
 @media (prefers-color-scheme: dark) {
     .skeleton-box {
         background-color: #333;
+    }
+
+    /* 이 규칙은 카드 기본 색상 선언보다 뒤에 두어 다크 모드에서
+       하드코딩된 라이트 모드 글자색이 다시 적용되지 않게 합니다. */
+    .message.assistant .card-title,
+    .message.assistant .card-list-header,
+    .message.assistant .card-list-numbered {
+        color: #F5F5F5;
+    }
+
+    .message.assistant .card-body li,
+    .message.assistant .card-list-text {
+        color: #D0D5DD;
+    }
+
+    .message.assistant .card-list-header-aux,
+    .message.assistant .card-list-ref {
+        color: #B8C0CC;
     }
 }
 

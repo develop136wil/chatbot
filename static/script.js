@@ -903,13 +903,30 @@ function sendSuggestion(text) {
 const toggleBtn = document.getElementById('suggestion-toggle-btn');
 const suggestionContainer = document.querySelector('.suggestion-container');
 
+function syncSuggestionOverlay() {
+    if (!chatBox || !suggestionContainer) return;
+
+    const isVisible = !suggestionContainer.classList.contains('hidden');
+    chatBox.classList.toggle('suggestions-visible', isVisible);
+
+    // 추천 질문 바가 열려 있을 때 마지막 답변이 가려지지 않도록
+    // 스크롤 위치를 새 하단 여백까지 맞춥니다.
+    if (isVisible) {
+        requestAnimationFrame(() => {
+            chatBox.scrollTop = chatBox.scrollHeight;
+        });
+    }
+}
+
 if (toggleBtn && suggestionContainer) {
     toggleBtn.addEventListener('click', () => {
         suggestionContainer.classList.toggle('hidden');
         toggleBtn.classList.toggle('active');
-        const textSpan = toggleBtn.querySelector('.toggle-text');
+        syncSuggestionOverlay();
     });
 }
+
+window.addEventListener('load', syncSuggestionOverlay);
 
 function showToast(message) {
     const toast = document.getElementById("toast-container");
