@@ -20,6 +20,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 # [수정] run_indexing은 사용하는 곳에서 import (startup crash 방지)
 # from index import run_indexing 
 import pytz
+from datetime import datetime
 
 # utils에서 필요한 것만 딱 가져옵니다.
 from utils import (
@@ -32,6 +33,7 @@ from utils import (
     localize_result_pages_async,
     get_supabase_pages_by_ids_async,
     format_search_results,
+    FreeTierQuotaExceeded,
     notion,   
     supabase, 
     # 임시: 비동기 함수들 import 오류 방지
@@ -53,6 +55,10 @@ RESULTS_PER_PAGE = 2
 MAX_QUESTION_LENGTH = 2000
 MAX_CHAT_HISTORY_ITEMS = 4
 MAX_RESULT_IDS = 20
+FREE_TIER_DAILY_REQUESTS_PER_SESSION = max(
+    1, min(int(os.getenv("FREE_TIER_DAILY_REQUESTS_PER_SESSION", "30")), 200)
+)
+FREE_TIER_ONLY = os.getenv("FREE_TIER_ONLY", "true").strip().lower() in {"1", "true", "yes", "on"}
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
@@ -162,6 +168,24 @@ class ChatRequest(BaseModel):
     last_result_ids: List[str] = Field(default_factory=list, max_length=MAX_RESULT_IDS)
     shown_count: int = Field(default=0, ge=0, le=MAX_RESULT_IDS)
     chat_history: List[dict] = Field(default_factory=list, max_length=MAX_CHAT_HISTORY_ITEMS)
+
+
+class FreeTierDailyLimitExceeded(RuntimeError):
+    """세션별 무료 일일 사용량 상한을 넘었을 때 사용합니다."""
+
+
+def reserve_free_tier_request(session: dict) -> None:
+    """AI 호출 전에 무료 전용 세션의 일일 사용량을 예약합니다."""
+    if not FREE_TIER_ONLY:
+        return
+    today = datetime.now(pytz.timezone("Asia/Seoul")).date().isoformat()
+    if session.get("free_tier_usage_date") != today:
+        session["free_tier_usage_date"] = today
+        session["free_tier_usage_count"] = 0
+    used = int(session.get("free_tier_usage_count", 0))
+    if used >= FREE_TIER_DAILY_REQUESTS_PER_SESSION:
+        raise FreeTierDailyLimitExceeded()
+    session["free_tier_usage_count"] = used + 1
 
 
 async def build_show_more_response(chat_request: ChatRequest, language: str) -> dict:
@@ -377,11 +401,20 @@ async def chat_with_bot(chat_request: ChatRequest, request: Request):
         logger.info("더 보기 빠른 경로 처리")
         return await build_show_more_response(chat_request, language)
 
+    try:
+        reserve_free_tier_request(session)
+    except FreeTierDailyLimitExceeded:
+        return {"status": "error", "message": ui_text["free_tier_daily_limit"]}
+
     # 3. AI 의도 분석 (비동기 호출)
     try:
         extracted_info = await extract_info_from_question_async(question, chat_history)
         if isinstance(extracted_info, dict) and "error" in extracted_info:
+            if "free_tier_quota_exceeded" in extracted_info["error"]:
+                return {"status": "error", "message": ui_text["free_tier_quota"]}
             raise RuntimeError(extracted_info["error"])
+    except FreeTierQuotaExceeded:
+        return {"status": "error", "message": ui_text["free_tier_quota"]}
     except Exception as e:
         logger.error("질문 분석 오류: %s", type(e).__name__)
         return {"status": "error", "message": ui_text["system_error"]}

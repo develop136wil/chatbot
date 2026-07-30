@@ -46,7 +46,7 @@ except ImportError:
     print("❌ google.genai package not found. Please install it.")
     genai = None
     print("❌ google.genai is required for this application")
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
 from notion_client import Client as NotionClient
 from supabase import create_client, create_async_client
 from functools import lru_cache
@@ -62,7 +62,7 @@ except ImportError:
     
 # [Async] 클라이언트 초기화 Helper
 def get_async_groq_client():
-    if AsyncGroq and GROQ_API_KEY:
+    if GROQ_FALLBACK_ENABLED and AsyncGroq and GROQ_API_KEY:
         return AsyncGroq(api_key=GROQ_API_KEY)
     return None
 
@@ -82,6 +82,28 @@ GEMINI_EMBEDDING_TIMEOUT_SECONDS = max(
     1, int(os.getenv("GEMINI_EMBEDDING_TIMEOUT_SECONDS", "15"))
 )
 
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    """환경변수의 boolean 값을 일관되게 해석합니다."""
+    return os.getenv(name, str(default)).strip().lower() in {"1", "true", "yes", "on"}
+
+
+# 공급자 계정의 결제 상태는 코드로 확인할 수 없으므로, 애플리케이션 쪽에서는
+# 다른 키/공급자로 자동 전환하여 요청을 계속 보내는 경로를 기본 차단합니다.
+FREE_TIER_ONLY = _env_flag("FREE_TIER_ONLY", True)
+GROQ_FALLBACK_ENABLED = (not FREE_TIER_ONLY) or _env_flag("ALLOW_FREE_TIER_GROQ_FALLBACK", False)
+LIVE_TRANSLATION_ENABLED = (not FREE_TIER_ONLY) or _env_flag("ALLOW_LIVE_TRANSLATION", False)
+FREE_TIER_MAX_OUTPUT_TOKENS = max(64, min(int(os.getenv("FREE_TIER_MAX_OUTPUT_TOKENS", "400")), 1024))
+
+
+class FreeTierQuotaExceeded(RuntimeError):
+    """무료 티어 한도 초과 시 유료/다른 공급자 우회를 막기 위한 예외입니다."""
+
+
+def is_quota_error(error: Exception | str) -> bool:
+    message = str(error).lower()
+    return "429" in message or "quota" in message or "resource_exhausted" in message
+
 # [핵심] API 키 로테이션 로직 (단수/복수 모두 지원)
 _keys_env = os.getenv("GEMINI_API_KEYS", "") or os.getenv("GEMINI_API_KEY", "")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY") # [신규] Groq 키 로드
@@ -94,6 +116,11 @@ for i in range(1, 10):
     env_k = os.getenv(f"GEMINI_API_KEY_{i}") or os.getenv(f"GEMINI_API_KEY{i}")
     if env_k and env_k.strip() not in KEY_POOL:
         KEY_POOL.append(env_k.strip())
+
+if FREE_TIER_ONLY and len(KEY_POOL) > 1:
+    # 여러 키 순환으로 무료 한도를 우회하지 않습니다.
+    KEY_POOL = KEY_POOL[:1]
+    print("🔒 [Free Tier] Gemini 키 순환 비활성화: 첫 번째 키만 사용합니다.")
 
 # [★신규] 키를 순서대로 무한 반복해서 제공하는 이터레이터 (Round Robin)
 # 랜덤이 아니므로, 1번->2번->3번... 순서가 보장되어 429 에러를 최소화합니다.
@@ -111,6 +138,8 @@ LOCALIZED_UI = {
         "no_more": "더 이상 표시할 결과가 없습니다.",
         "not_found": "관련 정보를 찾지 못했습니다. 😥",
         "system_error": "시스템 오류가 발생했습니다. 😥",
+        "free_tier_quota": "오늘의 무료 AI 처리 한도에 도달했습니다. 잠시 후 다시 시도해 주세요.",
+        "free_tier_daily_limit": "이 브라우저의 오늘 무료 질문 한도에 도달했습니다. 내일 다시 이용해 주세요.",
         "safety_block": "비속어는 삼가주세요. 😥 복지 정보에 대해 질문해 주세요.",
         "exit": "네, 알겠습니다. 언제든 다시 찾아주세요! 😊",
         "reset": "대화를 초기화했습니다. 무엇이 궁금하신가요? 🤖",
@@ -128,6 +157,8 @@ LOCALIZED_UI = {
         "no_more": "There are no more results to display.",
         "not_found": "I couldn't find related information. 😥",
         "system_error": "A system error occurred. Please try again. 😥",
+        "free_tier_quota": "Today's free AI capacity has been reached. Please try again later.",
+        "free_tier_daily_limit": "This browser has reached its free daily question limit. Please try again tomorrow.",
         "safety_block": "Please avoid offensive language. 😥 Please ask about welfare information.",
         "exit": "Understood. Please visit again anytime! 😊",
         "reset": "The conversation has been reset. What would you like to know? 🤖",
@@ -145,6 +176,8 @@ LOCALIZED_UI = {
         "no_more": "Không còn kết quả để hiển thị.",
         "not_found": "Không tìm thấy thông tin liên quan. 😥",
         "system_error": "Đã xảy ra lỗi hệ thống. Vui lòng thử lại. 😥",
+        "free_tier_quota": "Đã đạt giới hạn xử lý AI miễn phí hôm nay. Vui lòng thử lại sau.",
+        "free_tier_daily_limit": "Trình duyệt này đã đạt giới hạn câu hỏi miễn phí hôm nay. Vui lòng thử lại vào ngày mai.",
         "safety_block": "Vui lòng tránh dùng ngôn ngữ xúc phạm. 😥 Hãy hỏi về thông tin phúc lợi.",
         "exit": "Đã hiểu. Hãy quay lại bất cứ lúc nào! 😊",
         "reset": "Cuộc trò chuyện đã được đặt lại. Bạn muốn tìm hiểu gì? 🤖",
@@ -162,6 +195,8 @@ LOCALIZED_UI = {
         "no_more": "没有更多结果可显示。",
         "not_found": "未找到相关信息。😥",
         "system_error": "系统发生错误，请稍后重试。😥",
+        "free_tier_quota": "今日免费 AI 处理额度已用完，请稍后再试。",
+        "free_tier_daily_limit": "此浏览器今日的免费提问额度已用完，请明天再试。",
         "safety_block": "请避免使用不当语言。😥 请咨询福利信息。",
         "exit": "好的，随时欢迎您再次访问！😊",
         "reset": "对话已重置。您想了解什么？🤖",
@@ -334,7 +369,7 @@ def get_llm_client():
 LLM_MODEL = LLM_CLIENT
 
 # [신규] Groq 초기화 (Sync/Async 둘 다)
-if GROQ_API_KEY and AsyncGroq and Groq:
+if GROQ_FALLBACK_ENABLED and GROQ_API_KEY and AsyncGroq and Groq:
     try:
         GROQ_CLIENT = AsyncGroq(api_key=GROQ_API_KEY)
         GROQ_SYNC_CLIENT = Groq(api_key=GROQ_API_KEY)
@@ -342,7 +377,7 @@ if GROQ_API_KEY and AsyncGroq and Groq:
     except Exception as e:
         print(f"⚠️ Utils: Groq 초기화 실패: {e}")
 else:
-    print("ℹ️ Utils: GROQ_API_KEY가 없거나 Groq 라이브러리가 없습니다. (백업 시스템 비활성)")
+    print("ℹ️ Utils: Groq 자동 전환이 비활성화되었습니다.")
 
 notion = NotionClient(auth=NOTION_KEY) if NOTION_KEY else None
 
@@ -443,6 +478,9 @@ else:
 
 # --- [수정] 키 교체 함수 (Client 재생성) ---
 def rotate_api_key():
+    if FREE_TIER_ONLY:
+        # 무료 전용 모드에서는 다른 키로 한도를 우회하지 않습니다.
+        return
     if not KEY_CYCLE: 
         print("⚠️ [Key Rotation] 교체할 키가 없습니다.")
         return
@@ -476,7 +514,7 @@ _RETRY_ATTEMPTS = 2 if _IS_VERCEL else 5  # Vercel에서는 2번만, 로컬에�
 @retry(
     stop=stop_after_attempt(_RETRY_ATTEMPTS), 
     wait=wait_exponential(multiplier=1, min=1, max=5),  # 대기 시간도 단축
-    retry=retry_if_exception_type(Exception)
+    retry=retry_if_exception(lambda error: not isinstance(error, FreeTierQuotaExceeded))
 )
 def get_gemini_embedding(text: str, task_type: str = "SEMANTIC_SIMILARITY") -> Optional[List[float]]:
     client = get_llm_client() # Lazy Load (싱글톤)
@@ -502,6 +540,8 @@ def get_gemini_embedding(text: str, task_type: str = "SEMANTIC_SIMILARITY") -> O
         
     except Exception as e:
         print(f"⚠️ Embed API 실패: {type(e).__name__}: {e}")
+        if FREE_TIER_ONLY and is_quota_error(e):
+            raise FreeTierQuotaExceeded("Gemini 무료 할당량을 모두 사용했습니다.") from e
         rotate_api_key() 
         raise e
 
@@ -535,7 +575,7 @@ async def get_gemini_embedding_async(text: str, task_type: str = "SEMANTIC_SIMIL
 @retry(
     stop=stop_after_attempt(_RETRY_ATTEMPTS),  # Vercel 환경에서 재시도 횟수 제한
     wait=wait_exponential(multiplier=1, min=1, max=5),
-    retry=retry_if_exception_type(Exception)
+    retry=retry_if_exception(lambda error: not isinstance(error, FreeTierQuotaExceeded))
 )
 def generate_content_safe(client, prompt, timeout=8, **kwargs): 
     # client 인자는 이제 LLM_CLIENT (Client 객체)입니다.
@@ -552,6 +592,11 @@ def generate_content_safe(client, prompt, timeout=8, **kwargs):
         config_params['max_output_tokens'] = kwargs.pop('max_output_tokens')
     if 'response_mime_type' in kwargs:
         config_params['response_mime_type'] = kwargs.pop('response_mime_type')
+    if FREE_TIER_ONLY:
+        config_params['max_output_tokens'] = min(
+            int(config_params.get('max_output_tokens', FREE_TIER_MAX_OUTPUT_TOKENS)),
+            FREE_TIER_MAX_OUTPUT_TOKENS,
+        )
         
     config = types.GenerateContentConfig(**config_params)
     
@@ -578,8 +623,10 @@ def generate_content_safe(client, prompt, timeout=8, **kwargs):
             
         except Exception as e:
             error_msg = str(e)
-            if "429" in error_msg or "Quota exceeded" in error_msg:
+            if is_quota_error(error_msg):
                 print(f"🛑 [Quota Limit] 할당량 초과! ({attempt+1}/5)")
+                if FREE_TIER_ONLY:
+                    raise FreeTierQuotaExceeded("Gemini 무료 할당량을 모두 사용했습니다.") from e
                 rotate_api_key() 
                 time.sleep(60) 
                 continue 
@@ -595,6 +642,8 @@ async def call_groq_backup(prompt):
     """
     Gemini가 죽었을 때 호출되는 Groq(Llama3) 백업 함수 (Async)
     """
+    if FREE_TIER_ONLY and not GROQ_FALLBACK_ENABLED:
+        raise FreeTierQuotaExceeded("무료 전용 모드에서는 Groq 자동 전환을 사용하지 않습니다.")
     if not GROQ_CLIENT:
         print("❌ [Groq] 백업 클라이언트가 없습니다. (실패)")
         raise Exception("Gemini Quota Exceeded & No Groq Backup")
@@ -666,8 +715,15 @@ async def generate_content_safe_async(client, prompt, timeout=15, **kwargs):
         config_params['temperature'] = kwargs.pop('temperature')
     if 'top_p' in kwargs:
         config_params['top_p'] = kwargs.pop('top_p')
+    if 'max_output_tokens' in kwargs:
+        config_params['max_output_tokens'] = kwargs.pop('max_output_tokens')
     if 'response_mime_type' in kwargs:
         config_params['response_mime_type'] = kwargs.pop('response_mime_type')
+    if FREE_TIER_ONLY:
+        config_params['max_output_tokens'] = min(
+            int(config_params.get('max_output_tokens', FREE_TIER_MAX_OUTPUT_TOKENS)),
+            FREE_TIER_MAX_OUTPUT_TOKENS,
+        )
         
     config = types.GenerateContentConfig(**config_params)
     
@@ -708,8 +764,10 @@ async def generate_content_safe_async(client, prompt, timeout=15, **kwargs):
             error_msg = str(e)
             print(f"⚠️ [Async API] 호출 실패 ({attempt+1}/{max_retries}): {e}")
             
-            if "429" in error_msg or "Quota exceeded" in error_msg:
+            if is_quota_error(error_msg):
                 consecutive_quota_errors += 1
+                if FREE_TIER_ONLY:
+                    raise FreeTierQuotaExceeded("Gemini 무료 할당량을 모두 사용했습니다.") from e
                 
                 retry_delay = 5 if _IS_VERCEL else 15
                 try:
@@ -732,6 +790,8 @@ async def generate_content_safe_async(client, prompt, timeout=15, **kwargs):
             if attempt < max_retries - 1:
                 await asyncio.sleep(2)
             
+    if FREE_TIER_ONLY:
+        raise FreeTierQuotaExceeded("Gemini 무료 티어에서 요청을 처리하지 못했습니다.")
     print("💀 [System] Gemini 모든 재시도 실패 → Groq 최종 호출")
     return await call_groq_backup(prompt)
 
@@ -886,7 +946,7 @@ async def extract_info_from_question_async(question: str, chat_history: list[dic
         
         # [최적화] Groq 우선 시도 (Async)
         response_text = None
-        if GROQ_CLIENT:
+        if GROQ_FALLBACK_ENABLED and GROQ_CLIENT:
             try:
                 # Groq는 빠르고 무료 티어 제한이 덜함
                 groq_resp = await call_groq_async_simple(prompt, "You are a precise JSON extractor.")
@@ -938,6 +998,8 @@ async def extract_info_from_question_async(question: str, chat_history: list[dic
         else: 
                 return {"error": "Gemini 응답 JSON 없음"}
                 
+    except FreeTierQuotaExceeded:
+        return {"error": "free_tier_quota_exceeded"}
     except Exception as e: 
         return {"error": f"질문 분석 중 오류: {e}"}
 
@@ -2064,6 +2126,11 @@ async def localize_result_pages_async(pages_metadata: List[Dict[str, Any]], lang
             metadata["pre_summary"] = translated_summary
         else:
             summary_targets.append((index, translate_content_simple_async(metadata.get("pre_summary", ""), language)))
+
+    # 인덱싱 때 저장된 다국어 필드는 그대로 사용합니다. 실시간 번역은 카드마다
+    # 추가 토큰을 쓰므로 무료 전용 모드에서는 명시적으로 켜지 않은 한 수행하지 않습니다.
+    if not LIVE_TRANSLATION_ENABLED:
+        return pages_metadata
 
     tasks: List[Any] = []
     if title_targets:
