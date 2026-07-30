@@ -24,6 +24,7 @@ import hashlib
 import asyncio
 import itertools
 import re  # [긴급 수정] 정규식 모듈 추가 (expand_search_query에서 사용)
+import html
 import secrets  # [추가] 보안 토큰 생성용
 import logging  # [추가] 구조화된 로깅
 # redis는 위에서 이미 import됨 (중복 제거)
@@ -390,14 +391,16 @@ elif redis:
             redis_client = redis.from_url(
                 REDIS_HOST,
                 decode_responses=False,
-                socket_timeout=None
+                socket_timeout=3,
+                socket_connect_timeout=3,
             )
             
             # 비동기 클라이언트
             redis_async_client = redis.asyncio.from_url(
                 REDIS_HOST,
                 decode_responses=False,
-                socket_timeout=None
+                socket_timeout=3,
+                socket_connect_timeout=3,
             )
         else:
             # 로컬 Redis - 호스트명만 제공된 경우
@@ -416,7 +419,8 @@ elif redis:
                 port=6379, 
                 db=0, 
                 decode_responses=False, 
-                socket_timeout=None
+                socket_timeout=3,
+                socket_connect_timeout=3,
             )
             
             redis_async_client = redis.asyncio.Redis(
@@ -424,7 +428,8 @@ elif redis:
                 port=6379,
                 db=0,
                 decode_responses=False,
-                socket_timeout=None
+                socket_timeout=3,
+                socket_connect_timeout=3,
             )
         
         print("✅ Utils: Redis Async 연결 설정 완료")
@@ -607,6 +612,7 @@ async def call_groq_backup(prompt):
             top_p=1,
             stream=False,
             stop=None,
+            timeout=10,
         )
         
         # 응답 포맷 맞추기 (Gemini와 호환되게 .text 속성 흉내)
@@ -644,11 +650,12 @@ def call_groq_sync_fast(prompt, system_message="You are a helpful assistant."):
         return None
 
 # --- [최적화] 비동기 콘텐츠 생성 함수 (Client API Async) ---
-async def generate_content_safe_async(client, prompt, timeout=120, **kwargs): 
+async def generate_content_safe_async(client, prompt, timeout=15, **kwargs):
     """
     [성능 최적화] google.genai.Client.aio 사용
     """
-    max_retries = 7
+    # 서버리스 요청이 무한 재시도에 묶이지 않도록 횟수와 대기 시간을 제한합니다.
+    max_retries = 2 if _IS_VERCEL else 3
     consecutive_quota_errors = 0
     
     # Config 구성 (동기 함수와 동일)
@@ -684,11 +691,14 @@ async def generate_content_safe_async(client, prompt, timeout=120, **kwargs):
             
             # [수정] v1.0 Async 호출: client.aio.models.generate_content
             # 주의: client.aio (AsyncClient) 속성을 사용해야 함
-            result = await current_client.aio.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=prompt,
-                config=config,
-                **kwargs
+            result = await asyncio.wait_for(
+                current_client.aio.models.generate_content(
+                    model='gemini-2.5-flash',
+                    contents=prompt,
+                    config=config,
+                    **kwargs,
+                ),
+                timeout=max(1, float(timeout)),
             )
             
             consecutive_quota_errors = 0
@@ -701,11 +711,11 @@ async def generate_content_safe_async(client, prompt, timeout=120, **kwargs):
             if "429" in error_msg or "Quota exceeded" in error_msg:
                 consecutive_quota_errors += 1
                 
-                retry_delay = 60
+                retry_delay = 5 if _IS_VERCEL else 15
                 try:
                     match = re.search(r'retry in ([\d.]+)s', error_msg)
                     if match:
-                        retry_delay = max(1, min(int(float(match.group(1))), 60))
+                        retry_delay = max(1, min(int(float(match.group(1))), 5 if _IS_VERCEL else 15))
                         print(f"📊 [API] 권장 대기 시간: {retry_delay}초")
                 except: pass
                 
@@ -719,7 +729,8 @@ async def generate_content_safe_async(client, prompt, timeout=120, **kwargs):
                 continue 
             
             rotate_api_key()
-            await asyncio.sleep(5) 
+            if attempt < max_retries - 1:
+                await asyncio.sleep(2)
             
     print("💀 [System] Gemini 모든 재시도 실패 → Groq 최종 호출")
     return await call_groq_backup(prompt)
@@ -739,6 +750,7 @@ async def call_groq_async_simple(prompt: str, system_message: str = "You are a h
                 model="llama-3.3-70b-versatile",
                 temperature=0.1,
                 max_tokens=1024,
+                timeout=8,
             )
             return chat_completion.choices[0].message.content
         except Exception as e:
@@ -888,7 +900,7 @@ async def extract_info_from_question_async(question: str, chat_history: list[dic
         if not response_text:
             # lazy load된 client 사용
             client = get_llm_client()
-            response = await generate_content_safe_async(client, prompt, timeout=60, safety_settings=safety_settings)
+            response = await generate_content_safe_async(client, prompt, timeout=12, safety_settings=safety_settings)
             
             # 텍스트 추출
             if hasattr(response, 'text'):
@@ -1470,13 +1482,18 @@ def format_search_results(pages_metadata: list, language: str = "ko") -> str:
     )
 
     for meta in pages_metadata:
-        title = meta.get("title", "제목 없음")
-        category = meta.get("category", "기타")
-        summary_raw = clean_summary_text(meta.get("pre_summary", ""), language)
-        url = meta.get("page_url", "")
+        raw_title = str(meta.get("title", "제목 없음"))
+        raw_category = str(meta.get("category", "기타"))
+        # DB와 번역 모델의 텍스트는 신뢰하지 않고 HTML로 이스케이프합니다.
+        title = html.escape(raw_title)
+        category = html.escape(raw_category)
+        summary_raw = html.escape(clean_summary_text(meta.get("pre_summary", ""), language))
+        raw_url = str(meta.get("page_url", "")).strip()
+        url = raw_url if raw_url.startswith(("https://", "http://")) else ""
+        safe_url = html.escape(url, quote=True)
         
-        copy_text = f"[{category}] {title}\n\n{summary_raw}\n\n🔗 자세히 보기: {url}"
-        safe_copy_text = copy_text.replace('"', '&quot;').replace("'", "&apos;")
+        copy_text = f"[{raw_category}] {raw_title}\n\n{clean_summary_text(meta.get('pre_summary', ''), language)}\n\n🔗 자세히 보기: {url}"
+        safe_copy_text = html.escape(copy_text, quote=True)
 
         html_rows = []
         current_margin_left = "20px"
@@ -1588,7 +1605,7 @@ def format_search_results(pages_metadata: list, language: str = "ko") -> str:
             <h3 class="card-title">{title}</h3>
             <div class="card-body">{html_summary}</div>
             <div class="card-footer">
-                {f'<a href="{url}" target="_blank" class="detail-link">자세히 보기</a>' if url else ''}
+                {f'<a href="{safe_url}" target="_blank" rel="noopener noreferrer" class="detail-link">자세히 보기</a>' if url else ''}
                 <button class="card-share-btn" data-copy="{safe_copy_text}">공유하기</button>
             </div>
         </div>
@@ -1971,11 +1988,7 @@ async def translate_content_simple_async(content: str, language: str = "ko") -> 
 {lang_name} 번역:"""
         
         # Async Generate
-        response = await client.aio.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt,
-            config=types.GenerateContentConfig(temperature=0.0)
-        )
+        response = await generate_content_safe_async(client, prompt, timeout=10, temperature=0.0)
         return response.text.strip() if hasattr(response, 'text') else str(response)
     except Exception as e:
         logger.warning(f"⚠️ Async Translate Error: {e}")
@@ -2005,11 +2018,7 @@ Translate the following welfare service titles into {language_name}.
 3. No explanations.
 """
     try:
-        response = await client.aio.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt,
-            config=types.GenerateContentConfig(temperature=0.0),
-        )
+        response = await generate_content_safe_async(client, prompt, timeout=10, temperature=0.0)
         translated_text = response.text.strip() if hasattr(response, "text") else str(response).strip()
         if translated_text.startswith("```"):
             translated_text = translated_text.split("\n", 1)[1]
@@ -2123,11 +2132,7 @@ async def rerank_search_results_async(question: str, results: List[Dict[str, Any
     if not client: return candidates
 
     try:
-        response = await client.aio.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt,
-            config=types.GenerateContentConfig(temperature=0.0)
-        )
+        response = await generate_content_safe_async(client, prompt, timeout=10, temperature=0.0)
         
         text = response.text.strip()
         # JSON 파싱 (숫자 리스트 추출)
@@ -2191,11 +2196,7 @@ async def expand_search_query_async(question: str) -> list:
         client = get_llm_client()
         if client:
             try:
-                response = await client.aio.models.generate_content(
-                    model='gemini-2.5-flash',
-                    contents=expansion_prompt,
-                    config=types.GenerateContentConfig(temperature=0.0)
-                )
+                response = await generate_content_safe_async(client, expansion_prompt, timeout=8, temperature=0.0)
                 clean_response = re.sub(r'\*+|[:\[\]]', '', response.text)
                 ai_keywords = [k.strip() for k in re.split(r'[,|\n]', clean_response) if k.strip() and len(k.strip()) > 1]
             except Exception as e:

@@ -48,7 +48,9 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 JOB_QUEUE_KEY = "chatbot:job_queue"
 JOB_RESULTS_KEY = "chatbot:job_results"
+JOB_RESULT_KEY_PREFIX = "chatbot:job_result:"
 NOTION_LOG_DB_ID = "2bf8ade502108000b6d6f4ad4d4d52b2"
+NOTION_QUERY_LOGS_ENABLED = os.getenv("ENABLE_NOTION_QUERY_LOGS", "false").lower() == "true"
 JOB_RESULTS_TTL_SECONDS = int(os.getenv("JOB_RESULTS_TTL_SECONDS", "3600"))
 MAX_CONCURRENT_JOBS = max(1, int(os.getenv("MAX_CONCURRENT_JOBS", "2")))
 
@@ -67,7 +69,7 @@ async def process_job_async(job_data: Dict[str, Any]) -> Tuple[str, List[str], i
     target_lang_code = resolve_language(job_data.get("language"), question)
     ui_text = LOCALIZED_UI[target_lang_code]
     
-    print(f"[Worker] job started: {question[:80]}")
+    logger.info("Worker 작업 시작 (질문 글자 수=%s, 언어=%s)", len(question), target_lang_code)
 
     try:
         # [Step 1] 키워드 추출 (Async)
@@ -83,7 +85,7 @@ async def process_job_async(job_data: Dict[str, Any]) -> Tuple[str, List[str], i
         for word in question.split():
             if len(word) > 1 and word not in target_keywords:
                 target_keywords.append(word)
-        logger.info(f"🗝️ [검색 키워드] {target_keywords}")
+        logger.info("검색 키워드 추출 완료 (개수=%s)", len(target_keywords))
 
         # [Step 2] 검색 (Async)
         extracted_info_mock = {"category": ai_category}
@@ -145,7 +147,7 @@ async def process_job_async(job_data: Dict[str, Any]) -> Tuple[str, List[str], i
         
         # 로그 저장 (Notion은 Sync이므로 run_in_executor 사용 권장하나, 여기선 생략하고 Fire & Forget 흉내)
         # 실제로는 별도 Task로 띄울 수 있음
-        if notion and NOTION_LOG_DB_ID:
+        if NOTION_QUERY_LOGS_ENABLED and notion and NOTION_LOG_DB_ID:
             asyncio.create_task(save_notion_log_async(question, ai_category, target_keywords))
                 
         return final_answer, all_page_ids, len(all_page_ids)
@@ -193,11 +195,13 @@ async def handle_job(redis_client, queue_item, semaphore):
         }
         
         # 결과 저장
-        await redis_client.hset(JOB_RESULTS_KEY, job_id, json.dumps(final_result).encode('utf-8'))
-        await redis_client.expire(JOB_RESULTS_KEY, JOB_RESULTS_TTL_SECONDS)
-        # await redis_client.expire(f"job:{job_id}", 3600) # Optional
+        await redis_client.setex(
+            f"{JOB_RESULT_KEY_PREFIX}{job_id}",
+            JOB_RESULTS_TTL_SECONDS,
+            json.dumps(final_result, ensure_ascii=False).encode("utf-8"),
+        )
         
-        logger.info(f"💾 완료: {job_data.get('question')}")
+        logger.info("작업 결과 저장 완료 (job_id=%s)", job_id)
         
     except Exception as e:
         logger.error(f"Handler Error: {e}")
@@ -207,12 +211,11 @@ async def handle_job(redis_client, queue_item, semaphore):
                 "message": "처리 중 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
             }
             try:
-                await redis_client.hset(
-                    JOB_RESULTS_KEY,
-                    job_id,
-                    json.dumps(error_result, ensure_ascii=False).encode('utf-8'),
+                await redis_client.setex(
+                    f"{JOB_RESULT_KEY_PREFIX}{job_id}",
+                    JOB_RESULTS_TTL_SECONDS,
+                    json.dumps(error_result, ensure_ascii=False).encode("utf-8"),
                 )
-                await redis_client.expire(JOB_RESULTS_KEY, JOB_RESULTS_TTL_SECONDS)
             except Exception as store_error:
                 logger.error(f"Failed to save job error result: {store_error}")
     finally:

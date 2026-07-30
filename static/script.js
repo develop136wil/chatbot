@@ -27,8 +27,9 @@ const API_URL_CHAT = '/chat';
 const API_URL_RESULT = '/get_result/';
 const API_URL_FEEDBACK = '/feedback';
 
-let safetyTimeoutId = null;
 let placeholderIntervalId = null;
+let activeRequestController = null;
+let activeRequestSequence = 0;
 
 let currentResultIds = [];
 let currentShownCount = 0;
@@ -268,6 +269,37 @@ const SHOW_MORE_KEYWORDS = new Set([
     "更多", "继续", "下", "下一个", "还有吗"
 ]);
 
+const REQUEST_MESSAGES = {
+    ko: { error: "일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.", timeout: "응답 시간이 초과되었습니다. 다시 시도해 주세요.", listening: "듣는 중...", ready: "무엇이 궁금하신가요?" },
+    en: { error: "A temporary error occurred. Please try again.", timeout: "The response timed out. Please try again.", listening: "Listening...", ready: "What are you looking for?" },
+    vi: { error: "Đã xảy ra lỗi tạm thời. Vui lòng thử lại.", timeout: "Phản hồi đã hết thời gian chờ. Vui lòng thử lại.", listening: "Đang lắng nghe...", ready: "Bạn đang tìm gì?" },
+    zh: { error: "发生临时错误，请稍后重试。", timeout: "响应超时，请重试。", listening: "正在聆听...", ready: "您想了解什么？" }
+};
+
+function getRequestMessages() {
+    return REQUEST_MESSAGES[window.currentLang || 'ko'] || REQUEST_MESSAGES.ko;
+}
+
+function sanitizeAssistantHtml(value) {
+    const html = String(value || '');
+    if (window.DOMPurify) {
+        return window.DOMPurify.sanitize(html, {
+            ADD_ATTR: ['target', 'rel', 'data-copy'],
+            ALLOW_DATA_ATTR: true
+        });
+    }
+    // 정화 라이브러리가 로드되지 않았을 때는 기능보다 안전을 우선합니다.
+    const fallback = document.createElement('div');
+    fallback.textContent = html;
+    return fallback.innerHTML;
+}
+
+function formatAssistantAnswer(answer) {
+    const rawAnswer = String(answer || '');
+    const html = rawAnswer.includes('result-card') ? rawAnswer : marked.parse(rawAnswer);
+    return sanitizeAssistantHtml(html);
+}
+
 // --- 2. 음성 인식 설정 ---
 const isInIframe = window.self !== window.top;
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -480,6 +512,11 @@ async function typeWriterEffect(element, htmlContent) {
 
 async function fetchChatResponse(requestBody) {
     const lang = window.currentLang || 'ko';
+    const requestMessages = getRequestMessages();
+    const requestSequence = ++activeRequestSequence;
+    if (activeRequestController) activeRequestController.abort();
+    const requestController = new AbortController();
+    activeRequestController = requestController;
 
     // [수정] 꿀팁이 없을 경우를 대비한 안전장치
     const langData = UI_TEXT[lang] || UI_TEXT['ko'];
@@ -527,21 +564,26 @@ async function fetchChatResponse(requestBody) {
         }
     }, 7000);
 
+    const requestTimeoutId = setTimeout(() => requestController.abort(), 45000);
+
     try {
         const chatResponse = await fetch(API_URL_CHAT, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(requestBody)
+            body: JSON.stringify(requestBody),
+            signal: requestController.signal
         });
 
         if (!chatResponse.ok) throw new Error(`Server error: ${chatResponse.statusText}`);
         const chatData = await chatResponse.json();
+        clearTimeout(requestTimeoutId);
+        if (requestSequence !== activeRequestSequence) return;
 
         if (chatData.status === 'clarify') {
             clearInterval(messageIntervalId);
 
             // [적용] 타이핑 효과
-            const parsedHTML = marked.parse(chatData.answer);
+            const parsedHTML = formatAssistantAnswer(chatData.answer);
             await typeWriterEffect(loadingElement, parsedHTML);
 
             pendingContext = currentQuestion;
@@ -549,15 +591,9 @@ async function fetchChatResponse(requestBody) {
             updateChatHistory("assistant", chatData.answer);
             setLoadingState(false);
         }
-        else if (chatData.status === 'complete' || chatData.status === 'error') {
+        else if (chatData.status === 'complete') {
             clearInterval(messageIntervalId);
-
-            let finalHTML = "";
-            if (chatData.answer.includes('result-card')) {
-                finalHTML = chatData.answer;
-            } else {
-                finalHTML = marked.parse(chatData.answer);
-            }
+            const finalHTML = formatAssistantAnswer(chatData.answer);
 
             // [적용] 타이핑 효과 (카드면 페이드인, 텍스트면 타이핑)
             await typeWriterEffect(loadingElement, finalHTML);
@@ -572,14 +608,25 @@ async function fetchChatResponse(requestBody) {
             }
             setLoadingState(false);
         }
+        else if (chatData.status === 'error') {
+            clearInterval(messageIntervalId);
+            loadingElement.textContent = chatData.message || requestMessages.error;
+            setLoadingState(false);
+        }
         else if (chatData.job_id) {
             const jobId = chatData.job_id;
             pollForResult(jobId, currentQuestion, loadingElement, messageIntervalId, actionTextEl, tipTextEl);
+        } else {
+            throw new Error('Unexpected response format');
         }
     } catch (error) {
-        loadingElement.innerHTML = `<p>오류 발생: ${error.message}</p>`;
+        if (requestSequence !== activeRequestSequence) return;
+        loadingElement.textContent = error.name === 'AbortError' ? requestMessages.timeout : requestMessages.error;
         if (messageIntervalId) clearInterval(messageIntervalId);
         setLoadingState(false);
+    } finally {
+        clearTimeout(requestTimeoutId);
+        if (requestSequence === activeRequestSequence) activeRequestController = null;
     }
     chatBox.scrollTop = chatBox.scrollHeight;
 }
@@ -602,12 +649,7 @@ async function pollForResult(jobId, question, loadingElement, messageIntervalId,
             if (resultData.status === 'complete') {
                 clearInterval(intervalId); clearInterval(messageIntervalId);
 
-                let finalHTML = "";
-                if (resultData.answer.includes('result-card')) {
-                    finalHTML = resultData.answer;
-                } else {
-                    finalHTML = marked.parse(resultData.answer);
-                }
+                const finalHTML = formatAssistantAnswer(resultData.answer);
 
                 // [적용] 타이핑 효과
                 await typeWriterEffect(loadingElement, finalHTML);
@@ -623,7 +665,7 @@ async function pollForResult(jobId, question, loadingElement, messageIntervalId,
                 setLoadingState(false);
             } else if (resultData.status === 'error') {
                 clearInterval(intervalId); clearInterval(messageIntervalId);
-                loadingElement.innerHTML = `<p>오류: ${resultData.message}</p>`;
+                loadingElement.textContent = resultData.message || getRequestMessages().error;
                 setLoadingState(false);
             }
             chatBox.scrollTop = chatBox.scrollHeight;
@@ -656,11 +698,11 @@ function addMessageToBox(role, content) {
         messageBubble.classList.add('message', role);
     }
 
-    if (content.includes('<div') || content.includes('<p>') || content.includes('<hr>')) {
-        messageBubble.innerHTML = content;
+    if (role === 'assistant') {
+        messageBubble.innerHTML = sanitizeAssistantHtml(content);
     } else {
         const p = document.createElement('p');
-        p.textContent = content;
+        p.textContent = String(content || '');
         messageBubble.appendChild(p);
     }
 
@@ -839,22 +881,13 @@ function setLoadingState(isLoading) {
             userInput.placeholder = `${baseText}${dots}`;
         }, 500);
 
-        if (safetyTimeoutId) clearTimeout(safetyTimeoutId);
-        safetyTimeoutId = setTimeout(() => {
-            console.warn("Response timeout: Force unlocking input.");
-            setLoadingState(false);
-            userInput.placeholder = "Timeout. Please try again.";
-        }, 45000);
-
     } else {
         userInput.disabled = false;
         sendBtn.disabled = false;
         if (micBtn) micBtn.disabled = false;
 
         if (placeholderIntervalId) clearInterval(placeholderIntervalId);
-        if (safetyTimeoutId) clearTimeout(safetyTimeoutId);
         placeholderIntervalId = null;
-        safetyTimeoutId = null;
 
         const placeholders = {
             ko: "무엇이 궁금하신가요?",
@@ -862,7 +895,7 @@ function setLoadingState(isLoading) {
             vi: "Bạn đang tìm gì?",
             zh: "您想了解什么？"
         };
-        userInput.placeholder = placeholders[lang];
+        userInput.placeholder = placeholders[lang] || getRequestMessages().ready;
     }
 }
 
@@ -873,14 +906,21 @@ if (canUseMic) {
     recognition.lang = 'ko-KR';
     recognition.interimResults = false;
     recognition.maxAlternatives = 1;
-    micBtn.addEventListener('click', () => { if (micBtn.classList.contains('listening')) recognition.stop(); else recognition.start(); });
-    recognition.addEventListener('start', () => { micBtn.classList.add('listening'); userInput.placeholder = "Listening..."; });
-    recognition.addEventListener('end', () => { micBtn.classList.remove('listening'); userInput.placeholder = "Ready"; });
+    micBtn.addEventListener('click', () => {
+        if (micBtn.classList.contains('listening')) {
+            recognition.stop();
+        } else {
+            recognition.lang = { ko: 'ko-KR', en: 'en-US', vi: 'vi-VN', zh: 'zh-CN' }[window.currentLang || 'ko'];
+            recognition.start();
+        }
+    });
+    recognition.addEventListener('start', () => { micBtn.classList.add('listening'); userInput.placeholder = getRequestMessages().listening; });
+    recognition.addEventListener('end', () => { micBtn.classList.remove('listening'); userInput.placeholder = getRequestMessages().ready; });
     recognition.addEventListener('result', (event) => { userInput.value = event.results[0][0].transcript; toggleInputButtons(); });
     recognition.addEventListener('error', (event) => {
         micBtn.classList.remove('listening');
-        userInput.placeholder = "Error";
-        setTimeout(() => { userInput.placeholder = "Ready"; }, 2000);
+        userInput.placeholder = getRequestMessages().error;
+        setTimeout(() => { userInput.placeholder = getRequestMessages().ready; }, 2000);
     });
 } else {
     if (micBtn) micBtn.style.display = 'none';

@@ -4,17 +4,18 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport"
-        content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content">
+        content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content">
     <title>영유아 복지정보자료집</title>
     <link rel="icon" href="/static/header-icon.png">
 
     <link rel="preload" href="/static/ONE Mobile POP.ttf" as="font" type="font/ttf" crossorigin>
     <link rel="preload" href="/static/SF-Pro.ttf" as="font" type="font/ttf" crossorigin>
 
-    <link rel="stylesheet" href="/static/style.css?v=2026.07.30">
+    <link rel="stylesheet" href="/static/style.css?v=2026.07.30b">
 
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    <script src="/static/script.js?v=2026.07.30" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
+    <script src="/static/script.js?v=2026.07.30b" defer></script>
 
     <script>
         window.currentLang = 'ko'; 
@@ -94,20 +95,13 @@
             </h2>
         </div>
 
-        <div class="lang-floating-container">
-            <button onclick="changeLanguage('ko')" id="btn-ko" class="lang-btn"><img
-                    src="https://flagcdn.com/w40/kr.png" alt="KR"
-                    style="width:22px;height:16px;border-radius:2px;"></button>
-            <button onclick="changeLanguage('en')" id="btn-en" class="lang-btn inactive"><img
-                    src="https://flagcdn.com/w40/us.png" alt="US"
-                    style="width:22px;height:16px;border-radius:2px;"></button>
-            <button onclick="changeLanguage('vi')" id="btn-vi" class="lang-btn inactive"><img
-                    src="https://flagcdn.com/w40/vn.png" alt="VN"
-                    style="width:22px;height:16px;border-radius:2px;"></button>
-            <button onclick="changeLanguage('zh')" id="btn-zh" class="lang-btn inactive"><img
-                    src="https://flagcdn.com/w40/cn.png" alt="CN"
-                    style="width:22px;height:16px;border-radius:2px;"></button>
+        <div class="lang-floating-container" role="group" aria-label="언어 선택">
+            <button type="button" onclick="changeLanguage('ko')" id="btn-ko" class="lang-btn" aria-label="한국어" aria-pressed="true"><span aria-hidden="true">🇰🇷</span></button>
+            <button type="button" onclick="changeLanguage('en')" id="btn-en" class="lang-btn inactive" aria-label="English" aria-pressed="false"><span aria-hidden="true">🇺🇸</span></button>
+            <button type="button" onclick="changeLanguage('vi')" id="btn-vi" class="lang-btn inactive" aria-label="Tiếng Việt" aria-pressed="false"><span aria-hidden="true">🇻🇳</span></button>
+            <button type="button" onclick="changeLanguage('zh')" id="btn-zh" class="lang-btn inactive" aria-label="中文（简体）" aria-pressed="false"><span aria-hidden="true">🇨🇳</span></button>
         </div>
+        <div id="language-live" class="sr-only" aria-live="polite"></div>
 
         <div class="chat-box" id="chat-box">
             <div class="message-row assistant">
@@ -228,6 +222,9 @@
             if (welcomeEl) welcomeEl.innerHTML = data.welcome;
             if (timeEl) timeEl.innerText = data.time;
             if (inputEl) inputEl.placeholder = data.placeholder;
+            document.documentElement.lang = ({ ko: 'ko', en: 'en', vi: 'vi', zh: 'zh-Hans' })[lang];
+            const languageLive = document.getElementById('language-live');
+            if (languageLive) languageLive.textContent = data.title;
 
             // [신규] 토글 버튼 텍스트 즉시 변경
             updateToggleText();
@@ -258,12 +255,14 @@
                         btn.style.filter = 'none';
                         btn.style.border = '2px solid #E5D1B8';
                         btn.style.boxShadow = '0 0 5px rgba(229, 209, 184, 0.5)';
+                        btn.setAttribute('aria-pressed', 'true');
                     } else {
                         btn.classList.add('inactive');
                         btn.style.opacity = '0.5';
                         btn.style.filter = 'grayscale(100%)';
                         btn.style.border = '1px solid #eee';
                         btn.style.boxShadow = 'none';
+                        btn.setAttribute('aria-pressed', 'false');
                     }
                 }
             });
