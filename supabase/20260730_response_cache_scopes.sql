@@ -11,6 +11,7 @@ create table if not exists public.chatbot_cache_scope_versions (
 );
 
 alter table public.chatbot_cache_scope_versions enable row level security;
+grant usage on schema public to service_role;
 revoke all on table public.chatbot_cache_scope_versions from anon, authenticated;
 grant select, insert, update, delete on table public.chatbot_cache_scope_versions to service_role;
 
@@ -33,4 +34,3 @@ $$;
 
 revoke all on function public.bump_chatbot_cache_scope_versions(text[]) from public;
 grant execute on function public.bump_chatbot_cache_scope_versions(text[]) to service_role;
-

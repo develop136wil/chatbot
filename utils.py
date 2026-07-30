@@ -80,6 +80,7 @@ REDIS_HOST = REDIS_URL or os.getenv("REDIS_HOST", "localhost").strip()
 # Supabase 설정 로드 (혹시 모를 공백 제거)
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "").strip()
+SUPABASE_CACHE_KEY = os.getenv("SUPABASE_CACHE_KEY", "").strip()
 GEMINI_EMBEDDING_TIMEOUT_SECONDS = max(
     1, int(os.getenv("GEMINI_EMBEDDING_TIMEOUT_SECONDS", "15"))
 )
@@ -404,6 +405,16 @@ else:
     supabase = None
     supabase_async = None
 
+# 응답 캐시는 RLS가 적용된 내부 테이블이므로 검색용 키와 분리할 수 있습니다.
+# SUPABASE_CACHE_KEY가 없을 때만 기존 키로 폴백해 이전 배포와 호환합니다.
+response_cache_client = None
+if SUPABASE_URL and (SUPABASE_CACHE_KEY or SUPABASE_KEY):
+    try:
+        response_cache_client = create_client(SUPABASE_URL, SUPABASE_CACHE_KEY or SUPABASE_KEY)
+        print("✅ Utils: Supabase 응답 캐시 클라이언트 초기화 완료")
+    except Exception as error:
+        logger.warning("응답 캐시 클라이언트 초기화 실패: %s", type(error).__name__)
+
 
 def _normalize_cache_question(question: str) -> str:
     """표기 차이만 제거한 정확 일치 캐시용 질문입니다."""
@@ -449,14 +460,14 @@ def _log_response_cache_error_once(action: str, error: Exception) -> None:
 
 async def get_response_cache_async(question: str, language: str) -> Optional[dict]:
     """AI 호출 전에 Supabase의 정확 일치 응답 캐시를 조회합니다."""
-    if not RESPONSE_CACHE_ENABLED or not supabase:
+    if not RESPONSE_CACHE_ENABLED or not response_cache_client:
         return None
     cache_key = build_response_cache_key(question, language)
     now = datetime.now(timezone.utc).isoformat()
 
     def _fetch() -> Optional[dict]:
         result = (
-            supabase.table(RESPONSE_CACHE_TABLE)
+            response_cache_client.table(RESPONSE_CACHE_TABLE)
             .select("response,scope_versions,cache_version")
             .eq("cache_key", cache_key)
             .gt("expires_at", now)
@@ -489,12 +500,12 @@ async def get_response_cache_scope_versions_async(scopes: List[str]) -> Optional
     """캐시가 의존하는 카테고리별 재색인 버전을 조회합니다."""
     if not scopes:
         return {}
-    if not RESPONSE_CACHE_ENABLED or not supabase:
+    if not RESPONSE_CACHE_ENABLED or not response_cache_client:
         return None
 
     def _fetch_versions() -> Dict[str, int]:
         result = (
-            supabase.table(RESPONSE_CACHE_SCOPE_TABLE)
+            response_cache_client.table(RESPONSE_CACHE_SCOPE_TABLE)
             .select("scope,version")
             .in_("scope", scopes)
             .execute()
@@ -513,7 +524,7 @@ async def save_response_cache_async(
     question: str, language: str, response: dict, scopes: Optional[List[str]] = None
 ) -> None:
     """성공한 초기 질문의 전체 응답을 저장합니다. 저장 실패는 사용자 응답을 막지 않습니다."""
-    if not RESPONSE_CACHE_ENABLED or not supabase or not _is_valid_cached_response(response):
+    if not RESPONSE_CACHE_ENABLED or not response_cache_client or not _is_valid_cached_response(response):
         return
     scope_list = sorted(set(scopes or []))
     scope_versions = await get_response_cache_scope_versions_async(scope_list)
@@ -530,7 +541,7 @@ async def save_response_cache_async(
     }
 
     def _save() -> None:
-        supabase.table(RESPONSE_CACHE_TABLE).upsert(record, on_conflict="cache_key").execute()
+        response_cache_client.table(RESPONSE_CACHE_TABLE).upsert(record, on_conflict="cache_key").execute()
 
     try:
         await asyncio.get_running_loop().run_in_executor(None, _save)
@@ -540,7 +551,7 @@ async def save_response_cache_async(
 
 def invalidate_response_cache(client=None) -> bool:
     """재색인 성공 뒤 캐시를 비워 오래된 복지 정보를 반환하지 않게 합니다."""
-    database_client = client or supabase
+    database_client = client or response_cache_client
     if not RESPONSE_CACHE_ENABLED or not database_client:
         return False
     try:
@@ -572,7 +583,7 @@ def bump_response_cache_scope_versions(client, scopes: List[str]) -> bool:
 
 def purge_expired_response_cache(client=None) -> bool:
     """TTL이 지난 행만 정리합니다. TTL은 신선도 판단이 아닌 저장공간 정리용입니다."""
-    database_client = client or supabase
+    database_client = client or response_cache_client
     if not RESPONSE_CACHE_ENABLED or not database_client:
         return False
     try:

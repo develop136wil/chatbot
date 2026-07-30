@@ -13,11 +13,11 @@ create table if not exists public.chatbot_response_cache (
 create index if not exists chatbot_response_cache_expires_at_idx
   on public.chatbot_response_cache (expires_at);
 
--- This table is only accessed by the server with SUPABASE_KEY.
+-- This table is only accessed by the server with SUPABASE_CACHE_KEY.
 -- Do not add anon/authenticated policies: cached responses should not be exposed
 -- directly to a browser through the Supabase REST endpoint.
 alter table public.chatbot_response_cache enable row level security;
 
+grant usage on schema public to service_role;
 revoke all on table public.chatbot_response_cache from anon, authenticated;
 grant select, insert, update, delete on table public.chatbot_response_cache to service_role;
-
