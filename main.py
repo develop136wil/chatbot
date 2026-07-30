@@ -26,6 +26,9 @@ from utils import (
     redis_async_client, # [신규]
     MAIN_ANSWER_CACHE_KEY,
     extract_info_from_question_async, # [신규]
+    LOCALIZED_UI,
+    resolve_language,
+    localize_result_pages_async,
     notion,   
     supabase, 
     # 임시: 비동기 함수들 import 오류 방지
@@ -143,6 +146,7 @@ JOB_RESULTS_KEY = "chatbot:job_results"
 # --- 요청 모델 ---
 class ChatRequest(BaseModel):
     question: str = Field(min_length=1, max_length=MAX_QUESTION_LENGTH)
+    language: str = Field(default="ko", pattern="^(ko|en|vi|zh)$")
     last_result_ids: List[str] = Field(default_factory=list, max_length=MAX_RESULT_IDS)
     shown_count: int = Field(default=0, ge=0, le=MAX_RESULT_IDS)
     chat_history: List[dict] = Field(default_factory=list, max_length=MAX_CHAT_HISTORY_ITEMS)
@@ -293,6 +297,8 @@ async def chat_with_bot(chat_request: ChatRequest, request: Request):
     session = request.session
     question = chat_request.question.strip()
     chat_history = chat_request.chat_history
+    language = resolve_language(chat_request.language, question)
+    ui_text = LOCALIZED_UI[language]
     logger.info(f"받은 질문: {question}")
 
     if not question:
@@ -321,7 +327,7 @@ async def chat_with_bot(chat_request: ChatRequest, request: Request):
 
 
     # 3. '더 보기' 감지
-    show_more_keywords = ["더", "다음", "계속", "more", "next", "다른", "또"]
+    show_more_keywords = ["더", "다음", "계속", "more", "next", "showmore", "continue", "xemthêm", "tiếp", "nữa", "更多", "继续", "下", "下一个"]
     is_keyword_match = any(k in input_no_spaces for k in show_more_keywords)
     is_ai_match = extracted_info.get("intent") == "show_more"
     is_show_more = (is_keyword_match or is_ai_match)
@@ -335,23 +341,24 @@ async def chat_with_bot(chat_request: ChatRequest, request: Request):
             target_ids = chat_request.last_result_ids[start:end]
             
             if not target_ids:
-                return {"status": "complete", "answer": "더 이상 표시할 결과가 없습니다.", "last_result_ids": chat_request.last_result_ids, "total_found": len(chat_request.last_result_ids)}
+                return {"status": "complete", "answer": ui_text["no_more"], "last_result_ids": chat_request.last_result_ids, "total_found": len(chat_request.last_result_ids)}
 
             from utils import get_supabase_pages_by_ids_async, format_search_results
             
             # 비동기 버전으로 Supabase 조회
             next_pages = await get_supabase_pages_by_ids_async(target_ids)
-            formatted_body = format_search_results(next_pages)
+            next_pages = await localize_result_pages_async(next_pages, language)
+            formatted_body = format_search_results(next_pages, language)
             
             remaining = len(chat_request.last_result_ids) - end
 
-            header = f"<p>🔎 <b>추가 정보 ({start+1}~{start+len(next_pages)}번째)</b></p>"
+            header = f"<p>{ui_text['more_header'].format(start=start+1, end=start+len(next_pages))}</p>"
             answer_text = f"{header}<hr>{formatted_body}"
             
             if remaining > 0:
-                answer_text += f"<hr><p>🔍 <b>아직 결과가 더 남아있습니다.</b> '더 보여줘' 또는 '다음'을 입력해 보세요.</p>"
+                answer_text += f"<hr>{ui_text['footer_more']}"
             else:
-                answer_text += "<hr><p>✅ <b>모든 결과를 확인했습니다.</b></p>"
+                answer_text += f"<hr><p>{ui_text['all_results']}</p>"
 
             return {
                 "status": "complete", 
@@ -362,29 +369,36 @@ async def chat_with_bot(chat_request: ChatRequest, request: Request):
             }
         except Exception as e:
             logger.error(f"❌ 더 보기 처리 오류: {e}")
+            return {"status": "complete", "answer": ui_text["system_error"], "last_result_ids": chat_request.last_result_ids, "total_found": len(chat_request.last_result_ids)}
 
     # 4. 의도별 분기 (Small talk 등)
     if extracted_info.get("intent") == "safety_block":
-        return {"status": "complete", "answer": "비속어는 삼가주세요. 😥 복지 정보에 대해 질문해 주세요.", "last_result_ids": [], "total_found": 0}
+        return {"status": "complete", "answer": ui_text["safety_block"], "last_result_ids": [], "total_found": 0}
     
     if extracted_info.get("intent") == "exit":
-        return {"status": "complete", "answer": "네, 알겠습니다. 언제든 다시 찾아주세요! 😊", "last_result_ids": [], "total_found": 0}
+        return {"status": "complete", "answer": ui_text["exit"], "last_result_ids": [], "total_found": 0}
     
     if extracted_info.get("intent") == "reset":
-        return {"status": "complete", "answer": "대화를 초기화했습니다. 무엇이 궁금하신가요? 🤖", "last_result_ids": [], "total_found": 0}
+        return {"status": "complete", "answer": ui_text["reset"], "last_result_ids": [], "total_found": 0}
 
     if extracted_info.get("intent") == "out_of_scope":
-        return {"status": "complete", "answer": "저는 영유아 복지 정보만 알려드릴 수 있어요. 😅", "last_result_ids": [], "total_found": 0}
+        return {"status": "complete", "answer": ui_text["out_of_scope"], "last_result_ids": [], "total_found": 0}
 
     if extracted_info.get("intent") == "small_talk":
-        answer = "안녕하세요! 도봉구 영유아 복지 챗봇입니다. 무엇을 도와드릴까요?"
-        if "고마" in normalized_input: answer = "도움이 되어 기쁩니다! 😊"
+        answer = ui_text["small_talk"]
+        thanks_keywords = {
+            "ko": ("고마", "감사"),
+            "en": ("thank",),
+            "vi": ("cảm ơn", "cam on"),
+            "zh": ("谢谢", "感謝", "感谢"),
+        }
+        if any(keyword in normalized_input for keyword in thanks_keywords[language]):
+            answer = ui_text["thanks"]
         return {"status": "complete", "answer": answer, "last_result_ids": [], "total_found": 0}
 
     if extracted_info.get("intent") == "clarify_category":
-        age_info = extracted_info.get("age")
-        age_text = f"{age_info}개월 아기" if age_info else "자녀"
-        return {"status": "clarify", "answer": f"{age_text}를 위한 어떤 정보가 궁금하신가요?", "options": list(DATABASE_IDS.keys()), "last_result_ids": [], "total_found": 0}
+        category_options = [ui_text["cats"].get(category, category) for category in DATABASE_IDS]
+        return {"status": "clarify", "answer": ui_text["clarify"], "options": category_options, "last_result_ids": [], "total_found": 0}
 
     # 5. 캐시 확인 (Redis Async)
     if not is_redis_down:
@@ -405,6 +419,7 @@ async def chat_with_bot(chat_request: ChatRequest, request: Request):
     job_data = {
         "job_id": job_id, 
         "question": question, 
+        "language": language,
         "chat_history": chat_history,
         "ai_category": ai_category
     }

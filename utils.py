@@ -98,6 +98,93 @@ for i in range(1, 10):
 # 랜덤이 아니므로, 1번->2번->3번... 순서가 보장되어 429 에러를 최소화합니다.
 KEY_CYCLE = itertools.cycle(KEY_POOL) if KEY_POOL else None
 
+SUPPORTED_LANGUAGE_CODES = {"ko", "en", "vi", "zh"}
+
+# 결과 카드와 서버 안내 문구에서 공통으로 사용하는 다국어 표현입니다.
+LOCALIZED_UI = {
+    "ko": {
+        "header_found": "🔎 <b>정보를 찾았습니다!</b>",
+        "footer_more": "<p>🔍 <b>아직 결과가 더 남아있습니다.</b> '더 보여줘' 또는 '다음'을 입력해 보세요.</p>",
+        "more_header": "🔎 <b>추가 정보 ({start}~{end}번째)</b>",
+        "all_results": "✅ <b>모든 결과를 확인했습니다.</b>",
+        "no_more": "더 이상 표시할 결과가 없습니다.",
+        "not_found": "관련 정보를 찾지 못했습니다. 😥",
+        "system_error": "시스템 오류가 발생했습니다. 😥",
+        "safety_block": "비속어는 삼가주세요. 😥 복지 정보에 대해 질문해 주세요.",
+        "exit": "네, 알겠습니다. 언제든 다시 찾아주세요! 😊",
+        "reset": "대화를 초기화했습니다. 무엇이 궁금하신가요? 🤖",
+        "out_of_scope": "저는 영유아 복지 정보만 알려드릴 수 있어요. 😅",
+        "small_talk": "안녕하세요! 도봉구 영유아 복지 챗봇입니다. 무엇을 도와드릴까요?",
+        "thanks": "도움이 되어 기쁩니다! 😊",
+        "clarify": "어떤 복지 정보가 궁금하신가요?",
+        "cats": {},
+    },
+    "en": {
+        "header_found": "🔎 <b>Here is the information I found!</b>",
+        "footer_more": "<p>🔍 <b>There are more results.</b> Try typing 'Show more' or 'Next'.</p>",
+        "more_header": "🔎 <b>Additional information ({start}–{end})</b>",
+        "all_results": "✅ <b>You've viewed all results.</b>",
+        "no_more": "There are no more results to display.",
+        "not_found": "I couldn't find related information. 😥",
+        "system_error": "A system error occurred. Please try again. 😥",
+        "safety_block": "Please avoid offensive language. 😥 Please ask about welfare information.",
+        "exit": "Understood. Please visit again anytime! 😊",
+        "reset": "The conversation has been reset. What would you like to know? 🤖",
+        "out_of_scope": "I can provide information only about infant and child welfare. 😅",
+        "small_talk": "Hello! I am the Dobong-gu infant and child welfare chatbot. How can I help?",
+        "thanks": "I'm glad I could help! 😊",
+        "clarify": "What welfare information would you like to know?",
+        "cats": {"의료/재활": "Medical/Rehab", "교육/보육": "Edu/Care", "가족 지원": "Family Support", "돌봄/양육": "Childcare", "생활 지원": "Living Support", "기타": "Others"},
+    },
+    "vi": {
+        "header_found": "🔎 <b>Tôi đã tìm thấy thông tin!</b>",
+        "footer_more": "<p>🔍 <b>Vẫn còn kết quả.</b> Hãy thử nhập 'Xem thêm' hoặc 'Tiếp theo'.</p>",
+        "more_header": "🔎 <b>Thông tin bổ sung ({start}–{end})</b>",
+        "all_results": "✅ <b>Bạn đã xem tất cả kết quả.</b>",
+        "no_more": "Không còn kết quả để hiển thị.",
+        "not_found": "Không tìm thấy thông tin liên quan. 😥",
+        "system_error": "Đã xảy ra lỗi hệ thống. Vui lòng thử lại. 😥",
+        "safety_block": "Vui lòng tránh dùng ngôn ngữ xúc phạm. 😥 Hãy hỏi về thông tin phúc lợi.",
+        "exit": "Đã hiểu. Hãy quay lại bất cứ lúc nào! 😊",
+        "reset": "Cuộc trò chuyện đã được đặt lại. Bạn muốn tìm hiểu gì? 🤖",
+        "out_of_scope": "Tôi chỉ có thể cung cấp thông tin về phúc lợi cho trẻ sơ sinh và trẻ nhỏ. 😅",
+        "small_talk": "Xin chào! Tôi là chatbot phúc lợi trẻ nhỏ của quận Dobong. Tôi có thể giúp gì cho bạn?",
+        "thanks": "Rất vui vì đã giúp được bạn! 😊",
+        "clarify": "Bạn muốn tìm hiểu thông tin phúc lợi nào?",
+        "cats": {"의료/재활": "Y tế/PHCN", "교육/보육": "Giáo dục/Trông trẻ", "가족 지원": "Hỗ trợ gia đình", "돌봄/양육": "Chăm sóc", "생활 지원": "Hỗ trợ đời sống", "기타": "Khác"},
+    },
+    "zh": {
+        "header_found": "🔎 <b>为您找到以下信息！</b>",
+        "footer_more": "<p>🔍 <b>还有更多结果。</b> 请输入“更多”或“下一个”。</p>",
+        "more_header": "🔎 <b>补充信息（第{start}–{end}项）</b>",
+        "all_results": "✅ <b>您已查看全部结果。</b>",
+        "no_more": "没有更多结果可显示。",
+        "not_found": "未找到相关信息。😥",
+        "system_error": "系统发生错误，请稍后重试。😥",
+        "safety_block": "请避免使用不当语言。😥 请咨询福利信息。",
+        "exit": "好的，随时欢迎您再次访问！😊",
+        "reset": "对话已重置。您想了解什么？🤖",
+        "out_of_scope": "我只能提供婴幼儿福利信息。😅",
+        "small_talk": "您好！我是道峰区婴幼儿福利聊天机器人。有什么可以帮您？",
+        "thanks": "很高兴能帮到您！😊",
+        "clarify": "您想了解哪类福利信息？",
+        "cats": {"의료/재활": "医疗/康复", "교육/보육": "教育/保育", "가족 지원": "家庭支持", "돌봄/양육": "照护/养育", "생활 지원": "生活支持", "기타": "其他"},
+    },
+}
+
+
+def resolve_language(language: str | None = None, question: str = "") -> str:
+    """명시 언어를 우선하고, 이전 클라이언트의 지시문도 호환합니다."""
+    if language in SUPPORTED_LANGUAGE_CODES:
+        return language
+    if "strictly in English" in question:
+        return "en"
+    if "strictly in Vietnamese" in question:
+        return "vi"
+    if "strictly in Chinese" in question:
+        return "zh"
+    return "ko"
+
 print(f"💳 [System] 로드된 Gemini API 키 개수: {len(KEY_POOL)}개")
 
 # --- 2. 전역 변수 ---
@@ -1222,7 +1309,7 @@ async def get_supabase_pages_by_ids_async(page_ids: list) -> list:
 
 # --- 8. 포맷팅 함수 ---
 
-def clean_summary_text(text: str) -> str:
+def clean_summary_text(text: str, language: str = "ko") -> str:
     """
     [수정] 불렛 스타일(* **제목**)을 인식하여
     헤더 앞줄을 띄워주고, 내용 없는 빈 헤더는 삭제합니다.
@@ -1250,7 +1337,12 @@ def clean_summary_text(text: str) -> str:
     # ============================================
     # [Notion 스타일 v3] 필수/조건부 섹션 관리
     # ============================================
-    SHOW_SECTIONS = ["지원 내용", "대상", "신청 방법", "비용", "Support Content", "Target", "How to Apply", "Cost"]
+    SHOW_SECTIONS = [
+        "지원 내용", "대상", "신청 방법", "비용",
+        "Support Content", "Target", "How to Apply", "Cost",
+        "Nội dung hỗ trợ", "Đối tượng", "Cách đăng ký", "Chi phí",
+        "支持内容", "对象", "申请方法", "费用",
+    ]
     HIDE_KEYWORDS = [
         "문의처", "연락처", "전화번호", "문의", # 문의처 숨김
         "신청 기간", "신청 절차", "신청 장소", # 신청 방법으로 통합 유도
@@ -1283,6 +1375,11 @@ def clean_summary_text(text: str) -> str:
             current_section = found_section
             if current_section not in sections:
                 sections[current_section] = []
+            # "**Support Content**: ..."처럼 헤더와 내용이 같은 줄에
+            # 있는 번역 결과도 버리지 않고 카드 본문에 유지합니다.
+            inline_content = stripped.split(found_section, 1)[1].strip(" *:-：")
+            if inline_content and len(inline_content) > 2:
+                sections[current_section].append(inline_content)
         elif current_section and len(sections.get(current_section, [])) < MAX_LINES:
             # 내용 줄 정리
             clean_line = re.sub(r'^[\s\*\-•①-⑮❶-❿0-9\.]+\s*', '', stripped)
@@ -1297,9 +1394,17 @@ def clean_summary_text(text: str) -> str:
             for content in sections[section][:MAX_LINES]:
                 final_lines.append(f"• {content}")
     
-    return "\n".join(final_lines).strip() if final_lines else "요약 정보가 없습니다."
+    if final_lines:
+        return "\n".join(final_lines).strip()
+    empty_messages = {
+        "ko": "요약 정보가 없습니다.",
+        "en": "No summary information is available.",
+        "vi": "Không có thông tin tóm tắt.",
+        "zh": "暂无摘要信息。",
+    }
+    return empty_messages.get(language, empty_messages["ko"])
 
-def format_search_results(pages_metadata: list) -> str:
+def format_search_results(pages_metadata: list, language: str = "ko") -> str:
     cards_html = []
     
     # 1. [기존] Markdown 볼드체 패턴
@@ -1367,7 +1472,7 @@ def format_search_results(pages_metadata: list) -> str:
     for meta in pages_metadata:
         title = meta.get("title", "제목 없음")
         category = meta.get("category", "기타")
-        summary_raw = clean_summary_text(meta.get("pre_summary", ""))
+        summary_raw = clean_summary_text(meta.get("pre_summary", ""), language)
         url = meta.get("page_url", "")
         
         copy_text = f"[{category}] {title}\n\n{summary_raw}\n\n🔗 자세히 보기: {url}"
@@ -1375,6 +1480,7 @@ def format_search_results(pages_metadata: list) -> str:
 
         html_rows = []
         current_margin_left = "20px"
+        last_li_index = -1
         for line in summary_raw.split('\n'):
 
             line = line.strip()
@@ -1874,6 +1980,109 @@ async def translate_content_simple_async(content: str, language: str = "ko") -> 
     except Exception as e:
         logger.warning(f"⚠️ Async Translate Error: {e}")
         return content
+
+
+async def translate_titles_batch_async(titles: List[str], language: str) -> List[str]:
+    """결과 카드 제목을 한 요청으로 번역하고 원래 순서를 보존합니다."""
+    if not titles or language == "ko":
+        return titles
+
+    client = get_llm_client()
+    if not client:
+        return titles
+
+    language_name = {"en": "English", "vi": "Vietnamese", "zh": "Chinese (Simplified)"}.get(language)
+    if not language_name:
+        return titles
+
+    prompt = f"""
+Translate the following welfare service titles into {language_name}.
+[Input Titles]
+{json.dumps(titles, ensure_ascii=False)}
+[Rules]
+1. Return ONLY a valid JSON list of strings.
+2. Maintain the exact same order.
+3. No explanations.
+"""
+    try:
+        response = await client.aio.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(temperature=0.0),
+        )
+        translated_text = response.text.strip() if hasattr(response, "text") else str(response).strip()
+        if translated_text.startswith("```"):
+            translated_text = translated_text.split("\n", 1)[1]
+            if translated_text.endswith("```"):
+                translated_text = translated_text.rsplit("\n", 1)[0]
+        translated = json.loads(translated_text)
+        return translated if isinstance(translated, list) and len(translated) == len(titles) else titles
+    except Exception as e:
+        logger.warning(f"⚠️ 카드 제목 번역 실패: {e}")
+        return titles
+
+
+async def localize_result_pages_async(pages_metadata: List[Dict[str, Any]], language: str) -> List[Dict[str, Any]]:
+    """일반 검색과 '더 보여줘'가 동일한 카드 현지화 경로를 사용하게 합니다."""
+    language = resolve_language(language)
+    if language == "ko" or not pages_metadata:
+        return pages_metadata
+
+    ui_text = LOCALIZED_UI[language]
+    title_targets: List[Tuple[int, str]] = []
+    summary_targets: List[Tuple[int, Any]] = []
+
+    for index, page in enumerate(pages_metadata):
+        if not isinstance(page, dict):
+            continue
+        # 검색 결과는 {metadata: {...}} 형태이고, '더 보여줘' 조회는
+        # metadata 자체를 반환합니다. 두 형식을 모두 지원합니다.
+        metadata = page.get("metadata", page)
+        if not isinstance(metadata, dict):
+            continue
+
+        translated_title = metadata.get(f"title_{language}")
+        if translated_title:
+            metadata["title"] = translated_title
+        else:
+            title_targets.append((index, metadata.get("title", "")))
+
+        original_category = metadata.get("category", "기타")
+        metadata["category"] = ui_text["cats"].get(original_category, original_category)
+
+        translated_summary = metadata.get(f"pre_summary_{language}")
+        if translated_summary:
+            metadata["pre_summary"] = translated_summary
+        else:
+            summary_targets.append((index, translate_content_simple_async(metadata.get("pre_summary", ""), language)))
+
+    tasks: List[Any] = []
+    if title_targets:
+        tasks.append(translate_titles_batch_async([title for _, title in title_targets], language))
+    if summary_targets:
+        tasks.append(asyncio.gather(*[task for _, task in summary_targets]))
+
+    if not tasks:
+        return pages_metadata
+
+    translated_groups = await asyncio.gather(*tasks)
+    group_index = 0
+    if title_targets:
+        translated_titles = translated_groups[group_index]
+        group_index += 1
+        for (page_index, _), translated_title in zip(title_targets, translated_titles):
+            page = pages_metadata[page_index]
+            metadata = page.get("metadata", page)
+            metadata["title"] = translated_title
+
+    if summary_targets:
+        translated_summaries = translated_groups[group_index]
+        for (page_index, _), translated_summary in zip(summary_targets, translated_summaries):
+            page = pages_metadata[page_index]
+            metadata = page.get("metadata", page)
+            metadata["pre_summary"] = translated_summary
+
+    return pages_metadata
 
 # ============================================
 # [Phase 4] Async Functions

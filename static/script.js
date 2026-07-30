@@ -370,6 +370,7 @@ async function handleFormSubmit() {
 
     let requestBody = {
         question: serverQuestion,
+        language: window.currentLang || 'ko',
         last_result_ids: [],
         shown_count: 0,
         chat_history: chatHistory
@@ -407,6 +408,7 @@ async function handleButtonClick(buttonText) {
 
     const requestBody = {
         question: serverQuestion,
+        language: window.currentLang || 'ko',
         last_result_ids: [],
         shown_count: 0,
         chat_history: chatHistory

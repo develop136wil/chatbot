@@ -19,9 +19,9 @@ try:
         expand_search_query_async,   # [Async] 
         rerank_search_results_async, # [Async]
         format_search_results, 
-        get_llm_client,
-        generate_content_safe,
-        translate_content_simple_async, # [Async]
+        localize_result_pages_async,
+        resolve_language,
+        LOCALIZED_UI,
         supabase,
         notion
     )
@@ -33,7 +33,6 @@ except ImportError as e:
     search_supabase_async = None
     expand_search_query_async = None
     rerank_search_results_async = None
-    translate_content_simple_async = None
 
 # 로깅 설정
 logging.basicConfig(
@@ -60,87 +59,13 @@ REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 
 logger.info("[Worker] 클라이언트 초기화 중...")
 
-# [기존 유지] 고정 멘트 다국어 사전
-UI_TRANSLATIONS = {
-    "ko": {
-        "header_found": "🔎 <b>정보를 찾았습니다!</b>",
-        "footer_more": "<p>🔍 <b>아직 결과가 더 남아있습니다.</b> '더 보여줘' 또는 '다음'을 입력해 보세요.</p>",
-        "cats": {} 
-    },
-    "en": {
-        "header_found": "🔎 <b>Here is the information I found!</b>",
-        "footer_more": "<p>🔍 <b>There are more results.</b> Try typing 'Show more' or 'Next'.</p>",
-        "cats": {
-            "의료/재활": "Medical/Rehab", "교육/보육": "Edu/Care", "가족 지원": "Family Support",
-            "돌봄/양육": "Childcare", "생활 지원": "Living Support", "기타": "Others"
-        }
-    },
-    "vi": {
-        "header_found": "🔎 <b>Tôi đã tìm thấy thông tin!</b>",
-        "footer_more": "<p>🔍 <b>Vẫn còn kết quả.</b> Hãy thử nhập 'Xem thêm' hoặc 'Tiếp theo'.</p>",
-        "cats": {
-            "의료/재활": "Y tế/PHCN", "교육/보육": "Giáo dục/Trông trẻ", "가족 지원": "Hỗ trợ gia đình",
-            "돌봄/양육": "Chăm sóc", "생활 지원": "Hỗ trợ đời sống", "기타": "Khác"
-        }
-    },
-    "zh": {
-        "header_found": "🔎 <b>为您找到以下信息！</b>",
-        "footer_more": "<p>🔍 <b>还有更多结果。</b> 请输入“更多”或“下一个”。</p>",
-        "cats": {
-            "의료/재활": "医疗/康复", "교육/보육": "教育/保育", "가족 지원": "家庭支持",
-            "돌봄/양육": "照护/养育", "생활 지원": "生活支持", "기타": "其他"
-        }
-    }
-}
-
-# [★신규] 제목 일괄 번역 함수 (Async Version)
-async def translate_titles_batch_async(titles: List[str], target_lang_code: str) -> List[str]:
-    """ [Async] 제목 일괄 번역 """
-    client = get_llm_client()
-    if not titles or not client: return titles
-    
-    lang_map = {"en": "English", "vi": "Vietnamese", "zh": "Chinese (Simplified)"}
-    target_lang = lang_map.get(target_lang_code, "Korean")
-    
-    prompt = f"""
-    Translate the following list of welfare service titles into {target_lang}.
-    [Input Titles]
-    {json.dumps(titles, ensure_ascii=False)}
-    [Rules]
-    1. Return ONLY a valid JSON list of strings.
-    2. Maintain the exact same order.
-    3. No explanations.
-    """
-    
-    try:
-        from google.genai import types
-        response = await client.aio.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt,
-            config=types.GenerateContentConfig(temperature=0.0)
-        )
-        
-        response_text = response.text.strip() if hasattr(response, 'text') else str(response).strip()
-        
-        # Markdown 제거
-        if response_text.startswith("```"):
-            response_text = response_text.split("\n", 1)[1]
-            if response_text.endswith("```"):
-                response_text = response_text.rsplit("\n", 1)[0]
-        
-        translated_list = json.loads(response_text)
-        if isinstance(translated_list, list) and len(translated_list) == len(titles):
-            return translated_list
-        return titles
-    except Exception as e:
-        logger.warning(f"⚠️ [Async] 제목 일괄 번역 실패: {e}")
-        return titles
-
 # --- 메인 처리 함수 (Async) ---
 async def process_job_async(job_data: Dict[str, Any]) -> Tuple[str, List[str], int]:
     start_time = time.time()
     question = job_data.get("question", "")
     ai_category = job_data.get("ai_category")
+    target_lang_code = resolve_language(job_data.get("language"), question)
+    ui_text = LOCALIZED_UI[target_lang_code]
     
     print(f"[Worker] job started: {question[:80]}")
 
@@ -168,10 +93,10 @@ async def process_job_async(job_data: Dict[str, Any]) -> Tuple[str, List[str], i
             print(f"[Worker] Supabase search completed (results={len(raw_results or [])})")
         except Exception as e:
             logger.error(f"❌ Supabase 검색 실패: {e}")
-            return f"시스템 오류가 발생했습니다. 😥", [], 0
+            return ui_text["system_error"], [], 0
 
         if not raw_results: 
-            return "관련 정보를 찾지 못했습니다. 😥", [], 0
+            return ui_text["not_found"], [], 0
 
         # [Step 3] 중복 제거 (CPU Bound - Fast enough)
         seen_ids = set()
@@ -198,101 +123,16 @@ async def process_job_async(job_data: Dict[str, Any]) -> Tuple[str, List[str], i
         display_count = min(len(reranked_results), 2)
         display_results = reranked_results[:display_count]
         
-        # 언어 감지
-        target_lang_code = "ko" 
-        if "strictly in English" in question: target_lang_code = "en"
-        elif "strictly in Vietnamese" in question: target_lang_code = "vi"
-        elif "strictly in Chinese" in question: target_lang_code = "zh"
-        
-        ui_text = UI_TRANSLATIONS.get(target_lang_code, UI_TRANSLATIONS["ko"])
+        display_results = await localize_result_pages_async(display_results, target_lang_code)
 
-        # ==================================================================
-        # [Async] 다국어 번역 (Parallel Execution)
-        # ==================================================================
-        if target_lang_code != "ko":
-            logger.info(f"🌍 [Worker] 언어 감지: {target_lang_code} -> 병렬 번역 시작")
-            
-            # 1. 제목 번역 준비
-            docs_needing_title = []
-            for i, doc in enumerate(display_results):
-                meta = doc.get("metadata", {})
-                pre_title = meta.get(f"title_{target_lang_code}")
-                if pre_title:
-                    doc["metadata"]["title"] = pre_title
-                else:
-                    docs_needing_title.append((i, meta.get("title", "")))
-
-            # 2. 본문/카테고리 번역 준비 (Coroutine List)
-            summary_tasks = []
-            for i, doc in enumerate(display_results):
-                meta = doc.get("metadata", {})
-                
-                # 카테고리 번역 (즉시 처리)
-                original_category = meta.get("category", "기타")
-                doc["metadata"]["category"] = ui_text["cats"].get(original_category, original_category)
-                
-                # 본문 번역
-                pre_summary_val = meta.get(f"pre_summary_{target_lang_code}")
-                if pre_summary_val:
-                    doc["metadata"]["pre_summary"] = pre_summary_val
-                    summary_tasks.append(None) # Task Placeholder (이미 완료)
-                else:
-                    # Async Task 생성
-                    original_summary = meta.get("pre_summary", "")
-                    summary_tasks.append(
-                        translate_content_simple_async(original_summary, target_lang_code)
-                    )
-
-            # 3. 비동기 병렬 실행 (제목 Batch + 본문 개별)
-            tasks_to_await = []
-            
-            # (A) 제목 Batch
-            if docs_needing_title:
-                titles_to_translate = [t[1] for t in docs_needing_title]
-                tasks_to_await.append(translate_titles_batch_async(titles_to_translate, target_lang_code))
-            else:
-                tasks_to_await.append(None) # Placeholder
-
-            # (B) 본문 Tasks (None 제외)
-            real_summary_tasks = [t for t in summary_tasks if t is not None]
-            if real_summary_tasks:
-                tasks_to_await.append(asyncio.gather(*real_summary_tasks))
-            else:
-                tasks_to_await.append(None) 
-            
-            # ★ Await All ★
-            results_gathered = await asyncio.gather(*[t for t in tasks_to_await if t is not None])
-            
-            # 결과 적용
-            result_idx = 0
-            
-            # (A) 제목 적용
-            if docs_needing_title:
-                translated_titles = results_gathered[result_idx]
-                result_idx += 1
-                for (idx, _), new_title in zip(docs_needing_title, translated_titles):
-                    display_results[idx]["metadata"]["title"] = new_title
-            
-            # (B) 본문 적용
-            if real_summary_tasks:
-                translated_summaries = results_gathered[result_idx]
-                # 원래 인덱스와 매칭
-                summary_result_ptr = 0
-                for i, task in enumerate(summary_tasks):
-                    if task is not None:
-                        display_results[i]["metadata"]["pre_summary"] = translated_summaries[summary_result_ptr]
-                        summary_result_ptr += 1
-
-        # ==================================================================
-        
         all_page_ids = [r.get("metadata", {}).get("page_id") for r in reranked_results]
         final_display_metadata = [res.get("metadata", {}) for res in display_results]
         
         try:
-            body = format_search_results(final_display_metadata)
+            body = format_search_results(final_display_metadata, target_lang_code)
         except Exception as e:
             logger.error(f"❌ 결과 포맷팅 실패: {e}")
-            body = "결과를 표시하는 중 오류가 발생했습니다."
+            body = ui_text["system_error"]
         
         header = ui_text["header_found"]
         final_answer = f"{header}<hr>{body}"
@@ -313,7 +153,7 @@ async def process_job_async(job_data: Dict[str, Any]) -> Tuple[str, List[str], i
     except Exception as e:
         logger.error(f"🔥 작업 처리 중 치명적 오류: {e}")
         traceback.print_exc()
-        return "죄송합니다. 오류가 발생하여 답변을 드릴 수 없습니다. 😥", [], 0
+        return ui_text["system_error"], [], 0
 
 # Notion 로그 저장을 위한 Async Wrapper
 async def save_notion_log_async(question, category, keywords):
