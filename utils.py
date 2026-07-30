@@ -77,6 +77,9 @@ REDIS_HOST = REDIS_URL or os.getenv("REDIS_HOST", "localhost").strip()
 # Supabase 설정 로드 (혹시 모를 공백 제거)
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "").strip()
+GEMINI_EMBEDDING_TIMEOUT_SECONDS = max(
+    1, int(os.getenv("GEMINI_EMBEDDING_TIMEOUT_SECONDS", "15"))
+)
 
 # [핵심] API 키 로테이션 로직 (단수/복수 모두 지원)
 _keys_env = os.getenv("GEMINI_API_KEYS", "") or os.getenv("GEMINI_API_KEY", "")
@@ -419,12 +422,19 @@ async def get_gemini_embedding_async(text: str, task_type: str = "SEMANTIC_SIMIL
     try:
         # 동기 함수를 비동기로 래핑 (genai.Client는 sync-only)
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None, 
-            lambda: get_gemini_embedding(text, task_type)
+        print(f"[Embedding] request started (timeout={GEMINI_EMBEDDING_TIMEOUT_SECONDS}s)")
+        result = await asyncio.wait_for(
+            loop.run_in_executor(
+                None,
+                lambda: get_gemini_embedding(text, task_type)
+            ),
+            timeout=GEMINI_EMBEDDING_TIMEOUT_SECONDS,
         )
+        print("[Embedding] request completed")
         return result
-        
+    except asyncio.TimeoutError:
+        print(f"[Embedding] request timed out after {GEMINI_EMBEDDING_TIMEOUT_SECONDS}s")
+        raise RuntimeError("Gemini embedding request timed out")
     except Exception as e:
         print(f"⚠️ Embed API 실패 (async): {e}")
         raise e

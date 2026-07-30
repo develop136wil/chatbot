@@ -142,12 +142,14 @@ async def process_job_async(job_data: Dict[str, Any]) -> Tuple[str, List[str], i
     question = job_data.get("question", "")
     ai_category = job_data.get("ai_category")
     
-    logger.info(f"▶️ [Async] 작업 시작: {question}")
+    print(f"[Worker] job started: {question[:80]}")
 
     try:
         # [Step 1] 키워드 추출 (Async)
         try:
+            print("[Worker] keyword expansion started")
             target_keywords = await expand_search_query_async(question)
+            print("[Worker] keyword expansion completed")
         except Exception as e:
             logger.error(f"❌ 키워드 확장 실패: {e}")
             target_keywords = []
@@ -161,7 +163,9 @@ async def process_job_async(job_data: Dict[str, Any]) -> Tuple[str, List[str], i
         # [Step 2] 검색 (Async)
         extracted_info_mock = {"category": ai_category}
         try:
+            print("[Worker] Supabase search started")
             raw_results = await search_supabase_async(question, extracted_info_mock, keywords=target_keywords)
+            print(f"[Worker] Supabase search completed (results={len(raw_results or [])})")
         except Exception as e:
             logger.error(f"❌ Supabase 검색 실패: {e}")
             return f"시스템 오류가 발생했습니다. 😥", [], 0
