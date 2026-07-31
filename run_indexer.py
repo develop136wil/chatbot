@@ -47,6 +47,15 @@ SUPABASE_KEY = None
 notion = None
 supabase = None
 
+
+def has_complete_multilingual_metadata(metadata: Dict[str, Any]) -> bool:
+    """영어·중국어·베트남어 제목과 요약이 모두 있을 때만 번역 완료로 봅니다."""
+    return all(
+        isinstance(metadata.get(field), str) and metadata[field].strip()
+        for language in ("en", "zh", "vi")
+        for field in (f"title_{language}", f"pre_summary_{language}")
+    )
+
 def init_clients():
     global NOTION_KEY, SUPABASE_URL, SUPABASE_KEY, notion, supabase
     
@@ -138,7 +147,11 @@ def load_state_from_db() -> Dict[str, Dict[str, str]]:
             category = meta.get("category")
             
             if pid and last_edit:
-                state[pid] = {"last_edited_time": last_edit, "category": category}
+                state[pid] = {
+                    "last_edited_time": last_edit,
+                    "category": category,
+                    "translations_complete": has_complete_multilingual_metadata(meta),
+                }
                 
         logger.info(f"📂 [State] DB에서 {len(state)}개의 기존 인덱싱 상태 로드 완료.")
         return state
@@ -163,6 +176,7 @@ def run_indexing():
     current_state = {}
     total_processed = 0
     total_skipped = 0
+    translation_pending_pages = []
     has_critical_error = False
     changed_categories = set()
     
@@ -224,7 +238,11 @@ def run_indexing():
                 current_state[page_id] = last_edited
 
                 # [비교] DB에 있는 시간과 Notion 시간이 같으면 건너뜀
-                if page_id in prev_state and prev_state[page_id].get("last_edited_time") == last_edited:
+                if (
+                    page_id in prev_state
+                    and prev_state[page_id].get("last_edited_time") == last_edited
+                    and prev_state[page_id].get("translations_complete")
+                ):
                     total_skipped += 1
                     continue
 
@@ -324,6 +342,16 @@ def run_indexing():
                         en_data = transl_dict.get("en", {})
                         zh_data = transl_dict.get("zh", {})
                         vi_data = transl_dict.get("vi", {})
+                        translations_complete = all(
+                            isinstance(data.get(field), str) and data[field].strip()
+                            for data in (en_data, zh_data, vi_data)
+                            for field in ("title", "content")
+                        )
+                        if not translations_complete:
+                            logger.warning(
+                                "⚠️ 다국어 번역 미완료 (다음 실행에서 재시도): %s",
+                                title,
+                            )
 
                         # 2. 임베딩
                         embedding = get_gemini_embedding(
@@ -351,7 +379,8 @@ def run_indexing():
                             "title_zh": zh_data.get("title", ""),
                             "pre_summary_zh": zh_data.get("content", ""),
                             "title_vi": vi_data.get("title", ""),
-                            "pre_summary_vi": vi_data.get("content", "")
+                            "pre_summary_vi": vi_data.get("content", ""),
+                            "translations_complete": translations_complete,
                         }
 
                         records_to_insert.append({
@@ -369,6 +398,8 @@ def run_indexing():
                         supabase.table("site_pages").upsert(records_to_insert, on_conflict="page_id").execute()
                         total_processed += 1
                         changed_categories.add(category_name)
+                        if not metadata.get("translations_complete"):
+                            translation_pending_pages.append(title)
                         
                         # [변경] DB 상태 관리는 upsert 시 즉시 반영되므로 별도 save_state 불필요
                         # 로깅만 수행
@@ -413,7 +444,18 @@ def run_indexing():
             bump_response_cache_scope_versions(supabase, list(changed_categories))
         # 성공 알림 (옵션: 너무 자주 오면 귀찮으므로 주석 처리하거나, 요약 리포트로 발송 가능)
         # send_email_alert("[Chatbot Indexer] 인덱싱 완료", f"총 {total_processed}건 업데이트됨.")
-        logger.info(f"\n[Indexer] ✨ 완료. (업데이트: {total_processed}, 건너뜀: {total_skipped})")
+        if translation_pending_pages:
+            logger.warning(
+                "[Indexer] 다국어 번역 보류 %s건: 다음 실행에서 재시도합니다. (%s)",
+                len(translation_pending_pages),
+                ", ".join(translation_pending_pages[:5]),
+            )
+        logger.info(
+            "\n[Indexer] ✨ 완료. (업데이트: %s, 건너뜀: %s, 다국어 보류: %s)",
+            total_processed,
+            total_skipped,
+            len(translation_pending_pages),
+        )
 
 if __name__ == "__main__":
     run_indexing()

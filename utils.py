@@ -1151,7 +1151,8 @@ def translate_content_multilingual_sync(title: str, content: str) -> dict:
                 json_start = resp.find('{')
                 json_end = resp.rfind('}') + 1
                 if json_start != -1 and json_end != -1:
-                    return json.loads(resp[json_start:json_end])
+                    # 모델이 문자열 안에 줄바꿈을 이스케이프하지 않아도 복구합니다.
+                    return json.loads(resp[json_start:json_end], strict=False)
         except Exception as e:
             print(f"⚠️ Groq Translation Failed: {e}")
 
@@ -1164,7 +1165,7 @@ def translate_content_multilingual_sync(title: str, content: str) -> dict:
             json_start = text.find('{')
             json_end = text.rfind('}') + 1
             if json_start != -1 and json_end != -1:
-                return json.loads(text[json_start:json_end])
+                return json.loads(text[json_start:json_end], strict=False)
         except Exception as e:
             print(f"⚠️ Gemini Translation Failed: {e}")
             
