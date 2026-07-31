@@ -81,6 +81,7 @@ REDIS_HOST = REDIS_URL or os.getenv("REDIS_HOST", "localhost").strip()
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "").strip()
 SUPABASE_CACHE_KEY = os.getenv("SUPABASE_CACHE_KEY", "").strip()
+RESPONSE_CACHE_KEY_SOURCE = "SUPABASE_CACHE_KEY" if SUPABASE_CACHE_KEY else "SUPABASE_KEY (fallback)"
 GEMINI_EMBEDDING_TIMEOUT_SECONDS = max(
     1, int(os.getenv("GEMINI_EMBEDDING_TIMEOUT_SECONDS", "15"))
 )
@@ -411,7 +412,7 @@ response_cache_client = None
 if SUPABASE_URL and (SUPABASE_CACHE_KEY or SUPABASE_KEY):
     try:
         response_cache_client = create_client(SUPABASE_URL, SUPABASE_CACHE_KEY or SUPABASE_KEY)
-        print("✅ Utils: Supabase 응답 캐시 클라이언트 초기화 완료")
+        print(f"✅ Utils: Supabase 응답 캐시 클라이언트 초기화 완료 ({RESPONSE_CACHE_KEY_SOURCE})")
     except Exception as error:
         logger.warning("응답 캐시 클라이언트 초기화 실패: %s", type(error).__name__)
 
@@ -455,7 +456,14 @@ def _log_response_cache_error_once(action: str, error: Exception) -> None:
     global _response_cache_error_logged
     if not _response_cache_error_logged:
         _response_cache_error_logged = True
-        logger.warning("응답 캐시 %s을(를) 건너뜁니다: %s", action, type(error).__name__)
+        status = getattr(error, "code", None) or getattr(error, "status_code", None) or "unknown"
+        logger.warning(
+            "응답 캐시 %s을(를) 건너뜁니다: %s (키=%s, 상태=%s)",
+            action,
+            type(error).__name__,
+            RESPONSE_CACHE_KEY_SOURCE,
+            status,
+        )
 
 
 async def get_response_cache_async(question: str, language: str) -> Optional[dict]:
@@ -2170,6 +2178,10 @@ async def search_supabase_async(question: str, extracted_info: dict, keywords: l
                 print(f"⚠️ [Age Filter] 필터링 결과가 0개여서 원본 유지")
 
         return results
+
+    # 카테고리 검색만으로 충분한 결과가 나온 경우에도 결과를 반환합니다.
+    # 이전에는 이 경로가 암묵적으로 None을 반환해 정상 검색 결과가 사라졌습니다.
+    return results
 
 # --- 6. 헬퍼 함수들 ---
 
