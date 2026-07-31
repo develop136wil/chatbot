@@ -388,7 +388,6 @@ async function handleFormSubmit() {
     pendingContext = null;
     currentQuestion = question;
     clearButtons();
-    updateChatHistory("user", question);
     setLoadingState(true);
 
     let serverQuestion = question;
@@ -405,7 +404,9 @@ async function handleFormSubmit() {
         language: window.currentLang || 'ko',
         last_result_ids: [],
         shown_count: 0,
-        chat_history: chatHistory
+        // 현재 질문은 question으로 별도 전달합니다. 이전 대화만 문맥으로 보냅니다.
+        // 그래야 새 대화의 정확 일치 질문은 공유 응답 캐시를 사용할 수 있습니다.
+        chat_history: [...chatHistory]
     };
 
     if (SHOW_MORE_KEYWORDS.has(question.toLowerCase())) {
@@ -413,6 +414,7 @@ async function handleFormSubmit() {
         requestBody.shown_count = currentShownCount;
     }
 
+    updateChatHistory("user", question);
     addMessageToBox('user', question);
     userInput.value = '';
     toggleInputButtons();
@@ -426,7 +428,6 @@ async function handleButtonClick(buttonText) {
     clearButtons();
     addMessageToBox('user', newQuestion);
     currentQuestion = newQuestion;
-    updateChatHistory("user", newQuestion);
     setLoadingState(true);
 
     let serverQuestion = newQuestion;
@@ -443,8 +444,9 @@ async function handleButtonClick(buttonText) {
         language: window.currentLang || 'ko',
         last_result_ids: [],
         shown_count: 0,
-        chat_history: chatHistory
+        chat_history: [...chatHistory]
     };
+    updateChatHistory("user", newQuestion);
     await fetchChatResponse(requestBody);
 }
 
