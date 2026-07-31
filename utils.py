@@ -412,6 +412,11 @@ response_cache_client = None
 if SUPABASE_URL and (SUPABASE_CACHE_KEY or SUPABASE_KEY):
     try:
         response_cache_client = create_client(SUPABASE_URL, SUPABASE_CACHE_KEY or SUPABASE_KEY)
+        # Supabase의 새 sb_secret 키는 apikey 헤더로만 보내야 합니다.
+        # supabase-py는 기본적으로 Authorization: Bearer에도 같은 값을 넣으므로,
+        # Secret key일 때만 이를 제거해 PostgREST의 JWT 검증 401을 막습니다.
+        if SUPABASE_CACHE_KEY.startswith("sb_secret_"):
+            response_cache_client.options.headers.pop("Authorization", None)
         print(f"✅ Utils: Supabase 응답 캐시 클라이언트 초기화 완료 ({RESPONSE_CACHE_KEY_SOURCE})")
     except Exception as error:
         logger.warning("응답 캐시 클라이언트 초기화 실패: %s", type(error).__name__)
