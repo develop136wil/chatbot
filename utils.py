@@ -28,6 +28,7 @@ import html
 import unicodedata
 import secrets  # [추가] 보안 토큰 생성용
 import logging  # [추가] 구조화된 로깅
+import httpx
 from datetime import datetime, timedelta, timezone
 # redis는 위에서 이미 import됨 (중복 제거)
 import warnings
@@ -81,7 +82,11 @@ REDIS_HOST = REDIS_URL or os.getenv("REDIS_HOST", "localhost").strip()
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "").strip()
 SUPABASE_CACHE_KEY = os.getenv("SUPABASE_CACHE_KEY", "").strip()
+if len(SUPABASE_CACHE_KEY) >= 2 and SUPABASE_CACHE_KEY[0] == SUPABASE_CACHE_KEY[-1] in {"'", '"'}:
+    # Vercel UI에 실수로 포함된 바깥쪽 따옴표는 API 키 일부가 아닙니다.
+    SUPABASE_CACHE_KEY = SUPABASE_CACHE_KEY[1:-1].strip()
 RESPONSE_CACHE_KEY_SOURCE = "SUPABASE_CACHE_KEY" if SUPABASE_CACHE_KEY else "SUPABASE_KEY (fallback)"
+RESPONSE_CACHE_USE_DIRECT_REST = SUPABASE_CACHE_KEY.startswith("sb_secret_")
 GEMINI_EMBEDDING_TIMEOUT_SECONDS = max(
     1, int(os.getenv("GEMINI_EMBEDDING_TIMEOUT_SECONDS", "15"))
 )
@@ -411,13 +416,12 @@ else:
 response_cache_client = None
 if SUPABASE_URL and (SUPABASE_CACHE_KEY or SUPABASE_KEY):
     try:
-        response_cache_client = create_client(SUPABASE_URL, SUPABASE_CACHE_KEY or SUPABASE_KEY)
-        # Supabase의 새 sb_secret 키는 apikey 헤더로만 보내야 합니다.
-        # supabase-py는 기본적으로 Authorization: Bearer에도 같은 값을 넣으므로,
-        # Secret key일 때만 이를 제거해 PostgREST의 JWT 검증 401을 막습니다.
-        if SUPABASE_CACHE_KEY.startswith("sb_secret_"):
-            response_cache_client.options.headers.pop("Authorization", None)
-        print(f"✅ Utils: Supabase 응답 캐시 클라이언트 초기화 완료 ({RESPONSE_CACHE_KEY_SOURCE})")
+        if RESPONSE_CACHE_USE_DIRECT_REST:
+            # 새 Secret key는 아래의 전용 REST 요청에서 apikey 헤더만 사용합니다.
+            print("✅ Utils: Supabase 응답 캐시 REST 초기화 완료 (SUPABASE_CACHE_KEY, apikey only)")
+        else:
+            response_cache_client = create_client(SUPABASE_URL, SUPABASE_CACHE_KEY or SUPABASE_KEY)
+            print(f"✅ Utils: Supabase 응답 캐시 클라이언트 초기화 완료 ({RESPONSE_CACHE_KEY_SOURCE})")
     except Exception as error:
         logger.warning("응답 캐시 클라이언트 초기화 실패: %s", type(error).__name__)
 
@@ -471,9 +475,37 @@ def _log_response_cache_error_once(action: str, error: Exception) -> None:
         )
 
 
+def _response_cache_is_available() -> bool:
+    return bool(RESPONSE_CACHE_USE_DIRECT_REST or response_cache_client)
+
+
+async def _secret_cache_rest_request_async(
+    method: str,
+    table: str,
+    *,
+    params: Optional[Dict[str, str]] = None,
+    payload: Optional[dict] = None,
+) -> list:
+    """새 Supabase Secret key를 apikey 헤더 단독으로 보내는 내부 REST 호출입니다."""
+    if not SUPABASE_URL or not SUPABASE_CACHE_KEY:
+        raise RuntimeError("Supabase cache key is not configured")
+    headers = {
+        "apikey": SUPABASE_CACHE_KEY,
+        "Accept": "application/json",
+    }
+    if payload is not None:
+        headers["Content-Type"] = "application/json"
+        headers["Prefer"] = "resolution=merge-duplicates,return=minimal"
+    url = f"{SUPABASE_URL.rstrip('/')}/rest/v1/{table}"
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        result = await client.request(method, url, headers=headers, params=params, json=payload)
+    result.raise_for_status()
+    return result.json() if result.content else []
+
+
 async def get_response_cache_async(question: str, language: str) -> Optional[dict]:
     """AI 호출 전에 Supabase의 정확 일치 응답 캐시를 조회합니다."""
-    if not RESPONSE_CACHE_ENABLED or not response_cache_client:
+    if not RESPONSE_CACHE_ENABLED or not _response_cache_is_available():
         return None
     cache_key = build_response_cache_key(question, language)
     now = datetime.now(timezone.utc).isoformat()
@@ -491,7 +523,20 @@ async def get_response_cache_async(question: str, language: str) -> Optional[dic
         return data[0] if data else None
 
     try:
-        cached_row = await asyncio.get_running_loop().run_in_executor(None, _fetch)
+        if RESPONSE_CACHE_USE_DIRECT_REST:
+            data = await _secret_cache_rest_request_async(
+                "GET",
+                RESPONSE_CACHE_TABLE,
+                params={
+                    "select": "response,scope_versions,cache_version",
+                    "cache_key": f"eq.{cache_key}",
+                    "expires_at": f"gt.{now}",
+                    "limit": "1",
+                },
+            )
+            cached_row = data[0] if data else None
+        else:
+            cached_row = await asyncio.get_running_loop().run_in_executor(None, _fetch)
         if not cached_row or cached_row.get("cache_version") != RESPONSE_CACHE_SCHEMA_VERSION:
             return None
         response = cached_row.get("response")
@@ -513,7 +558,7 @@ async def get_response_cache_scope_versions_async(scopes: List[str]) -> Optional
     """캐시가 의존하는 카테고리별 재색인 버전을 조회합니다."""
     if not scopes:
         return {}
-    if not RESPONSE_CACHE_ENABLED or not response_cache_client:
+    if not RESPONSE_CACHE_ENABLED or not _response_cache_is_available():
         return None
 
     def _fetch_versions() -> Dict[str, int]:
@@ -526,7 +571,18 @@ async def get_response_cache_scope_versions_async(scopes: List[str]) -> Optional
         return {row["scope"]: int(row["version"]) for row in (result.data or [])}
 
     try:
-        loaded_versions = await asyncio.get_running_loop().run_in_executor(None, _fetch_versions)
+        if RESPONSE_CACHE_USE_DIRECT_REST:
+            loaded_rows = await _secret_cache_rest_request_async(
+                "GET",
+                RESPONSE_CACHE_SCOPE_TABLE,
+                params={
+                    "select": "scope,version",
+                    "scope": f"in.({','.join(scopes)})",
+                },
+            )
+            loaded_versions = {row["scope"]: int(row["version"]) for row in loaded_rows}
+        else:
+            loaded_versions = await asyncio.get_running_loop().run_in_executor(None, _fetch_versions)
         return {scope: loaded_versions.get(scope, 0) for scope in scopes}
     except Exception as error:
         _log_response_cache_error_once("버전 조회", error)
@@ -537,7 +593,7 @@ async def save_response_cache_async(
     question: str, language: str, response: dict, scopes: Optional[List[str]] = None
 ) -> None:
     """성공한 초기 질문의 전체 응답을 저장합니다. 저장 실패는 사용자 응답을 막지 않습니다."""
-    if not RESPONSE_CACHE_ENABLED or not response_cache_client or not _is_valid_cached_response(response):
+    if not RESPONSE_CACHE_ENABLED or not _response_cache_is_available() or not _is_valid_cached_response(response):
         return
     scope_list = sorted(set(scopes or []))
     scope_versions = await get_response_cache_scope_versions_async(scope_list)
@@ -557,7 +613,15 @@ async def save_response_cache_async(
         response_cache_client.table(RESPONSE_CACHE_TABLE).upsert(record, on_conflict="cache_key").execute()
 
     try:
-        await asyncio.get_running_loop().run_in_executor(None, _save)
+        if RESPONSE_CACHE_USE_DIRECT_REST:
+            await _secret_cache_rest_request_async(
+                "POST",
+                RESPONSE_CACHE_TABLE,
+                params={"on_conflict": "cache_key"},
+                payload=record,
+            )
+        else:
+            await asyncio.get_running_loop().run_in_executor(None, _save)
     except Exception as error:
         _log_response_cache_error_once("저장", error)
 
