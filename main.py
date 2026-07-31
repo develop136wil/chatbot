@@ -34,6 +34,7 @@ from utils import (
     get_supabase_pages_by_ids_async,
     format_search_results,
     FreeTierQuotaExceeded,
+    build_response_cache_key,
     get_response_cache_async,
     save_response_cache_async,
     notion,   
@@ -193,6 +194,30 @@ def reserve_free_tier_request(session: dict) -> None:
 def is_initial_cacheable_request(chat_request: ChatRequest) -> bool:
     """이전 대화나 '더 보기' 상태에 의존하지 않는 질문만 공유 캐시합니다."""
     return not chat_request.chat_history and not chat_request.last_result_ids and chat_request.shown_count == 0
+
+
+def is_response_cache_read_eligible(chat_request: ChatRequest, question: str, language: str) -> bool:
+    """새 질문 또는 직전 질문을 그대로 반복한 경우에만 공유 캐시를 읽습니다."""
+    if chat_request.last_result_ids or chat_request.shown_count != 0:
+        return False
+    if not chat_request.chat_history:
+        return True
+
+    # 대화 문맥은 보존하되, 바로 직전 사용자 질문을 완전히 반복한 경우는
+    # 같은 독립 답변을 재사용해 토큰을 절약합니다.
+    history = chat_request.chat_history
+    last_user_index = next(
+        (index for index in range(len(history) - 1, -1, -1) if history[index].get("role") == "user"),
+        None,
+    )
+    if last_user_index is None or last_user_index != len(history) - 2:
+        return False
+    if history[-1].get("role") != "assistant":
+        return False
+    previous_question = history[last_user_index].get("content")
+    if not isinstance(previous_question, str) or not previous_question.strip():
+        return False
+    return build_response_cache_key(previous_question, language) == build_response_cache_key(question, language)
 
 
 async def cache_response_if_eligible(
@@ -417,7 +442,7 @@ async def chat_with_bot(chat_request: ChatRequest, request: Request):
         return await build_show_more_response(chat_request, language)
 
     # 정확 일치 캐시는 의도 분석·임베딩·LLM 호출보다 먼저 확인합니다.
-    if is_initial_cacheable_request(chat_request):
+    if is_response_cache_read_eligible(chat_request, question, language):
         cached_response = await get_response_cache_async(question, language)
         if cached_response:
             logger.info("♻️ [Response Cache] Hit")
