@@ -1102,10 +1102,20 @@ async def call_groq_async_simple(prompt: str, system_message: str = "You are a h
     return None
 
 # --- [신규] Groq Sync 호출 함수 (run_indexer.py 등 동기 환경용) ---
-def call_groq_sync_robust(prompt: str, system_message: str = "You are a helpful assistant.") -> Optional[str]:
+def call_groq_sync_robust(
+    prompt: str,
+    system_message: str = "You are a helpful assistant.",
+    *,
+    max_tokens: int = 2048,
+    json_mode: bool = False,
+) -> Optional[str]:
     """Helper for sync Groq calls"""
     if not GROQ_SYNC_CLIENT: return None
     try:
+        request_options = {}
+        if json_mode:
+            # Groq JSON Object Mode로 형식 오류를 줄이고 유효한 JSON만 요청합니다.
+            request_options["response_format"] = {"type": "json_object"}
         completion = GROQ_SYNC_CLIENT.chat.completions.create(
             messages=[
                 {"role": "system", "content": system_message},
@@ -1113,8 +1123,12 @@ def call_groq_sync_robust(prompt: str, system_message: str = "You are a helpful 
             ],
             model="llama-3.3-70b-versatile",
             temperature=0.1,
-            max_tokens=2048, # 번역은 길 수 있으므로 넉넉하게
+            max_tokens=max_tokens,
+            **request_options,
         )
+        if json_mode and getattr(completion.choices[0], "finish_reason", None) == "length":
+            print("⚠️ Groq Translation Failed: output truncated")
+            return None
         return completion.choices[0].message.content
     except Exception as e:
         print(f"⚠️ Groq Sync Error: {e}")
@@ -1145,7 +1159,12 @@ def translate_content_multilingual_sync(title: str, content: str) -> dict:
     # 1. Groq 시도
     if GROQ_SYNC_CLIENT:
         try:
-            resp = call_groq_sync_robust(prompt, "You are a JSON translator.")
+            resp = call_groq_sync_robust(
+                prompt,
+                "You are a JSON translator. Return a complete JSON object only.",
+                max_tokens=4096,
+                json_mode=True,
+            )
             if resp:
                  # JSON 추출
                 json_start = resp.find('{')
@@ -1160,7 +1179,13 @@ def translate_content_multilingual_sync(title: str, content: str) -> dict:
     client = get_llm_client()
     if client:
         try:
-            resp = generate_content_safe(client, prompt, timeout=40)
+            resp = generate_content_safe(
+                client,
+                prompt,
+                timeout=40,
+                response_mime_type="application/json",
+                max_output_tokens=4096,
+            )
             text = resp.text if hasattr(resp, 'text') else str(resp)
             json_start = text.find('{')
             json_end = text.rfind('}') + 1
