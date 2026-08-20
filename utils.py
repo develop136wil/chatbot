@@ -102,6 +102,8 @@ def _env_flag(name: str, default: bool = False) -> bool:
 FREE_TIER_ONLY = _env_flag("FREE_TIER_ONLY", True)
 GROQ_FALLBACK_ENABLED = (not FREE_TIER_ONLY) or _env_flag("ALLOW_FREE_TIER_GROQ_FALLBACK", True)
 LIVE_TRANSLATION_ENABLED = (not FREE_TIER_ONLY) or _env_flag("ALLOW_LIVE_TRANSLATION", False)
+GROQ_FAST_MODEL = os.getenv("GROQ_FAST_MODEL", "openai/gpt-oss-20b").strip()
+GROQ_QUALITY_MODEL = os.getenv("GROQ_QUALITY_MODEL", "openai/gpt-oss-120b").strip()
 FREE_TIER_MAX_OUTPUT_TOKENS = max(64, min(int(os.getenv("FREE_TIER_MAX_OUTPUT_TOKENS", "400")), 1024))
 RESPONSE_CACHE_ENABLED = _env_flag("ENABLE_RESPONSE_CACHE", True)
 RESPONSE_CACHE_TABLE = "chatbot_response_cache"
@@ -391,7 +393,7 @@ if GROQ_FALLBACK_ENABLED and GROQ_API_KEY and AsyncGroq and Groq:
     try:
         GROQ_CLIENT = AsyncGroq(api_key=GROQ_API_KEY)
         GROQ_SYNC_CLIENT = Groq(api_key=GROQ_API_KEY)
-        print("✅ Utils: Groq (Llama-3.3) 하이브리드 클라이언트 초기화 완료")
+        print(f"✅ Utils: Groq 하이브리드 클라이언트 초기화 완료 (fast={GROQ_FAST_MODEL}, quality={GROQ_QUALITY_MODEL})")
     except Exception as e:
         print(f"⚠️ Utils: Groq 초기화 실패: {e}")
 else:
@@ -919,7 +921,7 @@ def generate_content_safe(client, prompt, timeout=8, **kwargs):
 # --- [신규] Groq 백업 호출 함수 (모델 업데이트됨) ---
 async def call_groq_backup(prompt):
     """
-    Gemini가 죽었을 때 호출되는 Groq(Llama3) 백업 함수 (Async)
+    Gemini가 실패했을 때 호출되는 Groq 품질 모델 백업 함수 (Async)
     """
     if FREE_TIER_ONLY and not GROQ_FALLBACK_ENABLED:
         raise FreeTierQuotaExceeded("무료 전용 모드에서는 Groq 자동 전환을 사용하지 않습니다.")
@@ -927,10 +929,10 @@ async def call_groq_backup(prompt):
         print("❌ [Groq] 백업 클라이언트가 없습니다. (실패)")
         raise Exception("Gemini Quota Exceeded & No Groq Backup")
         
-    print("🚑 [Groq] Llama-3.3-70b 백업 시스템 가동!")
+    print(f"🚑 [Groq] 품질 백업 시스템 가동 (model={GROQ_QUALITY_MODEL})")
     try:
         completion = await GROQ_CLIENT.chat.completions.create(
-            model="llama-3.3-70b-versatile", # [수정] 백업용은 고성능 70B 모델 사용
+            model=GROQ_QUALITY_MODEL,
             messages=[
                 {"role": "system", "content": "You are a helpful assistant. Answer strictly in JSON if requested."},
                 {"role": "user", "content": prompt}
@@ -1077,21 +1079,28 @@ async def generate_content_safe_async(client, prompt, timeout=15, **kwargs):
     return await call_groq_backup(prompt)
 
 # --- [신규] Groq Async 호출 함수 (utils 내부용) ---
-async def call_groq_async_simple(prompt: str, system_message: str = "You are a helpful assistant.", max_retries: int = 2) -> Optional[str]:
+async def call_groq_async_simple(
+    prompt: str,
+    system_message: str = "You are a helpful assistant.",
+    max_retries: int = 2,
+    json_mode: bool = False,
+) -> Optional[str]:
     """Helper for async Groq calls with retry"""
     if not GROQ_CLIENT: return None
     
     for attempt in range(max_retries):
         try:
+            request_options = {"response_format": {"type": "json_object"}} if json_mode else {}
             chat_completion = await GROQ_CLIENT.chat.completions.create(
                 messages=[
                     {"role": "system", "content": system_message},
                     {"role": "user", "content": prompt},
                 ],
-                model="llama-3.3-70b-versatile",
+                model=GROQ_FAST_MODEL,
                 temperature=0.1,
                 max_tokens=1024,
                 timeout=8,
+                **request_options,
             )
             return chat_completion.choices[0].message.content
         except Exception as e:
@@ -1121,7 +1130,7 @@ def call_groq_sync_robust(
                 {"role": "system", "content": system_message},
                 {"role": "user", "content": prompt}
             ],
-            model="llama-3.3-70b-versatile",
+            model=GROQ_QUALITY_MODEL,
             temperature=0.1,
             max_tokens=max_tokens,
             **request_options,
@@ -1198,6 +1207,19 @@ def translate_content_multilingual_sync(title: str, content: str) -> dict:
 
 
 # --- [신규] 비동기 의도 분석 함수 ---
+def _fallback_question_info(question: str) -> dict:
+    """AI 의도 분석 실패 시 검색 자체는 중단하지 않는 보수적 대체값입니다."""
+    clean_question = re.sub(r'\s*\(System[\s\S]*?\)', '', question, flags=re.IGNORECASE).strip()
+    keywords = [token for token in re.findall(r'[가-힣A-Za-z0-9]+', clean_question) if len(token) > 1]
+    return {
+        "age": None,
+        "category": None,
+        "sub_category": None,
+        "intent": None,
+        "keywords": keywords[:8] or None,
+    }
+
+
 async def extract_info_from_question_async(question: str, chat_history: list[dict] = []) -> dict:
     history_formatted = "(이전 대화 없음)"
     if chat_history:
@@ -1256,7 +1278,11 @@ async def extract_info_from_question_async(question: str, chat_history: list[dic
         if GROQ_FALLBACK_ENABLED and GROQ_CLIENT:
             try:
                 # Groq는 빠르고 무료 티어 제한이 덜함
-                groq_resp = await call_groq_async_simple(prompt, "You are a precise JSON extractor.")
+                groq_resp = await call_groq_async_simple(
+                    prompt,
+                    "You are a precise JSON extractor. Return one valid JSON object only.",
+                    json_mode=True,
+                )
                 if groq_resp:
                     response_text = groq_resp
                     # print("⚡️ [Intent] Groq Fast Path Used") 
@@ -1303,12 +1329,14 @@ async def extract_info_from_question_async(question: str, chat_history: list[dic
             return default_info
         
         else: 
-                return {"error": "Gemini 응답 JSON 없음"}
+                logger.warning("의도 분석 JSON이 없어 규칙 기반 검색으로 계속 진행합니다.")
+                return _fallback_question_info(question)
                 
     except FreeTierQuotaExceeded:
         return {"error": "free_tier_quota_exceeded"}
-    except Exception as e: 
-        return {"error": f"질문 분석 중 오류: {e}"}
+    except Exception as e:
+        logger.warning("의도 분석 실패로 규칙 기반 검색을 사용합니다: %s", type(e).__name__)
+        return _fallback_question_info(question)
 
 def generate_answer_from_context(context: str, original_question: str, chat_history: list[dict] = []) -> str:
     if not context: return ""
@@ -1538,7 +1566,7 @@ def expand_search_query(question: str) -> list:
     3. **출력 형식:** - 설명 없이 오직 한국어 단어만 쉼표(,)로 구분하여 나열하세요.
     """
 
-    # [1순위] Groq (Llama-3.3) 시도 - 속도 빠름
+    # [1순위] Groq 빠른 모델 시도
     if GROQ_SYNC_CLIENT:
         try:
             groq_response = call_groq_sync_fast(expansion_prompt, "You are a professional translator for welfare services.")
@@ -2558,7 +2586,7 @@ async def expand_search_query_async(question: str) -> list:
                     {"role": "system", "content": "You are a professional translator for welfare services."},
                     {"role": "user", "content": expansion_prompt}
                 ],
-                model="llama-3.3-70b-versatile",
+                model=GROQ_FAST_MODEL,
                 temperature=0,
                 max_tokens=100,
                 timeout=5
