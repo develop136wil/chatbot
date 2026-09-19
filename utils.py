@@ -9,7 +9,7 @@ except Exception:
 
 # [버전 마커] 배포 확인용
 # [버전 마커] 배포 확인용
-_UTILS_VERSION = "2026.01.29-v6"
+_UTILS_VERSION = "2026.09.19-safety-v3"
 print(f"📦 Utils 모듈 로드 (버전: {_UTILS_VERSION})")
 
 try:
@@ -25,6 +25,9 @@ import asyncio
 import itertools
 import re  # [긴급 수정] 정규식 모듈 추가 (expand_search_query에서 사용)
 import html
+from copy import deepcopy
+from runtime_policy import (CATEGORIES, INTENT_SCHEMA, SearchUnavailable, SearchResults,
+    normalize_intent, fallback_intent, apply_search_filters, visible_question)
 import unicodedata
 import secrets  # [추가] 보안 토큰 생성용
 import logging  # [추가] 구조화된 로깅
@@ -51,7 +54,7 @@ except ImportError:
     print("❌ google.genai is required for this application")
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
 from notion_client import Client as NotionClient
-from supabase import create_client, create_async_client
+from supabase import create_client, ClientOptions
 from functools import lru_cache
 from typing import Optional, List, Dict, Any, Tuple
 
@@ -65,9 +68,7 @@ except ImportError:
     
 # [Async] 클라이언트 초기화 Helper
 def get_async_groq_client():
-    if GROQ_FALLBACK_ENABLED and AsyncGroq and GROQ_API_KEY:
-        return AsyncGroq(api_key=GROQ_API_KEY)
-    return None
+    return GROQ_CLIENT if GROQ_FALLBACK_ENABLED else None
 
 # --- 1. 설정 로드 ---
 load_dotenv()
@@ -86,7 +87,7 @@ if len(SUPABASE_CACHE_KEY) >= 2 and SUPABASE_CACHE_KEY[0] == SUPABASE_CACHE_KEY[
     # Vercel UI에 실수로 포함된 바깥쪽 따옴표는 API 키 일부가 아닙니다.
     SUPABASE_CACHE_KEY = SUPABASE_CACHE_KEY[1:-1].strip()
 RESPONSE_CACHE_KEY_SOURCE = "SUPABASE_CACHE_KEY" if SUPABASE_CACHE_KEY else "SUPABASE_KEY (fallback)"
-RESPONSE_CACHE_USE_DIRECT_REST = SUPABASE_CACHE_KEY.startswith("sb_secret_")
+RESPONSE_CACHE_USE_DIRECT_REST = (SUPABASE_CACHE_KEY or SUPABASE_KEY).startswith("sb_secret_")
 GEMINI_EMBEDDING_TIMEOUT_SECONDS = max(
     1, int(os.getenv("GEMINI_EMBEDDING_TIMEOUT_SECONDS", "15"))
 )
@@ -102,15 +103,19 @@ def _env_flag(name: str, default: bool = False) -> bool:
 FREE_TIER_ONLY = _env_flag("FREE_TIER_ONLY", True)
 GROQ_FALLBACK_ENABLED = (not FREE_TIER_ONLY) or _env_flag("ALLOW_FREE_TIER_GROQ_FALLBACK", True)
 LIVE_TRANSLATION_ENABLED = (not FREE_TIER_ONLY) or _env_flag("ALLOW_LIVE_TRANSLATION", False)
-GROQ_FAST_MODEL = os.getenv("GROQ_FAST_MODEL", "openai/gpt-oss-20b").strip()
-GROQ_QUALITY_MODEL = os.getenv("GROQ_QUALITY_MODEL", "openai/gpt-oss-120b").strip()
+GROQ_FAST_MODEL = os.getenv("GROQ_FAST_MODEL", "openai/gpt-oss-20b").strip() or "openai/gpt-oss-20b"
+GROQ_QUALITY_MODEL = os.getenv("GROQ_QUALITY_MODEL", "openai/gpt-oss-120b").strip() or "openai/gpt-oss-120b"
+FREE_TIER_TRANSLATION_MAX_TOKENS = max(512, min(int(os.getenv("FREE_TIER_TRANSLATION_MAX_TOKENS", "4096")), 8192))
+SHARED_AI_BUDGET_ENABLED = _env_flag("SHARED_AI_BUDGET_ENABLED", True)
+AI_DAILY_GLOBAL_LIMIT = max(1, int(os.getenv("AI_DAILY_GLOBAL_LIMIT", "100")))
+AI_DAILY_CLIENT_LIMIT = max(1, int(os.getenv("AI_DAILY_CLIENT_LIMIT", "30")))
 FREE_TIER_MAX_OUTPUT_TOKENS = max(64, min(int(os.getenv("FREE_TIER_MAX_OUTPUT_TOKENS", "400")), 1024))
 RESPONSE_CACHE_ENABLED = _env_flag("ENABLE_RESPONSE_CACHE", True)
 RESPONSE_CACHE_TABLE = "chatbot_response_cache"
 RESPONSE_CACHE_TTL_SECONDS = max(
     300, min(int(os.getenv("CHAT_RESPONSE_CACHE_TTL_SECONDS", "7776000")), 15_552_000)
 )
-RESPONSE_CACHE_SCHEMA_VERSION = "v2"
+RESPONSE_CACHE_SCHEMA_VERSION = "v3"
 RESPONSE_CACHE_SCOPE_TABLE = "chatbot_cache_scope_versions"
 GLOBAL_CACHE_SCOPE = "__all__"
 _response_cache_error_logged = False
@@ -229,6 +234,14 @@ LOCALIZED_UI = {
 }
 
 
+for _lang, _notice in {
+    "ko": "<p>현재 AI 사용이 제한되어 키워드 검색 결과를 제공합니다.</p>",
+    "en": "<p>AI is currently limited. These are keyword search results.</p>",
+    "vi": "<p>AI hiện bị giới hạn. Đây là kết quả tìm kiếm theo từ khóa.</p>",
+    "zh": "<p>目前 AI 使用受限，以上为关键词搜索结果。</p>",
+}.items():
+    LOCALIZED_UI[_lang]["limited"] = _notice
+
 def resolve_language(language: str | None = None, question: str = "") -> str:
     """명시 언어를 우선하고, 이전 클라이언트의 지시문도 호환합니다."""
     if language in SUPPORTED_LANGUAGE_CODES:
@@ -246,7 +259,7 @@ print(f"💳 [System] 로드된 Gemini API 키 개수: {len(KEY_POOL)}개")
 # --- 2. 전역 변수 ---
 # [최적화] Database IDs를 환경 변수로 관리 (Fallback 값 유지)
 DATABASE_IDS = {
-    "의료/재활": os.getenv("NOTION_DB_MEDICAL", "2738ade50210801f9ef8ca93c1ee1f08"),
+    "의료/재활": os.getenv("NOTION_DB_MEDICAL", "2738ade5021080b786b0d8b0c07c1ea2"),
     "교육/보육": os.getenv("NOTION_DB_EDUCATION", "2738ade5021080339203d7148d7d943b"),
     "가족 지원": os.getenv("NOTION_DB_FAMILY", "2738ade502108041a4c7f5ec4c3b8413"),
     "돌봄/양육": os.getenv("NOTION_DB_CARE", "2738ade5021080cf842df820fdbeb709"),
@@ -374,7 +387,7 @@ def get_llm_client():
     if KEY_POOL and genai:
         try:
             # 첫 번째 키로 클라이언트 생성
-            LLM_CLIENT = genai.Client(api_key=KEY_POOL[0])
+            LLM_CLIENT = genai.Client(api_key=KEY_POOL[0], http_options=types.HttpOptions(timeout=15000))
             print("✅ Utils: Google GenAI Client (gemini-2.5-flash) 초기화 완료")
             return LLM_CLIENT
         except Exception as e:
@@ -391,8 +404,8 @@ LLM_MODEL = LLM_CLIENT
 # [신규] Groq 초기화 (Sync/Async 둘 다)
 if GROQ_FALLBACK_ENABLED and GROQ_API_KEY and AsyncGroq and Groq:
     try:
-        GROQ_CLIENT = AsyncGroq(api_key=GROQ_API_KEY)
-        GROQ_SYNC_CLIENT = Groq(api_key=GROQ_API_KEY)
+        GROQ_CLIENT = AsyncGroq(api_key=GROQ_API_KEY, max_retries=0, timeout=10)
+        GROQ_SYNC_CLIENT = Groq(api_key=GROQ_API_KEY, max_retries=0, timeout=40)
         print(f"✅ Utils: Groq 하이브리드 클라이언트 초기화 완료 (fast={GROQ_FAST_MODEL}, quality={GROQ_QUALITY_MODEL})")
     except Exception as e:
         print(f"⚠️ Utils: Groq 초기화 실패: {e}")
@@ -402,7 +415,7 @@ else:
 notion = NotionClient(auth=NOTION_KEY) if NOTION_KEY else None
 
 if SUPABASE_URL and SUPABASE_KEY:
-    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+    supabase = create_client(SUPABASE_URL, SUPABASE_KEY, options=ClientOptions(postgrest_client_timeout=8))
     # [버그 수정] create_async_client는 async 함수라 await 없이 호출하면
     # 코루틴 객체가 반환됨 (RuntimeWarning: coroutine was never awaited 원인).
     # 동기 클라이언트를 재사용하고 run_in_executor로 비동기 처리합니다.
@@ -422,7 +435,7 @@ if SUPABASE_URL and (SUPABASE_CACHE_KEY or SUPABASE_KEY):
             # 새 Secret key는 아래의 전용 REST 요청에서 apikey 헤더만 사용합니다.
             print("✅ Utils: Supabase 응답 캐시 REST 초기화 완료 (SUPABASE_CACHE_KEY, apikey only)")
         else:
-            response_cache_client = create_client(SUPABASE_URL, SUPABASE_CACHE_KEY or SUPABASE_KEY)
+            response_cache_client = create_client(SUPABASE_URL, SUPABASE_CACHE_KEY or SUPABASE_KEY, options=ClientOptions(postgrest_client_timeout=8))
             print(f"✅ Utils: Supabase 응답 캐시 클라이언트 초기화 완료 ({RESPONSE_CACHE_KEY_SOURCE})")
     except Exception as error:
         logger.warning("응답 캐시 클라이언트 초기화 실패: %s", type(error).__name__)
@@ -440,19 +453,9 @@ def build_response_cache_key(question: str, language: str) -> str:
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
-def build_response_cache_scopes(results: List[Dict[str, Any]], ai_category: Optional[str] = None) -> List[str]:
-    """검색 결과가 실제로 의존하는 Notion 카테고리 범위를 계산합니다."""
-    scopes = set()
-    for result in results:
-        metadata = result.get("metadata", result) if isinstance(result, dict) else {}
-        category = metadata.get("category") if isinstance(metadata, dict) else None
-        if isinstance(category, str) and category.strip():
-            scopes.add(category.strip())
-
-    # 분류하지 못했거나 결과가 없으면 새 문서의 등장도 반영하도록 전체 범위를 봅니다.
-    if not scopes or not ai_category:
-        scopes.add(GLOBAL_CACHE_SCOPE)
-    return sorted(scopes)
+def build_response_cache_scopes(results, ai_category=None):
+    # 실제 검색 범위만 사용. 출처가 없는 결과는 보수적으로 전체 범위.
+    return sorted(set(getattr(results, "scopes", [GLOBAL_CACHE_SCOPE])))
 
 
 def _is_valid_cached_response(response: Any) -> bool:
@@ -481,28 +484,50 @@ def _response_cache_is_available() -> bool:
     return bool(RESPONSE_CACHE_USE_DIRECT_REST or response_cache_client)
 
 
-async def _secret_cache_rest_request_async(
-    method: str,
-    table: str,
-    *,
-    params: Optional[Dict[str, str]] = None,
-    payload: Optional[dict] = None,
-) -> list:
-    """새 Supabase Secret key를 apikey 헤더 단독으로 보내는 내부 REST 호출입니다."""
-    if not SUPABASE_URL or not SUPABASE_CACHE_KEY:
-        raise RuntimeError("Supabase cache key is not configured")
-    headers = {
-        "apikey": SUPABASE_CACHE_KEY,
-        "Accept": "application/json",
-    }
+_cache_http_client = None
+
+async def _secret_cache_rest_request_async(method, table, *, params=None, payload=None):
+    global _cache_http_client
+    if not SUPABASE_URL or not (SUPABASE_CACHE_KEY or SUPABASE_KEY):
+        raise RuntimeError("Supabase server key missing")
+    headers = {"apikey": SUPABASE_CACHE_KEY or SUPABASE_KEY, "Accept":"application/json"}
     if payload is not None:
-        headers["Content-Type"] = "application/json"
-        headers["Prefer"] = "resolution=merge-duplicates,return=minimal"
-    url = f"{SUPABASE_URL.rstrip('/')}/rest/v1/{table}"
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        result = await client.request(method, url, headers=headers, params=params, json=payload)
+        headers.update({"Content-Type":"application/json", "Prefer":"resolution=merge-duplicates,return=minimal"})
+    if _cache_http_client is None or _cache_http_client.is_closed:
+        _cache_http_client = httpx.AsyncClient(timeout=8.0)
+    result = await _cache_http_client.request(method, f"{SUPABASE_URL.rstrip('/')}/rest/v1/{table}",
+        headers=headers, params=params, json=payload)
     result.raise_for_status()
     return result.json() if result.content else []
+
+def reserve_ai_budget_sync(actor, actor_limit=None):
+    if not FREE_TIER_ONLY:
+        return True
+    if not SHARED_AI_BUDGET_ENABLED:
+        # 무료 모드의 서버 예산을 비활성화하면 AI를 허용하지 않습니다.
+        return False
+    params = {"p_actor":actor, "p_global_limit":AI_DAILY_GLOBAL_LIMIT,
+              "p_actor_limit":actor_limit or AI_DAILY_CLIENT_LIMIT}
+    if RESPONSE_CACHE_USE_DIRECT_REST:
+        response = httpx.post(f"{SUPABASE_URL.rstrip('/')}/rest/v1/rpc/chatbot_reserve_ai_request",
+            headers={"apikey":SUPABASE_CACHE_KEY or SUPABASE_KEY}, json=params, timeout=8)
+        response.raise_for_status()
+        return response.json() is True
+    if not response_cache_client:
+        raise RuntimeError("Shared budget unavailable")
+    return response_cache_client.rpc("chatbot_reserve_ai_request", params).execute().data is True
+
+async def reserve_ai_budget_async(actor):
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(reserve_ai_budget_sync, actor), 8)
+    except Exception as error:
+        # SQL 미적용/DB 장애 시 사용량을 알 수 없으므로 AI 호출 금지.
+        logger.warning("공유 AI 예산 확인 불가: %s", type(error).__name__)
+        return False
+
+def require_runtime_schema(client):
+    if client.rpc("chatbot_runtime_ready", {}).execute().data is not True:
+        raise RuntimeError("Apply supabase/20260919_runtime_safety.sql before indexing")
 
 
 async def get_response_cache_async(question: str, language: str) -> Optional[dict]:
@@ -538,17 +563,19 @@ async def get_response_cache_async(question: str, language: str) -> Optional[dic
             )
             cached_row = data[0] if data else None
         else:
-            cached_row = await asyncio.get_running_loop().run_in_executor(None, _fetch)
+            cached_row = await asyncio.wait_for(asyncio.to_thread(_fetch), 8)
         if not cached_row or cached_row.get("cache_version") != RESPONSE_CACHE_SCHEMA_VERSION:
+            logger.info("[Response Cache] Miss: absent/expired/schema")
             return None
         response = cached_row.get("response")
         scope_versions = cached_row.get("scope_versions") or {}
-        if not _is_valid_cached_response(response) or not isinstance(scope_versions, dict):
+        if not _is_valid_cached_response(response) or not isinstance(scope_versions, dict) or not scope_versions:
             return None
         current_versions = await get_response_cache_scope_versions_async(list(scope_versions))
         if current_versions is None:
             return None
         if any(current_versions.get(scope, 0) != int(version) for scope, version in scope_versions.items()):
+            logger.info("[Response Cache] Miss: content changed")
             return None
         return response
     except Exception as error:
@@ -584,46 +611,42 @@ async def get_response_cache_scope_versions_async(scopes: List[str]) -> Optional
             )
             loaded_versions = {row["scope"]: int(row["version"]) for row in loaded_rows}
         else:
-            loaded_versions = await asyncio.get_running_loop().run_in_executor(None, _fetch_versions)
+            loaded_versions = await asyncio.wait_for(asyncio.to_thread(_fetch_versions), 8)
         return {scope: loaded_versions.get(scope, 0) for scope in scopes}
     except Exception as error:
         _log_response_cache_error_once("버전 조회", error)
         return None
 
 
-async def save_response_cache_async(
-    question: str, language: str, response: dict, scopes: Optional[List[str]] = None
-) -> None:
-    """성공한 초기 질문의 전체 응답을 저장합니다. 저장 실패는 사용자 응답을 막지 않습니다."""
+async def save_response_cache_async(question, language, response, scopes=None, expected_versions=None):
     if not RESPONSE_CACHE_ENABLED or not _response_cache_is_available() or not _is_valid_cached_response(response):
         return
-    scope_list = sorted(set(scopes or []))
-    scope_versions = await get_response_cache_scope_versions_async(scope_list)
-    if scope_versions is None:
+    # 모든 캐시에 전역 버전이 필요하다는 뜻은 아닙니다. 검색 결과는 실제 범위를 전달합니다.
+    scope_list = sorted(set(scopes or [GLOBAL_CACHE_SCOPE]))
+    current = await get_response_cache_scope_versions_async(scope_list)
+    if current is None:
         return
-    cache_key = build_response_cache_key(question, language)
-    expires_at = (datetime.now(timezone.utc) + timedelta(seconds=RESPONSE_CACHE_TTL_SECONDS)).isoformat()
+    if expected_versions is not None and any(current[s] != expected_versions.get(s) for s in scope_list):
+        logger.info("[Response Cache] 데이터 변경 감지: 저장 생략")
+        return
     record = {
-        "cache_key": cache_key,
-        "response": response,
-        "expires_at": expires_at,
+        "cache_key": build_response_cache_key(question, language),
+        "response": {k:v for k,v in response.items() if k != "job_id"},
+        "expires_at": (datetime.now(timezone.utc)+timedelta(seconds=RESPONSE_CACHE_TTL_SECONDS)).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
         "cache_version": RESPONSE_CACHE_SCHEMA_VERSION,
-        "scope_versions": scope_versions,
+        # 검색 이전 버전으로 저장. 저장 중 변경돼도 다음 조회에서 무효화됩니다.
+        "scope_versions": {s:expected_versions[s] for s in scope_list} if expected_versions is not None else current,
     }
-
-    def _save() -> None:
-        response_cache_client.table(RESPONSE_CACHE_TABLE).upsert(record, on_conflict="cache_key").execute()
-
     try:
         if RESPONSE_CACHE_USE_DIRECT_REST:
-            await _secret_cache_rest_request_async(
-                "POST",
-                RESPONSE_CACHE_TABLE,
-                params={"on_conflict": "cache_key"},
-                payload=record,
-            )
+            await _secret_cache_rest_request_async("POST", RESPONSE_CACHE_TABLE,
+                params={"on_conflict":"cache_key"}, payload=record)
         else:
-            await asyncio.get_running_loop().run_in_executor(None, _save)
+            await asyncio.wait_for(asyncio.to_thread(
+                lambda: response_cache_client.table(RESPONSE_CACHE_TABLE).upsert(record, on_conflict="cache_key").execute()
+            ), timeout=8)
+        logger.info("[Response Cache] Saved (scopes=%s)", len(scope_list))
     except Exception as error:
         _log_response_cache_error_once("저장", error)
 
@@ -853,490 +876,210 @@ async def get_gemini_embedding_async(text: str, task_type: str = "SEMANTIC_SIMIL
         raise e
 
 # --- [수정] 콘텐츠 생성 함수 (Client API 사용) ---
-@retry(
-    stop=stop_after_attempt(_RETRY_ATTEMPTS),  # Vercel 환경에서 재시도 횟수 제한
-    wait=wait_exponential(multiplier=1, min=1, max=5),
-    retry=retry_if_exception(lambda error: not isinstance(error, FreeTierQuotaExceeded))
-)
-def generate_content_safe(client, prompt, timeout=8, **kwargs): 
-    # client 인자는 이제 LLM_CLIENT (Client 객체)입니다.
-    
-    # kwargs에서 설정값 추출하여 Config 객체 생성
-    config_params = {}
-    if 'safety_settings' in kwargs:
-        config_params['safety_settings'] = kwargs.pop('safety_settings')
-    if 'temperature' in kwargs:
-        config_params['temperature'] = kwargs.pop('temperature')
-    if 'top_p' in kwargs:
-        config_params['top_p'] = kwargs.pop('top_p')
-    if 'max_output_tokens' in kwargs:
-        config_params['max_output_tokens'] = kwargs.pop('max_output_tokens')
-    if 'response_mime_type' in kwargs:
-        config_params['response_mime_type'] = kwargs.pop('response_mime_type')
+def _generation_config(kwargs):
+    translation = kwargs.pop("task", "") == "translation"
+    fields = ("safety_settings", "temperature", "top_p", "max_output_tokens",
+              "response_mime_type", "response_json_schema")
+    params = {k:kwargs.pop(k) for k in fields if k in kwargs}
+    cap = FREE_TIER_TRANSLATION_MAX_TOKENS if translation else FREE_TIER_MAX_OUTPUT_TOKENS
     if FREE_TIER_ONLY:
-        config_params['max_output_tokens'] = min(
-            int(config_params.get('max_output_tokens', FREE_TIER_MAX_OUTPUT_TOKENS)),
-            FREE_TIER_MAX_OUTPUT_TOKENS,
-        )
-        
-    config = types.GenerateContentConfig(**config_params)
-    
-    for attempt in range(5):
-        try:
-            # 매 시도마다 최신 Client 객체 사용 (키 로테이션 반영)
-            # 함수 인자로 받은 client보다 전역 LLM_CLIENT가 더 최신일 수 있음 (get_llm_client() 사용)
-            global LLM_CLIENT
-            current_client = LLM_CLIENT if LLM_CLIENT else client
-            
-            if not current_client:
-                current_client = get_llm_client() # 없으면 생성 시도
-            
-            time.sleep(2) 
-            
-            # v1.0 동기 호출
-            return current_client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=prompt,
-                config=config,
-                # timeout은 별도 옵션일 수 있으나 여기서는 생략하거나 kwargs에 남은 것 사용
-                **kwargs 
-            )
-            
-        except Exception as e:
-            error_msg = str(e)
-            if is_quota_error(error_msg):
-                print(f"🛑 [Quota Limit] 할당량 초과! ({attempt+1}/5)")
-                if FREE_TIER_ONLY:
-                    raise FreeTierQuotaExceeded("Gemini 무료 할당량을 모두 사용했습니다.") from e
-                rotate_api_key() 
-                time.sleep(60) 
-                continue 
-            
-            print(f"⚠️ API 호출 실패: {e}")
-            rotate_api_key()
-            time.sleep(5) 
-            
-    raise Exception("API 호출 5회 실패")
+        params["max_output_tokens"] = min(int(params.get("max_output_tokens", cap)), cap)
+    params["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
+    return params
+
+def _usable_response(response):
+    if not getattr(response, "text", None):
+        raise ValueError("Empty model response")
+    for candidate in getattr(response, "candidates", None) or []:
+        if "MAX_TOKENS" in str(getattr(candidate, "finish_reason", "")):
+            raise ValueError("Truncated model response")
+    return response
+
+def generate_content_safe(client, prompt, timeout=8, **kwargs):
+    params = _generation_config(kwargs)
+    params["http_options"] = types.HttpOptions(timeout=max(1, int(timeout*1000)))
+    current_client = LLM_CLIENT or client or get_llm_client()
+    if not current_client:
+        raise RuntimeError("Gemini client unavailable")
+    # SDK HTTP 제한 1회. 외부·내부 재시도 중첩과 고정 sleep 제거.
+    try:
+        return _usable_response(current_client.models.generate_content(
+            model="gemini-2.5-flash", contents=prompt,
+            config=types.GenerateContentConfig(**params), **kwargs))
+    except Exception as error:
+        if is_quota_error(error):
+            raise FreeTierQuotaExceeded("Gemini quota exhausted") from error
+        raise
 
 # --- [신규] Groq 백업 호출 함수 (모델 업데이트됨) ---
 async def call_groq_backup(prompt):
-    """
-    Gemini가 실패했을 때 호출되는 Groq 품질 모델 백업 함수 (Async)
-    """
-    if FREE_TIER_ONLY and not GROQ_FALLBACK_ENABLED:
-        raise FreeTierQuotaExceeded("무료 전용 모드에서는 Groq 자동 전환을 사용하지 않습니다.")
-    if not GROQ_CLIENT:
-        print("❌ [Groq] 백업 클라이언트가 없습니다. (실패)")
-        raise Exception("Gemini Quota Exceeded & No Groq Backup")
-        
-    print(f"🚑 [Groq] 품질 백업 시스템 가동 (model={GROQ_QUALITY_MODEL})")
+    if not GROQ_FALLBACK_ENABLED or not GROQ_CLIENT:
+        raise FreeTierQuotaExceeded("No permitted backup")
     try:
         completion = await GROQ_CLIENT.chat.completions.create(
-            model=GROQ_QUALITY_MODEL,
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant. Answer strictly in JSON if requested."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.1,
-            max_tokens=1024,
-            top_p=1,
-            stream=False,
-            stop=None,
-            timeout=10,
-        )
-        
-        # 응답 포맷 맞추기 (Gemini와 호환되게 .text 속성 흉내)
-        response_text = completion.choices[0].message.content
-        
-        class MockResponse:
-            def __init__(self, text):
-                self.text = text
-                
-        return MockResponse(response_text)
-        
-    except Exception as e:
-        print(f"❌ [Groq] 백업 호출 실패: {e}")
-        raise e
+            model=GROQ_QUALITY_MODEL, messages=[{"role":"user","content":prompt}],
+            temperature=0.1, max_completion_tokens=1024, reasoning_effort="low", timeout=8)
+        choice = completion.choices[0]
+        if choice.finish_reason == "length" or not choice.message.content:
+            raise ValueError("Incomplete backup output")
+        from types import SimpleNamespace
+        return SimpleNamespace(text=choice.message.content)
+    except Exception as error:
+        if is_quota_error(error):
+            raise FreeTierQuotaExceeded("Backup quota exhausted") from error
+        raise
 
 def call_groq_sync_fast(prompt, system_message="You are a helpful assistant."):
-    """
-    [신규] 간단한 작업을 위한 Groq 동기 호출 함수 (8B 모델 - 속도 중심)
-    """
-    if not GROQ_SYNC_CLIENT: return None
-    
+    if not GROQ_SYNC_CLIENT:
+        return None
     try:
         completion = GROQ_SYNC_CLIENT.chat.completions.create(
-            model="llama-3.1-8b-instant", # [수정] 단순 작업은 초고속/대용량 8B 모델 사용
-            messages=[
-                {"role": "system", "content": system_message},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.1,
-            max_tokens=1024
-        )
-        return completion.choices[0].message.content
-    except Exception as e:
-        print(f"⚠️ Groq Sync 호출 실패: {e}")
+            model=GROQ_FAST_MODEL, messages=[{"role":"system","content":system_message},
+                {"role":"user","content":prompt}],
+            temperature=0.0, max_completion_tokens=512, reasoning_effort="low", timeout=8)
+        choice = completion.choices[0]
+        return choice.message.content if choice.finish_reason != "length" else None
+    except Exception as error:
+        logger.warning("Groq 보조 작업 실패: %s", type(error).__name__)
         return None
 
 # --- [최적화] 비동기 콘텐츠 생성 함수 (Client API Async) ---
 async def generate_content_safe_async(client, prompt, timeout=15, **kwargs):
-    """
-    [성능 최적화] google.genai.Client.aio 사용
-    """
-    # 서버리스 요청이 무한 재시도에 묶이지 않도록 횟수와 대기 시간을 제한합니다.
-    max_retries = 2 if _IS_VERCEL else 3
-    consecutive_quota_errors = 0
-    
-    # Config 구성 (동기 함수와 동일)
-    config_params = {}
-    if 'safety_settings' in kwargs:
-        config_params['safety_settings'] = kwargs.pop('safety_settings')
-    if 'temperature' in kwargs:
-        config_params['temperature'] = kwargs.pop('temperature')
-    if 'top_p' in kwargs:
-        config_params['top_p'] = kwargs.pop('top_p')
-    if 'max_output_tokens' in kwargs:
-        config_params['max_output_tokens'] = kwargs.pop('max_output_tokens')
-    if 'response_mime_type' in kwargs:
-        config_params['response_mime_type'] = kwargs.pop('response_mime_type')
-    if FREE_TIER_ONLY:
-        config_params['max_output_tokens'] = min(
-            int(config_params.get('max_output_tokens', FREE_TIER_MAX_OUTPUT_TOKENS)),
-            FREE_TIER_MAX_OUTPUT_TOKENS,
-        )
-        
-    config = types.GenerateContentConfig(**config_params)
-    
-    for attempt in range(max_retries):
-        try:
-            global LLM_CLIENT
-            current_client = LLM_CLIENT if LLM_CLIENT else client
-            
-            if not current_client:
-                 current_client = get_llm_client() # 없으면 생성 시도
-            
-            if not current_client:
-                print("⚠️ [Async API] 클라이언트 객체가 없습니다. 로테이션 시도...")
-                rotate_api_key()
-                continue
-
-            if attempt > 0:
-                await asyncio.sleep(2)
-            
-            print(f"🚀 [Async API] 호출 시도 ({attempt+1}/{max_retries})")
-            
-            # [수정] v1.0 Async 호출: client.aio.models.generate_content
-            # 주의: client.aio (AsyncClient) 속성을 사용해야 함
-            result = await asyncio.wait_for(
-                current_client.aio.models.generate_content(
-                    model='gemini-2.5-flash',
-                    contents=prompt,
-                    config=config,
-                    **kwargs,
-                ),
-                timeout=max(1, float(timeout)),
-            )
-            
-            consecutive_quota_errors = 0
-            return result
-            
-        except Exception as e:
-            error_msg = str(e)
-            print(f"⚠️ [Async API] 호출 실패 ({attempt+1}/{max_retries}): {e}")
-            
-            if is_quota_error(error_msg):
-                consecutive_quota_errors += 1
-                if FREE_TIER_ONLY:
-                    if GROQ_FALLBACK_ENABLED:
-                        return await call_groq_backup(prompt)
-                    raise FreeTierQuotaExceeded("Gemini 무료 할당량을 모두 사용했습니다.") from e
-                
-                retry_delay = 5 if _IS_VERCEL else 15
-                try:
-                    match = re.search(r'retry in ([\d.]+)s', error_msg)
-                    if match:
-                        retry_delay = max(1, min(int(float(match.group(1))), 5 if _IS_VERCEL else 15))
-                        print(f"📊 [API] 권장 대기 시간: {retry_delay}초")
-                except: pass
-                
-                if consecutive_quota_errors >= 2:
-                    print(f"🛑 [Critical] Gemini 할당량 {consecutive_quota_errors}회 연속 초과 → Groq 전환")
-                    return await call_groq_backup(prompt)
-
-                print(f"🛑 [Async Quota Limit] 할당량 초과! {retry_delay}초 대기...")
-                rotate_api_key()
-                await asyncio.sleep(retry_delay)
-                continue 
-            
-            rotate_api_key()
-            if attempt < max_retries - 1:
-                await asyncio.sleep(2)
-            
-    if FREE_TIER_ONLY:
-        raise FreeTierQuotaExceeded("Gemini 무료 티어에서 요청을 처리하지 못했습니다.")
-    print("💀 [System] Gemini 모든 재시도 실패 → Groq 최종 호출")
-    return await call_groq_backup(prompt)
+    allow_groq_backup = kwargs.pop("allow_groq_backup", True)
+    params = _generation_config(kwargs)
+    current_client = LLM_CLIENT or client or get_llm_client()
+    if not current_client:
+        raise RuntimeError("Gemini client unavailable")
+    try:
+        return _usable_response(await asyncio.wait_for(
+            current_client.aio.models.generate_content(
+                model="gemini-2.5-flash", contents=prompt,
+                config=types.GenerateContentConfig(**params), **kwargs),
+            timeout=max(1,float(timeout))))
+    except Exception as error:
+        if is_quota_error(error):
+            if allow_groq_backup and GROQ_FALLBACK_ENABLED:
+                return await call_groq_backup(prompt)
+            raise FreeTierQuotaExceeded("Gemini quota exhausted") from error
+        raise
 
 # --- [신규] Groq Async 호출 함수 (utils 내부용) ---
-async def call_groq_async_simple(
-    prompt: str,
-    system_message: str = "You are a helpful assistant.",
-    max_retries: int = 2,
-    json_mode: bool = False,
-) -> Optional[str]:
-    """Helper for async Groq calls with retry"""
-    if not GROQ_CLIENT: return None
-    
-    for attempt in range(max_retries):
-        try:
-            request_options = {"response_format": {"type": "json_object"}} if json_mode else {}
-            chat_completion = await GROQ_CLIENT.chat.completions.create(
-                messages=[
-                    {"role": "system", "content": system_message},
-                    {"role": "user", "content": prompt},
-                ],
-                model=GROQ_FAST_MODEL,
-                temperature=0.1,
-                max_tokens=1024,
-                timeout=8,
-                **request_options,
-            )
-            return chat_completion.choices[0].message.content
-        except Exception as e:
-            if attempt == max_retries - 1:
-                print(f"⚠️ Groq Async Error (Final): {e}")
-            else:
-                await asyncio.sleep(1)
-    return None
-
-# --- [신규] Groq Sync 호출 함수 (run_indexer.py 등 동기 환경용) ---
-def call_groq_sync_robust(
-    prompt: str,
-    system_message: str = "You are a helpful assistant.",
-    *,
-    max_tokens: int = 2048,
-    json_mode: bool = False,
-) -> Optional[str]:
-    """Helper for sync Groq calls"""
-    if not GROQ_SYNC_CLIENT: return None
+async def call_groq_async_simple(prompt, system_message="You are a helpful assistant.",
+                                 max_retries=1, json_mode=False):
+    if not GROQ_CLIENT:
+        return None
+    options = {}
+    if json_mode:
+        options["response_format"] = {"type":"json_schema", "json_schema":{
+            "name":"welfare_intent", "strict":True, "schema":INTENT_SCHEMA}}
     try:
-        request_options = {}
-        if json_mode:
-            # Groq JSON Object Mode로 형식 오류를 줄이고 유효한 JSON만 요청합니다.
-            request_options["response_format"] = {"type": "json_object"}
-        completion = GROQ_SYNC_CLIENT.chat.completions.create(
-            messages=[
-                {"role": "system", "content": system_message},
-                {"role": "user", "content": prompt}
-            ],
-            model=GROQ_QUALITY_MODEL,
-            temperature=0.1,
-            max_tokens=max_tokens,
-            **request_options,
-        )
-        if json_mode and getattr(completion.choices[0], "finish_reason", None) == "length":
-            print("⚠️ Groq Translation Failed: output truncated")
+        result = await GROQ_CLIENT.chat.completions.create(
+            model=GROQ_FAST_MODEL, messages=[{"role":"system","content":system_message},
+                {"role":"user","content":prompt}],
+            temperature=0.0, max_completion_tokens=1024, reasoning_effort="low",
+            timeout=8, **options)
+        if result.choices[0].finish_reason == "length":
             return None
-        return completion.choices[0].message.content
-    except Exception as e:
-        print(f"⚠️ Groq Sync Error: {e}")
+        return result.choices[0].message.content
+    except Exception as error:
+        logger.warning("Groq 의도 분석 실패: %s", type(error).__name__)
         return None
 
-def translate_content_multilingual_sync(title: str, content: str) -> dict:
-    """
-    [Phase 3] 다국어 번역 (영어/중국어/베트남어) - JSON 반환
-    Groq 우선 사용 -> Gemini 폴백
-    """
-    prompt = f"""
-    You are a professional translator for a welfare chatbot.
-    Translate the following Korean title and content into English, Chinese (Simplified), and Vietnamese.
+# --- [신규] Groq Sync 호출 함수 (run_indexer.py 등 동기 환경용) ---
+def call_groq_sync_robust(prompt, system_message="You are a helpful assistant.", *, max_tokens=2048, json_mode=False):
+    if not GROQ_SYNC_CLIENT:
+        return None
+    try:
+        options = {"response_format":{"type":"json_object"}} if json_mode else {}
+        completion = GROQ_SYNC_CLIENT.chat.completions.create(
+            model=GROQ_QUALITY_MODEL, messages=[{"role":"system","content":system_message},
+                {"role":"user","content":prompt}],
+            temperature=0.0, max_completion_tokens=min(max_tokens, FREE_TIER_TRANSLATION_MAX_TOKENS),
+            reasoning_effort="low", timeout=35, **options)
+        choice = completion.choices[0]
+        if choice.finish_reason == "length":
+            return None
+        return choice.message.content
+    except Exception as error:
+        logger.warning("Groq 번역 실패: %s", type(error).__name__)
+        return None
 
-    [Source]
-    Title: {title}
-    Content: {content}
-
-    [Output Format]
-    Return ONLY a JSON object with this exact structure:
-    {{
-      "en": {{ "title": "...", "content": "..." }},
-      "zh": {{ "title": "...", "content": "..." }},
-      "vi": {{ "title": "...", "content": "..." }}
-    }}
-    """
-    
-    # 1. Groq 시도
-    if GROQ_SYNC_CLIENT:
+def translate_content_multilingual_sync(title, content, languages=("en","zh","vi")):
+    languages = [lang for lang in languages if lang in ("en","zh","vi")]
+    if not languages:
+        return {}
+    prompt = f"""Translate this Korean welfare title and content into {', '.join(languages)}.
+Return a JSON object whose language keys each contain string title and content.
+Preserve all amounts, ages, qualifications and exclusions. Do not add or omit conditions.
+Title: {title}
+Content: {content}
+"""
+    output = {}
+    def accept(text):
         try:
-            resp = call_groq_sync_robust(
-                prompt,
-                "You are a JSON translator. Return a complete JSON object only.",
-                max_tokens=4096,
-                json_mode=True,
-            )
-            if resp:
-                 # JSON 추출
-                json_start = resp.find('{')
-                json_end = resp.rfind('}') + 1
-                if json_start != -1 and json_end != -1:
-                    # 모델이 문자열 안에 줄바꿈을 이스케이프하지 않아도 복구합니다.
-                    return json.loads(resp[json_start:json_end], strict=False)
-        except Exception as e:
-            print(f"⚠️ Groq Translation Failed: {e}")
-
-    # 2. Gemini 폴백
-    client = get_llm_client()
-    if client:
+            parsed = json.loads(text)
+        except (ValueError,TypeError):
+            return
+        if not isinstance(parsed,dict):
+            return
+        for lang in languages:
+            value = parsed.get(lang)
+            if isinstance(value,dict) and all(isinstance(value.get(k),str) and value[k].strip() for k in ("title","content")):
+                output[lang] = {"title":value["title"].strip(),"content":value["content"].strip()}
+    accept(call_groq_sync_robust(prompt, "Return complete JSON only.",
+                               max_tokens=FREE_TIER_TRANSLATION_MAX_TOKENS, json_mode=True))
+    missing = [lang for lang in languages if lang not in output]
+    if missing:
         try:
-            resp = generate_content_safe(
-                client,
-                prompt,
-                timeout=40,
-                response_mime_type="application/json",
-                max_output_tokens=4096,
-            )
-            text = resp.text if hasattr(resp, 'text') else str(resp)
-            json_start = text.find('{')
-            json_end = text.rfind('}') + 1
-            if json_start != -1 and json_end != -1:
-                return json.loads(text[json_start:json_end], strict=False)
-        except Exception as e:
-            print(f"⚠️ Gemini Translation Failed: {e}")
-            
-    return {} # 실패 시 빈 딕셔너리
+            schema = {"type":"object","properties":{lang:{"type":"object","properties":{
+                "title":{"type":"string"},"content":{"type":"string"}},
+                "required":["title","content"],"additionalProperties":False} for lang in missing},
+                "required":missing,"additionalProperties":False}
+            reply = generate_content_safe(get_llm_client(), prompt+"\nReturn only: "+", ".join(missing),
+                timeout=35, task="translation", max_output_tokens=FREE_TIER_TRANSLATION_MAX_TOKENS,
+                response_mime_type="application/json", response_json_schema=schema)
+            accept(reply.text)
+        except Exception as error:
+            logger.warning("미완료 번역: %s (languages=%s)",type(error).__name__,",".join(missing))
+    return output
 
 
 # --- [신규] 비동기 의도 분석 함수 ---
-def _fallback_question_info(question: str) -> dict:
-    """AI 의도 분석 실패 시 검색 자체는 중단하지 않는 보수적 대체값입니다."""
-    clean_question = re.sub(r'\s*\(System[\s\S]*?\)', '', question, flags=re.IGNORECASE).strip()
-    keywords = [token for token in re.findall(r'[가-힣A-Za-z0-9]+', clean_question) if len(token) > 1]
-    return {
-        "age": None,
-        "category": None,
-        "sub_category": None,
-        "intent": None,
-        "keywords": keywords[:8] or None,
-    }
+def _fallback_question_info(question):
+    return fallback_intent(question)
 
 
-async def extract_info_from_question_async(question: str, chat_history: list[dict] = []) -> dict:
-    history_formatted = "(이전 대화 없음)"
-    if chat_history:
-        recent_history = chat_history[-3:]
-        history_formatted = "\n".join([f"  - {t['role']}: {t['content']}" for t in recent_history])
-
-    cache_key = None
-    if not chat_history:
-        question_hash = hashlib.md5(question.encode('utf-8')).hexdigest()
-        cache_key = f"extract_v2:{question_hash}"
-        try:
-            # [수정] 비동기 Redis 사용
-            if redis_async_client:
-                cached = await redis_async_client.get(cache_key)
-                if cached: return json.loads(cached.decode('utf-8'))
-        except Exception: pass
-
-    if not LLM_MODEL and not get_llm_client(): return {"error": "Gemini 모델 로드 실패"} # check lazy
-
-    recent_history = chat_history[-3:] 
-    history_str = "\n".join([f"{t['role']}: {t['content'][:300]}" for t in recent_history]) if recent_history else "None"
-
-    # 프롬프트는 기존과 동일하게 사용 (재사용성)
+async def extract_info_from_question_async(question, chat_history=None):
+    history = chat_history or []
+    clean = visible_question(question)
     prompt = f"""
-    You are an intent classifier for a welfare chatbot.
-    Analyze the user's input based on history and extract JSON.
-    
-    [History]
-    {history_str}
-    
-    [Input]
-    "{question}"
-
-    [Task]
-    Return ONLY a JSON object with keys: "intent", "category", "sub_category", "age" (int), "keywords" (list).
-
-    [Rules]
-    1. **intent**: "show_more", "safety_block", "exit", "reset", "out_of_scope", "small_talk", "clarify_category", null.
-    2. **age**: Convert to MONTHS (int) or null.
-    3. **category**: generic queries only (see utils.py rules). specific names -> null.
-    4. **sub_category**: specific traits or null.
-    5. **keywords**: extract core nouns.
-
-    [Output Example]
-    {{ "intent": null, "category": "null", "sub_category": "null", "age": 24, "keywords": ["바우처"] }}
-    """
-    
-    try:
-        safety_settings = [
-            types.SafetySetting(category=c, threshold="BLOCK_NONE")
-            for c in ["HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH", "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT"]
-        ]
-        
-        # [최적화] Groq 우선 시도 (Async)
-        response_text = None
-        if GROQ_FALLBACK_ENABLED and GROQ_CLIENT:
+Classify a welfare information question. Return the required JSON object.
+Categories must be null or one of: {json.dumps(CATEGORIES, ensure_ascii=False)}.
+Specific service names: category=null. Never invent category names.
+age: integer months, or null when unknown. sub_category: explicit trait or null.
+keywords: up to 8 core nouns. intent: null for a welfare search.
+Allowed other intents: show_more, safety_block, exit, reset, out_of_scope, small_talk, clarify_category.
+search_query: a standalone question in the user's language.
+Use history ONLY to resolve explicit follow-up references. Preserve age, target and constraints.
+For independent questions keep the original question. Do not add unsupported facts.
+History: {json.dumps(history[-4:], ensure_ascii=False)}
+Question: {clean}
+"""
+    if GROQ_FALLBACK_ENABLED and GROQ_CLIENT:
+        text = await call_groq_async_simple(prompt, "Return valid JSON matching the schema.", json_mode=True)
+        if text:
             try:
-                # Groq는 빠르고 무료 티어 제한이 덜함
-                groq_resp = await call_groq_async_simple(
-                    prompt,
-                    "You are a precise JSON extractor. Return one valid JSON object only.",
-                    json_mode=True,
-                )
-                if groq_resp:
-                    response_text = groq_resp
-                    # print("⚡️ [Intent] Groq Fast Path Used") 
-            except Exception as e:
-                print(f"⚠️ Groq Intent Failed: {e}")
-
-        # Groq 실패 시 Gemini Fallback
-        if not response_text:
-            # lazy load된 client 사용
-            client = get_llm_client()
-            response = await generate_content_safe_async(client, prompt, timeout=12, safety_settings=safety_settings)
-            
-            # 텍스트 추출
-            if hasattr(response, 'text'):
-                response_text = response.text
-            else:
-                response_text = str(response)
-        
-
-
-        json_block_start = response_text.find('{')
-        json_block_end = response_text.rfind('}') + 1
-        
-        if json_block_start != -1 and json_block_end != -1:
-            json_string = response_text[json_block_start:json_block_end]
-            default_info = {"age": None, "category": None, "sub_category": None, "intent": None, "keywords": None}
-            extracted_info = json.loads(json_string)
-            default_info.update(extracted_info)
-                
-            has_other_criteria = default_info.get("age") is not None or default_info.get("sub_category") is not None
-            
-            if has_other_criteria and default_info.get("category") is None and default_info.get("intent") is None and not default_info.get("keywords"): 
-                default_info["intent"] = "clarify_category"
-
-            if cache_key and redis_async_client:
-                try:
-                        await redis_async_client.set(
-                            cache_key,
-                            json.dumps(default_info).encode('utf-8'),
-                            ex=MAIN_ANSWER_CACHE_TTL,
-                        )
-                except Exception: pass
-                    
-            return default_info
-        
-        else: 
-                logger.warning("의도 분석 JSON이 없어 규칙 기반 검색으로 계속 진행합니다.")
-                return _fallback_question_info(question)
-                
-    except FreeTierQuotaExceeded:
-        return {"error": "free_tier_quota_exceeded"}
-    except Exception as e:
-        logger.warning("의도 분석 실패로 규칙 기반 검색을 사용합니다: %s", type(e).__name__)
-        return _fallback_question_info(question)
+                return normalize_intent(json.loads(text), clean)
+            except (ValueError, TypeError):
+                logger.warning("Groq 의도 JSON 검증 실패")
+    try:
+        response = await generate_content_safe_async(get_llm_client(), prompt, timeout=8,
+            response_mime_type="application/json", response_json_schema=INTENT_SCHEMA,
+            allow_groq_backup=False)
+        return normalize_intent(json.loads(response.text), clean)
+    except Exception as error:
+        logger.warning("의도 분석 대체 경로: %s", type(error).__name__)
+        return fallback_intent(clean)
 
 def generate_answer_from_context(context: str, original_question: str, chat_history: list[dict] = []) -> str:
     if not context: return ""
@@ -1690,31 +1433,17 @@ def rerank_search_results(question: str, candidates: list) -> list:
 
 import asyncio
 
-def get_supabase_pages_by_ids(page_ids: list) -> list:
-    """ID 목록으로 Supabase 데이터 조회 (동기 버전)"""
-    if not page_ids or not supabase: return []
-    try:
-        response = supabase.table("site_pages").select("*").in_("page_id", page_ids).execute()
-        
-        # 중복 제거 및 정렬
-        unique_pages = {item['page_id']: item['metadata'] for item in response.data}
-        return [unique_pages[pid] for pid in page_ids if pid in unique_pages]
-    except Exception as e:
-        print(f"❌ Supabase 조회 오류: {e}")
+def get_supabase_pages_by_ids(page_ids):
+    if not page_ids:
         return []
+    if not supabase:
+        raise SearchUnavailable("Database unavailable")
+    response = supabase.table("site_pages").select("page_id,metadata").in_("page_id",page_ids).execute()
+    pages = {row["page_id"]:row["metadata"] for row in response.data}
+    return [pages[pid] for pid in page_ids if pid in pages]
 
-async def get_supabase_pages_by_ids_async(page_ids: list) -> list:
-    """ID 목록으로 Supabase 데이터 조회 (비동기 버전)"""
-    if not page_ids or not supabase: return []
-    
-    # ThreadPoolExecutor로 동기 호출을 비동기처럼 실행
-    loop = asyncio.get_event_loop()
-    try:
-        result = await loop.run_in_executor(None, get_supabase_pages_by_ids, page_ids)
-        return result
-    except Exception as e:
-        print(f"❌ Supabase 비동기 조회 오류: {e}")
-        return []
+async def get_supabase_pages_by_ids_async(page_ids):
+    return await asyncio.wait_for(asyncio.to_thread(get_supabase_pages_by_ids, page_ids), 8)
 
 # --- 8. 포맷팅 함수 ---
 
@@ -1815,6 +1544,11 @@ def clean_summary_text(text: str, language: str = "ko") -> str:
 
 def format_search_results(pages_metadata: list, language: str = "ko") -> str:
     cards_html = []
+    labels = {
+        "ko": ("자세히 보기", "공유하기"), "en": ("View Details", "Share"),
+        "vi": ("Xem chi tiết", "Chia sẻ"), "zh": ("查看详情", "分享"),
+    }
+    detail_label, share_label = labels.get(language, labels["ko"])
     
     # 1. [기존] Markdown 볼드체 패턴
     header_pattern_bold = re.compile(r'^\s*[\*\-•]?\s*\*\*(.+?)\*\*\s*:?\s*(.*)$')
@@ -1889,7 +1623,7 @@ def format_search_results(pages_metadata: list, language: str = "ko") -> str:
         url = raw_url if raw_url.startswith(("https://", "http://")) else ""
         safe_url = html.escape(url, quote=True)
         
-        copy_text = f"[{raw_category}] {raw_title}\n\n{clean_summary_text(meta.get('pre_summary', ''), language)}\n\n🔗 자세히 보기: {url}"
+        copy_text = f"[{raw_category}] {raw_title}\n\n{clean_summary_text(meta.get('pre_summary', ''), language)}\n\n🔗 {detail_label}: {url}"
         safe_copy_text = html.escape(copy_text, quote=True)
 
         html_rows = []
@@ -2002,8 +1736,8 @@ def format_search_results(pages_metadata: list, language: str = "ko") -> str:
             <h3 class="card-title">{title}</h3>
             <div class="card-body">{html_summary}</div>
             <div class="card-footer">
-                {f'<a href="{safe_url}" target="_blank" rel="noopener noreferrer" class="detail-link">자세히 보기</a>' if url else ''}
-                <button class="card-share-btn" data-copy="{safe_copy_text}">공유하기</button>
+                {f'<a href="{safe_url}" target="_blank" rel="noopener noreferrer" class="detail-link">{detail_label}</a>' if url else ''}
+                <button class="card-share-btn" data-copy="{safe_copy_text}">{share_label}</button>
             </div>
         </div>
         """
@@ -2192,119 +1926,65 @@ def search_supabase(question: str, extracted_info: dict, keywords: list = []) ->
     
     return results
 
-async def search_supabase_async(question: str, extracted_info: dict, keywords: list = []) -> list:
-    """
-    [Upgrade] 키워드 리스트를 SQL에 직접 전달하여 정확도 향상
-    supabase_async는 동기 클라이언트이므로 run_in_executor로 비동기 처리합니다.
-    """
-    # 1. 임베딩 생성 (비동기)
-    # [핵심 수정] 인덱싱 시 RETRIEVAL_DOCUMENT 사용 → 검색 쿼리는 반드시 RETRIEVAL_QUERY 사용
-    # SEMANTIC_SIMILARITY(기존 기본값)와 RETRIEVAL_DOCUMENT는 벡터 공간이 달라 유사도가 낮게 나옴
-    query_embedding = await get_gemini_embedding_async(question, task_type="RETRIEVAL_QUERY")
-    if not query_embedding: return []
+async def _lexical_search(question, info, keywords):
+    if not supabase_async:
+        raise SearchUnavailable("Database unavailable")
+    tokens = list(dict.fromkeys(keywords or visible_question(question).split()))[:6]
+    tokens = [re.sub(r'[%_(),"\\]', " ", str(t)).strip()[:80] for t in tokens]
+    tokens = [t for t in tokens if len(t)>1]
+    if not tokens:
+        return SearchResults([], cacheable=False)
+    # ilike 인수는 따옴표로 감싸 PostgREST 논리식 경계를 고정합니다.
+    expressions = [f"{field}.ilike.{json.dumps('%'+token+'%', ensure_ascii=False)}"
+        for token in tokens for field in ("content", "metadata->>title_en", "metadata->>title_vi", "metadata->>title_zh")]
+    try:
+        response = await asyncio.wait_for(asyncio.to_thread(lambda:
+            supabase_async.table("site_pages").select("page_id,metadata").or_(",".join(expressions)).limit(20).execute()), 8)
+        return SearchResults(apply_search_filters(response.data or [], info), cacheable=False)
+    except Exception as error:
+        raise SearchUnavailable("Keyword search failed") from error
 
-    # 2. 검색어 확장 (만약 입력된 keywords가 없으면 여기서 생성)
-    if not keywords:
-        keywords = expand_search_query(question)
-    
-    final_query_text = " ".join(keywords)
-    ai_category = extracted_info.get("category")
-    
-    # 디버깅 출력
-    print(f"🔍 [Search] 키워드: {keywords} / 카테고리: {ai_category}")
-
-    results = []
-    loop = asyncio.get_running_loop()
-    
-    # --- 1차 시도 (카테고리 필터 + 키워드 부스트) ---
-    if ai_category:
+async def search_supabase_async(question, extracted_info, keywords=None, allow_ai=True):
+    info = normalize_intent(extracted_info, question)
+    if not allow_ai:
+        return await _lexical_search(question, info, keywords)
+    try:
+        embedding = await get_gemini_embedding_async(question, task_type="RETRIEVAL_QUERY")
+    except Exception as error:
+        logger.warning("임베딩 대체(키워드 검색): %s", type(error).__name__)
+        return await _lexical_search(question, info, keywords)
+    if not embedding:
+        return await _lexical_search(question, info, keywords)
+    if not supabase_async:
+        raise SearchUnavailable("Database unavailable")
+    keywords = keywords or info["keywords"] or visible_question(question).split()
+    category = info["category"]
+    async def query(category_filter, threshold, count):
         try:
-            response = await loop.run_in_executor(
-                None,
-                lambda: supabase_async.rpc(
-                    "hybrid_search_v3",
-                    {
-                        "query_text": final_query_text,
-                        "query_embedding": query_embedding,
-                        "match_threshold": 0.45,  # 기준 점수
-                        "match_count": 15,
-                        "filter_category": ai_category,
-                        "keywords_arr": keywords  # [핵심] 키워드 배열 전달
-                    }
-                ).execute()
-            )
-            results = response.data
-        except Exception as e:
-            print(f"⚠️ 1차 검색 실패: {e}")
-
-    # --- 2차 시도 (결과 부족 시 전체 검색 + 키워드 부스트) ---
-    if not ai_category or len(results) < 3:
-        msg = "🔄 [Fallback] 전체 검색 진행..." if ai_category else "🌍 [Global] 전체 검색 진행..."
-        print(msg)
-        try:
-            response = await loop.run_in_executor(
-                None,
-                lambda: supabase_async.rpc(
-                    "hybrid_search_v3",
-                    {
-                        "query_text": final_query_text,
-                        "query_embedding": query_embedding,
-                        "match_threshold": 0.4, 
-                        "match_count": 20,
-                        "filter_category": None, # 필터 해제
-                        "keywords_arr": keywords # [핵심] 키워드 배열 전달
-                    }
-                ).execute()
-            )
-            
-            # 중복 제거 및 합치기
-            existing_ids = {r['id'] for r in results}
-            for doc in response.data:
-                if doc['id'] not in existing_ids:
-                    results.append(doc)
-                    
-        except Exception as e:
-            print(f"⚠️ 2차 검색 실패: {e}")
-
-        # [★신규 추가] 나이(월령) 기반 필터링 로직
-        user_age = extracted_info.get("age")
-    
-        # 나이 정보가 있고, 검색 결과도 있다면 필터링 시도
-        if user_age is not None and isinstance(user_age, int) and results:
-            filtered_results = []
-            for doc in results:
-                meta = doc.get("metadata", {})
-                start_age = meta.get("start_age")
-                end_age = meta.get("end_age")
-            
-                # 나이 제한이 없는 문서(None)는 무조건 포함 (안전책)
-                if start_age is None and end_age is None:
-                    filtered_results.append(doc)
-                    continue
-                
-                try:
-                    s = int(start_age) if start_age is not None else 0
-                    e = int(end_age) if end_age is not None else 1000
-                
-                    # 범위 안에 들면 합격
-                    if s <= user_age <= e:
-                        filtered_results.append(doc)
-                except:
-                    filtered_results.append(doc) # 에러나면 그냥 포함
-        
-            # [안전장치] 필터링했더니 결과가 남았다면 -> 교체
-            if filtered_results:
-                print(f"🧹 [Age Filter] {len(results)}개 -> {len(filtered_results)}개로 정제됨")
-                results = filtered_results
-            # 결과가 0개가 되어버렸다면? -> 원본 유지 (필터링 취소)
-            else:
-                print(f"⚠️ [Age Filter] 필터링 결과가 0개여서 원본 유지")
-
-        return results
-
-    # 카테고리 검색만으로 충분한 결과가 나온 경우에도 결과를 반환합니다.
-    # 이전에는 이 경로가 암묵적으로 None을 반환해 정상 검색 결과가 사라졌습니다.
-    return results
+            response = await asyncio.wait_for(asyncio.to_thread(lambda:
+                supabase_async.rpc("hybrid_search_v3", {
+                    "query_text":" ".join(keywords), "query_embedding":embedding,
+                    "match_threshold":threshold, "match_count":count,
+                    "filter_category":category_filter, "keywords_arr":keywords,
+                }).execute()), 8)
+            if not isinstance(response.data, list):
+                raise ValueError("Invalid search result")
+            return response.data
+        except Exception as error:
+            raise SearchUnavailable("Database search failed") from error
+    rows = await query(category, 0.45, 15) if category else []
+    scopes = [category] if category else [GLOBAL_CACHE_SCOPE]
+    if not category or len(apply_search_filters(rows, info)) < 3:
+        global_rows = await query(None, 0.4, 20)
+        scopes = [GLOBAL_CACHE_SCOPE]
+        def identity(row):
+            return row.get("id") or row.get("page_id") or (row.get("metadata") or {}).get("page_id")
+        seen = {identity(r) for r in rows}
+        for row in global_rows:
+            if identity(row) not in seen:
+                rows.append(row)
+                seen.add(identity(row))
+    return SearchResults(apply_search_filters(rows, info), scopes=scopes)
 
 # --- 6. 헬퍼 함수들 ---
 
@@ -2432,9 +2112,10 @@ Translate the following welfare service titles into {language_name}.
         return titles
 
 
-async def localize_result_pages_async(pages_metadata: List[Dict[str, Any]], language: str) -> List[Dict[str, Any]]:
+async def localize_result_pages_async(pages_metadata: List[Dict[str, Any]], language: str, *, allow_live: bool = True) -> List[Dict[str, Any]]:
     """일반 검색과 '더 보여줘'가 동일한 카드 현지화 경로를 사용하게 합니다."""
     language = resolve_language(language)
+    pages_metadata = deepcopy(pages_metadata)
     if language == "ko" or not pages_metadata:
         return pages_metadata
 
@@ -2463,12 +2144,12 @@ async def localize_result_pages_async(pages_metadata: List[Dict[str, Any]], lang
         translated_summary = metadata.get(f"pre_summary_{language}")
         if translated_summary:
             metadata["pre_summary"] = translated_summary
-        else:
+        elif LIVE_TRANSLATION_ENABLED and allow_live:
             summary_targets.append((index, translate_content_simple_async(metadata.get("pre_summary", ""), language)))
 
     # 인덱싱 때 저장된 다국어 필드는 그대로 사용합니다. 실시간 번역은 카드마다
     # 추가 토큰을 쓰므로 무료 전용 모드에서는 명시적으로 켜지 않은 한 수행하지 않습니다.
-    if not LIVE_TRANSLATION_ENABLED:
+    if not LIVE_TRANSLATION_ENABLED or not allow_live:
         return pages_metadata
 
     tasks: List[Any] = []
@@ -2506,112 +2187,38 @@ async def localize_result_pages_async(pages_metadata: List[Dict[str, Any]], lang
 # 중복 정의를 제거하였습니다. (위 1652, 408라인의 정의를 사용합니다.)
 # 중복 정의 시 Python은 마지막 정의로 덮어쓰는 문제가 있었습니다.
 
-async def rerank_search_results_async(question: str, results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """[Async] 검색 결과 재정렬"""
-    if not results: return []
-    
-    # 상위 5개만 리랭킹 (비용/속도 최적화)
-    candidates = results[:5] 
-    
-    # 프롬프트 구성
-    candidate_texts = []
-    for i, doc in enumerate(candidates):
-        meta = doc.get("metadata", {})
-        title = meta.get("title", "No Title")
-        summary = meta.get("pre_summary", "No Content")
-        candidate_texts.append(f"[{i}] 제목: {title}\n내용: {summary}\n")
-    
-    start_text = "\n".join(candidate_texts)
-    
-    prompt = f"""
-    질문: {question}
-    
-    다음 후보 문서들 중 질문과 가장 관련성 높은 순서대로 번호(인덱스)만 나열하세요.
-    
-    후보:
-    {start_text}
-    
-    형식: [0, 2, 1]
-    """
-    
-    client = get_llm_client()
-    if not client: return candidates
+async def rerank_search_results_async(question, results):
+    if not results:
+        return []
+    candidates = results[:5]
+    text = "\n".join(f"[{i}] {d.get('metadata',{}).get('title','')}\n{str(d.get('metadata',{}).get('pre_summary',''))[:1800]}"
+                     for i,d in enumerate(candidates))
+    response = await generate_content_safe_async(get_llm_client(),
+        f"질문: {question}\n관련성 높은 문서 번호만 JSON 배열로 반환. 후보:\n{text}", timeout=8, temperature=0.0)
+    match = re.search(r"\[.*?\]", response.text, re.S)
+    if not match:
+        raise ValueError("Invalid ranking output")
+    values = json.loads(match.group(0))
+    if not isinstance(values, list) or any(type(i) is not int or i<0 or i>=len(candidates) for i in values):
+        raise ValueError("Invalid ranking indices")
+    indices = list(dict.fromkeys(values))
+    return [candidates[i] for i in indices] + [d for i,d in enumerate(candidates) if i not in indices] + results[5:]
 
-    try:
-        response = await generate_content_safe_async(client, prompt, timeout=10, temperature=0.0)
-        
-        text = response.text.strip()
-        # JSON 파싱 (숫자 리스트 추출)
-        import re
-        match = re.search(r'\[.*?\]', text)
-        if match:
-            indices = json.loads(match.group(0))
-            reranked = [candidates[i] for i in indices if i < len(candidates)]
-            # 리랭킹에 포함 안 된 나머지는 뒤에 붙임
-            remaining = [c for i, c in enumerate(candidates) if i not in indices]
-            return reranked + remaining + results[5:]
-            
-        return results
-    except Exception as e:
-        logger.error(f"⚠️ Async Rerank Error: {e}")
-        return results
-
-async def expand_search_query_async(question: str) -> list:
-    """[Async] 검색어 확장 (Groq -> Gemini Fallback)"""
-    # 1. 전처리 (Sync 로직 재사용 - 간단 버전)
-    import re
-    clean_question = re.sub(r'\s*\(System[\s\S]*?\)', '', question, flags=re.IGNORECASE).strip()
-    clean_question = re.sub(r'[^\w\s]', '', clean_question) 
-    
-    expansion_prompt = f"""
-    당신은 한국어 DB 검색을 위한 '다국어 통역기'입니다.
-    사용자의 질문(영어/중국어/베트남어)을 분석하여, 반드시 **'한국어 핵심 키워드'**로 변환하세요.
-    
-    [사용자 질문]
-    "{clean_question}"
-    
-    [★★★ 필수 변환 규칙 (어기면 안됨) ★★★]
-    1. **무조건 한국어로 출력:** 질문이 외국어라도 검색 키워드는 **반드시 한국어**여야 합니다.
-    2. **출력 형식:** - 설명 없이 오직 한국어 단어만 쉼표(,)로 구분하여 나열하세요.
-    """
-    
-    ai_keywords = []
-    
-    # 1순위: Groq Async
-    groq_client = get_async_groq_client()
-    if groq_client:
+async def expand_search_query_async(question):
+    clean = visible_question(question)
+    prompt = f"한국어 복지 DB 검색 키워드를 최대 6개 쉼표로만 출력. 외국어를 한국어로 변환. 질문: {clean}"
+    client = get_async_groq_client()
+    if client:
         try:
-            chat_completion = await groq_client.chat.completions.create(
-                messages=[
-                    {"role": "system", "content": "You are a professional translator for welfare services."},
-                    {"role": "user", "content": expansion_prompt}
-                ],
-                model=GROQ_FAST_MODEL,
-                temperature=0,
-                max_tokens=100,
-                timeout=5
-            )
-            response_text = chat_completion.choices[0].message.content
-            clean_response = re.sub(r'\*+|[:\[\]]', '', response_text)
-            ai_keywords = [k.strip() for k in re.split(r'[,|\n]', clean_response) if k.strip() and len(k.strip()) > 1]
-        except Exception as e:
-            logger.warning(f"⚠️ Async Groq Failed: {e}")
-            
-    # 2순위: Gemini Async
-    if not ai_keywords:
-        client = get_llm_client()
-        if client:
-            try:
-                response = await generate_content_safe_async(client, expansion_prompt, timeout=8, temperature=0.0)
-                clean_response = re.sub(r'\*+|[:\[\]]', '', response.text)
-                ai_keywords = [k.strip() for k in re.split(r'[,|\n]', clean_response) if k.strip() and len(k.strip()) > 1]
-            except Exception as e:
-                 logger.warning(f"⚠️ Async Gemini Failed: {e}")
-
-    # Fallback
-    if not ai_keywords:
-         ai_keywords = clean_question.split()
-
-    return list(set(ai_keywords))
-
-
+            result = await client.chat.completions.create(
+                model=GROQ_FAST_MODEL, messages=[{"role":"user","content":prompt}],
+                temperature=0, max_completion_tokens=512, reasoning_effort="low", timeout=5)
+            if result.choices[0].finish_reason != "length":
+                text = result.choices[0].message.content or ""
+                terms = [t.strip(" *\n") for t in re.split(r"[,\n]",text) if t.strip()]
+                if terms:
+                    return list(dict.fromkeys(t[:100] for t in terms))[:6]
+        except Exception as error:
+            logger.warning("키워드 확장 생략: %s", type(error).__name__)
+    # 분석용 보조 단계 실패로 추가 AI 호출을 연쇄하지 않습니다.
+    return clean.split()[:8]

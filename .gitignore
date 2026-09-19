@@ -30,6 +30,7 @@ Thumbs.db
 
 # Test files (production에서 제외)
 test_*.py
+!tests/test_*.py
 
 # Local data
 chroma-data/

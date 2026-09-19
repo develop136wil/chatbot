@@ -1729,3 +1729,19 @@ body {
     opacity: 1;
     transform: translateY(0);
 }
+
+.show-more-btn {
+    margin-top: 12px;
+    padding: 10px 16px;
+    border: 1px solid #8A7561;
+    border-radius: 18px;
+    color: #223047;
+    background: #FFF4CB;
+    font: inherit;
+    cursor: pointer;
+}
+.show-more-btn:disabled { opacity: 0.55; cursor: wait; }
+.show-more-btn:focus-visible { outline: 3px solid #5684CC; outline-offset: 3px; }
+@media (prefers-color-scheme: dark) {
+    .show-more-btn { background: #39342C; color: #FFF4CB; border-color: #B7A88D; }
+}

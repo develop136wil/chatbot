@@ -8,6 +8,7 @@ import asyncio
 from typing import List, Dict, Any, Tuple, Optional
 from supabase import create_client
 from dotenv import load_dotenv
+from runtime_policy import normalize_intent, apply_search_filters, visible_question
 
 # [신규] PyRedis AsyncIO
 import redis.asyncio as redis
@@ -22,6 +23,9 @@ try:
         localize_result_pages_async,
         save_response_cache_async,
         build_response_cache_scopes,
+        get_response_cache_scope_versions_async,
+        CATEGORIES,
+        GLOBAL_CACHE_SCOPE,
         resolve_language,
         LOCALIZED_UI,
         supabase,
@@ -31,7 +35,7 @@ try:
 except ImportError as e:
     print(f"❌ utils 임포트 실패: {e}")
     # Vercel 환경 대비 Fallback
-    logger.error(f"Utils import failed: {e}")
+    logging.getLogger(__name__).error("Utils import failed: %s", type(e).__name__)
     search_supabase_async = None
     expand_search_query_async = None
     rerank_search_results_async = None
@@ -51,7 +55,7 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 JOB_QUEUE_KEY = "chatbot:job_queue"
 JOB_RESULTS_KEY = "chatbot:job_results"
 JOB_RESULT_KEY_PREFIX = "chatbot:job_result:"
-NOTION_LOG_DB_ID = "2bf8ade502108000b6d6f4ad4d4d52b2"
+NOTION_LOG_DB_ID = os.getenv("NOTION_LOG_DB_ID", "")
 NOTION_QUERY_LOGS_ENABLED = os.getenv("ENABLE_NOTION_QUERY_LOGS", "false").lower() == "true"
 JOB_RESULTS_TTL_SECONDS = int(os.getenv("JOB_RESULTS_TTL_SECONDS", "3600"))
 MAX_CONCURRENT_JOBS = max(1, int(os.getenv("MAX_CONCURRENT_JOBS", "2")))
@@ -64,122 +68,73 @@ REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 logger.info("[Worker] 클라이언트 초기화 중...")
 
 # --- 메인 처리 함수 (Async) ---
-async def process_job_async(job_data: Dict[str, Any]) -> Tuple[str, List[str], int]:
-    start_time = time.time()
-    question = job_data.get("question", "")
-    ai_category = job_data.get("ai_category")
-    target_lang_code = resolve_language(job_data.get("language"), question)
-    ui_text = LOCALIZED_UI[target_lang_code]
-    
-    logger.info("Worker 작업 시작 (질문 글자 수=%s, 언어=%s)", len(question), target_lang_code)
-
+async def process_job_async(job_data):
+    started = time.monotonic()
+    original = job_data.get("question", "")
+    info = normalize_intent(job_data.get("extracted_info") or {}, original)
+    question = info["search_query"]
+    language = resolve_language(job_data.get("language"), original)
+    ui = LOCALIZED_UI[language]
+    allow_ai = job_data.get("allow_ai", True)
+    can_cache = bool(job_data.get("cacheable") and allow_ai)
+    snapshot = await get_response_cache_scope_versions_async([GLOBAL_CACHE_SCOPE, *CATEGORIES]) if can_cache else None
     try:
-        # [Step 1] 키워드 추출 (Async)
-        try:
-            print("[Worker] keyword expansion started")
-            target_keywords = await expand_search_query_async(question)
-            print("[Worker] keyword expansion completed")
-        except Exception as e:
-            logger.error(f"❌ 키워드 확장 실패: {e}")
-            target_keywords = []
-
-        # 원본 보완
-        for word in question.split():
-            if len(word) > 1 and word not in target_keywords:
-                target_keywords.append(word)
-        logger.info("검색 키워드 추출 완료 (개수=%s)", len(target_keywords))
-
-        # [Step 2] 검색 (Async)
-        extracted_info_mock = {"category": ai_category}
-        try:
-            print("[Worker] Supabase search started")
-            raw_results = await search_supabase_async(question, extracted_info_mock, keywords=target_keywords)
-            print(f"[Worker] Supabase search completed (results={len(raw_results or [])})")
-        except Exception as e:
-            logger.error(f"❌ Supabase 검색 실패: {e}")
-            return ui_text["system_error"], [], 0
-
-        if not raw_results: 
-            if job_data.get("cacheable"):
-                await save_response_cache_async(
-                    question,
-                    target_lang_code,
-                    {"status": "complete", "answer": ui_text["not_found"], "last_result_ids": [], "total_found": 0},
-                    scopes=["__all__"],
-                )
-            return ui_text["not_found"], [], 0
-
-        # [Step 3] 중복 제거 (CPU Bound - Fast enough)
-        seen_ids = set()
-        unique_results = []
-        for doc in raw_results:
-            meta = doc.get("metadata", {})
-            pid = meta.get("page_id") or meta.get("page_url") or meta.get("title")
-            if pid and pid not in seen_ids:
-                seen_ids.add(pid)
-                unique_results.append(doc)
-        candidates = unique_results
-
-        # [Step 4] AI 랭킹 (Async)
-        logger.info(f"🤖 Gemini에게 {len(candidates)}개 문서의 랭킹을 요청합니다.")
-        try:
-            reranked_results = await rerank_search_results_async(question, candidates)
-            if not reranked_results:
-                reranked_results = candidates
-        except Exception as e:
-            logger.error(f"❌ AI 랭킹 중 오류: {e}")
-            reranked_results = candidates
-
-        # [Step 5] 최종 결과 조립
-        display_count = min(len(reranked_results), 2)
-        display_results = reranked_results[:display_count]
-        # 화면 현지화가 원본 카테고리명을 바꾸기 전에 캐시 무효화 범위를 고정합니다.
-        cache_scopes = build_response_cache_scopes(reranked_results, ai_category)
-        
-        display_results = await localize_result_pages_async(display_results, target_lang_code)
-
-        all_page_ids = [r.get("metadata", {}).get("page_id") for r in reranked_results]
-        final_display_metadata = [res.get("metadata", {}) for res in display_results]
-        
-        try:
-            body = format_search_results(final_display_metadata, target_lang_code)
-        except Exception as e:
-            logger.error(f"❌ 결과 포맷팅 실패: {e}")
-            body = ui_text["system_error"]
-        
-        header = ui_text["header_found"]
-        final_answer = f"{header}<hr>{body}"
-
-        if len(reranked_results) > display_count:
-            final_answer += f"<hr>{ui_text['footer_more']}"
-
-        if job_data.get("cacheable"):
-            await save_response_cache_async(
-                question,
-                target_lang_code,
-                {
-                    "status": "complete",
-                    "answer": final_answer,
-                    "last_result_ids": all_page_ids,
-                    "total_found": len(all_page_ids),
-                },
-                scopes=cache_scopes,
-            )
-
-        elapsed = time.time() - start_time
-        logger.info(f"✅ [Async] 답변 조립 완료 (소요시간: {elapsed:.2f}초)")
-        
-        # 로그 저장 (Notion은 Sync이므로 run_in_executor 사용 권장하나, 여기선 생략하고 Fire & Forget 흉내)
-        # 실제로는 별도 Task로 띄울 수 있음
+        keywords = info["keywords"]
+        if allow_ai:
+            expanded = await expand_search_query_async(question)
+            keywords = list(dict.fromkeys(keywords + expanded))[:12]
+        else:
+            keywords = keywords or visible_question(question).split()[:8]
+        rows = await search_supabase_async(question, info, keywords=keywords, allow_ai=allow_ai)
+        limited = not allow_ai or not getattr(rows, "cacheable", True)
+        # 검색 장애는 search_supabase_async가 예외로 전달합니다. 빈 결과는 저장하지 않습니다.
+        if not rows:
+            return {"status":"complete", "answer":ui["not_found"] + (ui["limited"] if limited else ""),
+                    "last_result_ids":[], "total_found":0, "shown_count":0, "mode":"keyword" if limited else "ai"}
+        scopes = build_response_cache_scopes(rows)
+        seen = set()
+        candidates = []
+        for row in rows:
+            pid = (row.get("metadata") or {}).get("page_id") or row.get("page_id")
+            if pid and pid not in seen:
+                seen.add(pid)
+                candidates.append(row)
+        can_cache = can_cache and not limited and snapshot is not None
+        ranked = candidates
+        if allow_ai and not limited:
+            try:
+                ranked = await rerank_search_results_async(question, candidates)
+            except Exception as error:
+                logger.warning("랭킹 대체(SQL 순서): %s", type(error).__name__)
+                can_cache = False
+        ranked = apply_search_filters(ranked, info)[:20]
+        if not ranked:
+            return {"status":"complete", "answer":ui["not_found"], "last_result_ids":[],
+                    "total_found":0, "shown_count":0}
+        display = await localize_result_pages_async(ranked[:2], language, allow_live=not limited)
+        body = format_search_results([r.get("metadata",r) for r in display], language)
+        ids = [(r.get("metadata") or {}).get("page_id") or r.get("page_id") for r in ranked]
+        answer = f"{ui['header_found']}<hr>{body}"
+        if len(ids)>2:
+            answer += f"<hr>{ui['footer_more']}"
+        if limited:
+            answer += ui["limited"]
+        response = {"status":"complete", "answer":answer, "last_result_ids":ids,
+                    "total_found":len(ids), "shown_count":min(2,len(ids)),
+                    "mode":"keyword" if limited else "ai"}
+        if can_cache:
+            await save_response_cache_async(original, language, response, scopes=scopes, expected_versions=snapshot)
+        logger.info("답변 완료 (mode=%s, seconds=%.2f)", response["mode"], time.monotonic()-started)
         if NOTION_QUERY_LOGS_ENABLED and notion and NOTION_LOG_DB_ID:
-            asyncio.create_task(save_notion_log_async(question, ai_category, target_keywords))
-                
-        return final_answer, all_page_ids, len(all_page_ids)
-
-    except Exception as e:
-        logger.error(f"🔥 작업 처리 중 치명적 오류: {e}")
-        traceback.print_exc()
-        return ui_text["system_error"], [], 0
+            # 서버리스 종료 전에 제한 시간 내 완료하도록 기다립니다.
+            try:
+                await asyncio.wait_for(save_notion_log_async(original, info["category"], keywords), 3)
+            except asyncio.TimeoutError:
+                logger.warning("Notion 질문 로그 저장 시간 초과")
+        return response
+    except Exception as error:
+        logger.error("검색 처리 실패: %s", type(error).__name__)
+        return {"status":"error", "message":ui["system_error"]}
 
 # Notion 로그 저장을 위한 Async Wrapper
 async def save_notion_log_async(question, category, keywords):
@@ -204,44 +159,21 @@ async def save_notion_log_async(question, category, keywords):
 async def handle_job(redis_client, queue_item, semaphore):
     job_id = None
     try:
-        _, job_json = queue_item
-        job_data = json.loads(job_json.decode('utf-8'))
+        _, payload = queue_item
+        job_data = json.loads(payload.decode("utf-8"))
         job_id = job_data.get("job_id")
-        
-        # Async Job Execution
-        answer_text, all_ids, total_found = await process_job_async(job_data)
-        
-        final_result = {
-            "status": "complete",
-            "answer": answer_text,
-            "last_result_ids": all_ids, 
-            "total_found": total_found 
-        }
-        
-        # 결과 저장
-        await redis_client.setex(
-            f"{JOB_RESULT_KEY_PREFIX}{job_id}",
-            JOB_RESULTS_TTL_SECONDS,
-            json.dumps(final_result, ensure_ascii=False).encode("utf-8"),
-        )
-        
-        logger.info("작업 결과 저장 완료 (job_id=%s)", job_id)
-        
-    except Exception as e:
-        logger.error(f"Handler Error: {e}")
+        result = await asyncio.wait_for(process_job_async(job_data), 38)
+        result["job_id"] = job_id
+        await redis_client.setex(f"{JOB_RESULT_KEY_PREFIX}{job_id}", JOB_RESULTS_TTL_SECONDS,
+            json.dumps(result,ensure_ascii=False).encode("utf-8"))
+    except Exception as error:
+        logger.error("작업 처리 실패: %s", type(error).__name__)
         if job_id:
-            error_result = {
-                "status": "error",
-                "message": "처리 중 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
-            }
             try:
-                await redis_client.setex(
-                    f"{JOB_RESULT_KEY_PREFIX}{job_id}",
-                    JOB_RESULTS_TTL_SECONDS,
-                    json.dumps(error_result, ensure_ascii=False).encode("utf-8"),
-                )
-            except Exception as store_error:
-                logger.error(f"Failed to save job error result: {store_error}")
+                await redis_client.setex(f"{JOB_RESULT_KEY_PREFIX}{job_id}", JOB_RESULTS_TTL_SECONDS,
+                    json.dumps({"status":"error","message":"처리 중 오류가 발생했습니다."},ensure_ascii=False).encode("utf-8"))
+            except Exception:
+                logger.error("작업 실패 상태 저장 불가")
     finally:
         semaphore.release()
 

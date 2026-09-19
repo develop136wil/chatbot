@@ -35,6 +35,8 @@ let currentResultIds = [];
 let currentShownCount = 0;
 let currentTotalFound = 0;
 
+let isChatLoading = false;
+window.isChatBusy = () => isChatLoading;
 let pendingContext = null;
 let currentQuestion = "";
 let chatHistory = [];
@@ -262,10 +264,18 @@ const UI_TEXT = {
     }
 };
 
+const FEEDBACK_TEXT = {
+    ko: { question:"답변이 도움이 되었나요?", reasons:["정보가 맞지 않음","설명이 부족함","기타"], input_placeholder:"상세 의견을 입력해 주세요", send:"전송", sending:"저장 중...", thanks_good:"의견 감사합니다.", thanks_bad:"개선에 참고하겠습니다." },
+    en: { question:"Was this helpful?", reasons:["Incorrect information","Not enough detail","Other"], input_placeholder:"Tell us more", send:"Send", sending:"Saving...", thanks_good:"Thank you for your feedback.", thanks_bad:"Thank you. We will review it." },
+    vi: { question:"Câu trả lời có hữu ích không?", reasons:["Thông tin sai","Thiếu chi tiết","Khác"], input_placeholder:"Nhập ý kiến chi tiết", send:"Gửi", sending:"Đang lưu...", thanks_good:"Cảm ơn phản hồi của bạn.", thanks_bad:"Chúng tôi sẽ xem xét ý kiến của bạn." },
+    zh: { question:"回答对您有帮助吗？", reasons:["信息不准确","说明不足","其他"], input_placeholder:"请输入详细意见", send:"发送", sending:"正在保存...", thanks_good:"感谢您的反馈。", thanks_bad:"我们会参考您的意见改进。" }
+};
+Object.keys(FEEDBACK_TEXT).forEach(lang => { UI_TEXT[lang].feedback = FEEDBACK_TEXT[lang]; });
+
 const SHOW_MORE_KEYWORDS = new Set([
     "다음", "더", "더 보여줘", "계속", "이어서", "다음거", "다음꺼", "다른거", "다른 거", "또",
     "next", "more", "continue", "show more",
-    "tiếp", "thêm", "xem thêm", "nữa", "tiếp tục",
+    "tiếp", "tiếp theo", "thêm", "xem thêm", "nữa", "tiếp tục",
     "更多", "继续", "下", "下一个", "还有吗"
 ]);
 
@@ -296,7 +306,7 @@ function sanitizeAssistantHtml(value) {
 
 function formatAssistantAnswer(answer) {
     const rawAnswer = String(answer || '');
-    const html = rawAnswer.includes('result-card') ? rawAnswer : marked.parse(rawAnswer);
+    const html = rawAnswer.includes('result-card') || !window.marked ? rawAnswer : marked.parse(rawAnswer);
     return sanitizeAssistantHtml(html);
 }
 
@@ -382,6 +392,7 @@ chatBox.addEventListener('click', async (event) => {
 
 // --- 5. 메인 로직 ---
 async function handleFormSubmit() {
+    if (isChatLoading) return;
     const question = userInput.value.trim();
     if (!question) return;
 
@@ -402,14 +413,16 @@ async function handleFormSubmit() {
     let requestBody = {
         question: serverQuestion,
         language: window.currentLang || 'ko',
-        last_result_ids: [],
-        shown_count: 0,
+        action: "ask",
+        last_result_ids: [...currentResultIds],
+        shown_count: currentShownCount,
         // 현재 질문은 question으로 별도 전달합니다. 이전 대화만 문맥으로 보냅니다.
         // 그래야 새 대화의 정확 일치 질문은 공유 응답 캐시를 사용할 수 있습니다.
         chat_history: [...chatHistory]
     };
 
     if (SHOW_MORE_KEYWORDS.has(question.toLowerCase())) {
+        requestBody.action = "more";
         requestBody.last_result_ids = currentResultIds;
         requestBody.shown_count = currentShownCount;
     }
@@ -423,6 +436,7 @@ async function handleFormSubmit() {
 }
 
 async function handleButtonClick(buttonText) {
+    if (isChatLoading) return;
     let newQuestion = pendingContext ? `${pendingContext} ${buttonText}` : buttonText;
     pendingContext = null;
     clearButtons();
@@ -442,8 +456,9 @@ async function handleButtonClick(buttonText) {
     const requestBody = {
         question: serverQuestion,
         language: window.currentLang || 'ko',
-        last_result_ids: [],
-        shown_count: 0,
+        action: "ask",
+        last_result_ids: [...currentResultIds],
+        shown_count: currentShownCount,
         chat_history: [...chatHistory]
     };
     updateChatHistory("user", newQuestion);
@@ -512,169 +527,103 @@ async function typeWriterEffect(element, htmlContent) {
     }
 }
 
+
+async function renderChatResponse(data, element, question, sequence) {
+    if (sequence !== activeRequestSequence) return;
+    if (data.status === 'error') {
+        element.textContent = data.message || getRequestMessages().error;
+        return;
+    }
+    if (!['complete', 'clarify'].includes(data.status)) throw new Error('Invalid response');
+    await typeWriterEffect(element, formatAssistantAnswer(data.answer));
+    translateCardButtons(element);
+    if (data.action === 'reset') {
+        chatHistory = [];
+        pendingContext = null;
+        currentResultIds = [];
+        currentShownCount = 0;
+        currentTotalFound = 0;
+        return;
+    }
+    updateChatHistory('assistant', data.answer);
+    currentResultIds = data.last_result_ids || [];
+    currentTotalFound = data.total_found || 0;
+    currentShownCount = data.shown_count ?? Math.min(2, currentResultIds.length);
+    if (data.status === 'clarify') {
+        pendingContext = question;
+        createButtons(data.options || []);
+    } else if (currentShownCount < currentResultIds.length) {
+        const labels = { ko:'더 보여줘', en:'Show more', vi:'Xem thêm', zh:'更多' };
+        const more = document.createElement('button');
+        more.className = 'show-more-btn';
+        more.textContent = labels[window.currentLang || 'ko'];
+        more.onclick = () => {
+            if (isChatLoading) return;
+            userInput.value = labels[window.currentLang || 'ko'];
+            handleFormSubmit();
+        };
+        element.appendChild(more);
+    }
+    if (data.status === 'complete' && data.job_id) {
+        addFeedbackButtons(element, data.job_id, question, data.answer);
+    }
+}
+
 async function fetchChatResponse(requestBody) {
     const lang = window.currentLang || 'ko';
-    const requestMessages = getRequestMessages();
-    const requestSequence = ++activeRequestSequence;
+    const messages = getRequestMessages();
+    const sequence = ++activeRequestSequence;
+    const question = currentQuestion;
     if (activeRequestController) activeRequestController.abort();
-    const requestController = new AbortController();
-    activeRequestController = requestController;
-
-    // [수정] 꿀팁이 없을 경우를 대비한 안전장치
-    const langData = UI_TEXT[lang] || UI_TEXT['ko'];
-    const actionMessages = langData.actions;
-    const currentTips = langData.tips || UI_TEXT['ko'].tips; // 팁이 비어있으면 한국어 사용
-
-    const initialMsg = actionMessages[0];
-    const rawInitialTip = currentTips[Math.floor(Math.random() * currentTips.length)];
-    const formattedInitialTip = rawInitialTip.replace(': ', ':<br>');
-
-    // ... (기존 로딩 스켈레톤 코드 유지)
-    const skeletonHTML = `
-        <div class="skeleton-container">
-            <div class="skeleton-box" style="width: 90%;"></div>
-            <div class="skeleton-box" style="width: 70%;"></div>
-            <div class="skeleton-box" style="width: 85%;"></div>
-            
-            <div style="margin-top: 12px;">
-                <div style="margin-top: 12px; text-align: left;"> <p class="action-text" style="font-size: 14px; font-weight: 600; color: #333; margin: 0 0 8px 0;">
-                    ${initialMsg}
-                </p>
-                <p class="tip-text" style="font-size: 12px; font-weight: 400; color: #888; margin: 0; line-height: 1.6;">
-                    ${formattedInitialTip}
-                </p>
-            </div>
-        </div>
-    `;
-
-    const loadingElement = addMessageToBox('assistant', skeletonHTML);
-    const actionTextEl = loadingElement.querySelector('.action-text');
-    const tipTextEl = loadingElement.querySelector('.tip-text');
-
-    let toggleStep = 0;
-    let messageIntervalId = setInterval(() => {
-        toggleStep++;
-
-        if (toggleStep % 2 === 0) {
-            const actionIndex = (toggleStep / 2) % actionMessages.length;
-            if (actionTextEl) actionTextEl.textContent = actionMessages[actionIndex];
-        } else {
-            const randomTip = currentTips[Math.floor(Math.random() * currentTips.length)];
-            if (tipTextEl) {
-                tipTextEl.innerHTML = randomTip.replace(': ', ':<br>');
-            }
-        }
+    const controller = new AbortController();
+    activeRequestController = controller;
+    const langData = UI_TEXT[lang];
+    const loading = addMessageToBox('assistant', '<div class="skeleton-container"><div class="skeleton-box" style="width:90%"></div><div class="skeleton-box" style="width:70%"></div><p class="action-text"></p></div>');
+    const text = loading.querySelector('.action-text');
+    let step = 0;
+    if (text) text.textContent = langData.actions[0];
+    const animation = setInterval(() => {
+        if (text) text.textContent = langData.actions[++step % langData.actions.length];
     }, 7000);
-
-    const requestTimeoutId = setTimeout(() => requestController.abort(), 45000);
-
+    let timeout = setTimeout(() => controller.abort(), 45000);
     try {
-        const chatResponse = await fetch(API_URL_CHAT, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(requestBody),
-            signal: requestController.signal
+        const response = await fetch(API_URL_CHAT, {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body:JSON.stringify(requestBody), signal:controller.signal
         });
-
-        if (!chatResponse.ok) throw new Error(`Server error: ${chatResponse.statusText}`);
-        const chatData = await chatResponse.json();
-        clearTimeout(requestTimeoutId);
-        if (requestSequence !== activeRequestSequence) return;
-
-        if (chatData.status === 'clarify') {
-            clearInterval(messageIntervalId);
-
-            // [적용] 타이핑 효과
-            const parsedHTML = formatAssistantAnswer(chatData.answer);
-            await typeWriterEffect(loadingElement, parsedHTML);
-
-            pendingContext = currentQuestion;
-            createButtons(chatData.options);
-            updateChatHistory("assistant", chatData.answer);
-            setLoadingState(false);
+        if (!response.ok) throw new Error('HTTP '+response.status);
+        let data = await response.json();
+        if (!data.status && data.job_id) {
+            clearTimeout(timeout);
+            timeout = setTimeout(() => controller.abort(), 120000);
+            data = await pollForResult(data.job_id, controller.signal);
         }
-        else if (chatData.status === 'complete') {
-            clearInterval(messageIntervalId);
-            const finalHTML = formatAssistantAnswer(chatData.answer);
-
-            // [적용] 타이핑 효과 (카드면 페이드인, 텍스트면 타이핑)
-            await typeWriterEffect(loadingElement, finalHTML);
-
-            currentResultIds = chatData.last_result_ids || [];
-            currentTotalFound = chatData.total_found || 0;
-            currentShownCount = chatData.shown_count || Math.min(2, currentResultIds.length);
-            updateChatHistory("assistant", chatData.answer);
-
-            if (chatData.job_id) {
-                addFeedbackButtons(loadingElement, chatData.job_id, currentQuestion, chatData.answer);
-            }
-            setLoadingState(false);
-        }
-        else if (chatData.status === 'error') {
-            clearInterval(messageIntervalId);
-            loadingElement.textContent = chatData.message || requestMessages.error;
-            setLoadingState(false);
-        }
-        else if (chatData.job_id) {
-            const jobId = chatData.job_id;
-            pollForResult(jobId, currentQuestion, loadingElement, messageIntervalId, actionTextEl, tipTextEl);
-        } else {
-            throw new Error('Unexpected response format');
-        }
+        clearInterval(animation);
+        await renderChatResponse(data, loading, question, sequence);
     } catch (error) {
-        if (requestSequence !== activeRequestSequence) return;
-        loadingElement.textContent = error.name === 'AbortError' ? requestMessages.timeout : requestMessages.error;
-        if (messageIntervalId) clearInterval(messageIntervalId);
-        setLoadingState(false);
+        if (sequence === activeRequestSequence) {
+            loading.textContent = error.name === 'AbortError' ? messages.timeout : messages.error;
+        }
     } finally {
-        clearTimeout(requestTimeoutId);
-        if (requestSequence === activeRequestSequence) activeRequestController = null;
+        clearTimeout(timeout);
+        clearInterval(animation);
+        if (sequence === activeRequestSequence) {
+            activeRequestController = null;
+            setLoadingState(false);
+        }
     }
     chatBox.scrollTop = chatBox.scrollHeight;
 }
 
-async function pollForResult(jobId, question, loadingElement, messageIntervalId, actionTextEl, tipTextEl, pollInterval = 1000) {
-    let attempts = 0;
-    const intervalId = setInterval(async () => {
-        attempts++;
-        if (attempts > 120) {
-            clearInterval(intervalId); clearInterval(messageIntervalId);
-            loadingElement.innerHTML = '<p>시간 초과</p>';
-            setLoadingState(false);
-            return;
-        }
-        try {
-            const resultResponse = await fetch(`${API_URL_RESULT}${jobId}`);
-            if (!resultResponse.ok) return;
-            const resultData = await resultResponse.json();
-
-            if (resultData.status === 'complete') {
-                clearInterval(intervalId); clearInterval(messageIntervalId);
-
-                const finalHTML = formatAssistantAnswer(resultData.answer);
-
-                // [적용] 타이핑 효과
-                await typeWriterEffect(loadingElement, finalHTML);
-
-                translateCardButtons(loadingElement);
-
-                updateChatHistory("assistant", resultData.answer);
-                currentResultIds = resultData.last_result_ids || [];
-                currentTotalFound = resultData.total_found || 0;
-                currentShownCount = Math.min(2, currentResultIds.length);
-
-                addFeedbackButtons(loadingElement, jobId, question, resultData.answer);
-                setLoadingState(false);
-            } else if (resultData.status === 'error') {
-                clearInterval(intervalId); clearInterval(messageIntervalId);
-                loadingElement.textContent = resultData.message || getRequestMessages().error;
-                setLoadingState(false);
-            }
-            chatBox.scrollTop = chatBox.scrollHeight;
-        } catch (error) {
-            console.error('Polling loop error:', error);
-        }
-    }, pollInterval);
+async function pollForResult(jobId, signal) {
+    while (!signal.aborted) {
+        const response = await fetch(API_URL_RESULT+jobId, {signal});
+        if (!response.ok) throw new Error('Polling HTTP '+response.status);
+        const data = await response.json();
+        if (data.status === 'complete' || data.status === 'error') return {...data, job_id:jobId};
+        await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+    throw new DOMException('Aborted', 'AbortError');
 }
 
 // --- 6. 헬퍼 함수 ---
@@ -718,7 +667,7 @@ function addMessageToBox(role, content) {
 }
 
 function updateChatHistory(role, content) {
-    chatHistory.push({ "role": role, "content": content });
+    chatHistory.push({ "role": role, "content": String(content).slice(0, 12000) });
     if (chatHistory.length > MAX_HISTORY_TURNS * 2) chatHistory.shift();
 }
 
@@ -842,28 +791,33 @@ async function submitFeedback(jobId, question, answer, feedbackType, containerEl
     containerElement.innerHTML = `<p class="feedback-sending">${textData.sending}</p>`;
 
     try {
-        await fetch('/feedback', {
+        const response = await fetch('/feedback', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 job_id: jobId,
                 question: question,
-                answer: answer,
+                answer: String(answer).slice(0, 12000),
                 feedback: feedbackType,
                 comment: comment,
                 reason: reason,
-                chat_history: historyStr
+                chat_history: String(historyStr).slice(0, 20000)
             })
         });
 
+        if (!response.ok) throw new Error('Feedback HTTP '+response.status);
+        const result = await response.json();
+        if (result.status !== 'success') throw new Error('Feedback not saved');
         const thanksText = feedbackType === '👍' ? textData.thanks_good : textData.thanks_bad;
         containerElement.innerHTML = `<p class="feedback-success">${thanksText}</p>`;
     } catch (error) {
-        containerElement.innerHTML = `<p style="color:red; font-size:12px;">Error</p>`;
+        containerElement.textContent = getRequestMessages().error;
     }
 }
 
 function setLoadingState(isLoading) {
+    isChatLoading = isLoading;
+    document.querySelectorAll('.lang-btn, .suggestion-chip, .clarify-btn, .show-more-btn').forEach(button => { button.disabled = isLoading; });
     const lang = window.currentLang || 'ko';
     const baseText = UI_TEXT[lang].loading;
 
@@ -929,13 +883,14 @@ if (canUseMic) {
     if (sendBtn) sendBtn.style.display = 'flex';
 }
 
-window.visualViewport.addEventListener('resize', () => {
+window.visualViewport?.addEventListener('resize', () => {
     setTimeout(() => {
         chatBox.scrollTop = chatBox.scrollHeight;
     }, 100);
 });
 
 function sendSuggestion(text) {
+    if (isChatLoading) return;
     const userInput = document.getElementById('user-input');
     userInput.value = text;
     toggleInputButtons();

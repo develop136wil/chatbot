@@ -19,11 +19,13 @@ from utils import (
     _get_number, 
     _get_rich_text,
     _get_url,
-    _get_url,
     get_gemini_embedding,
     _get_multi_select,
     translate_content_multilingual_sync, # [신규]
-    bump_response_cache_scope_versions,
+    DATABASE_IDS,
+    require_runtime_schema,
+    reserve_ai_budget_sync,
+    AI_DAILY_GLOBAL_LIMIT,
     purge_expired_response_cache,
 )
 
@@ -80,13 +82,6 @@ def init_clients():
 
     logger.info("[Indexer] 초기화 완료.")
 
-DATABASE_IDS = {
-    "의료/재활": "2738ade5021080b786b0d8b0c07c1ea2",
-    "교육/보육": "2738ade5021080339203d7148d7d943b",
-    "가족 지원": "2738ade502108041a4c7f5ec4c3b8413",
-    "돌봄/양육": "2738ade5021080cf842df820fdbeb709",
-    "생활 지원": "2738ade5021080579e5be527ff1e80b2"
-}
 NOTION_PROPERTY_NAMES = {
     "title": "사업명", "support_detail": "상세 지원 내용", "extra_req": "추가 자격요건",
     "contact": "문의처", "start_age": "시작 월령(개월)", "end_age": "종료 월령(개월)",
@@ -126,38 +121,29 @@ def send_email_alert(subject: str, body: str):
     except Exception as e:
         logger.error(f"❌ [Email] 알림 발송 실패: {e}")
 
-def load_state_from_db() -> Dict[str, Dict[str, str]]:
-    """Supabase에서 현재 저장된 페이지들의 last_edited_time을 로드합니다."""
-    try:
-        # [최적화] 필요한 필드만 조회 (page_id, metadata->last_edited_time)
-        # Supabase에서는 jsonb 내부 필드 접근 가능: metadata->>last_edited_time
-        # 하지만 Python client에서는 select("page_id, metadata") 후 파싱이 안전함
-        
-        # 데이터가 많을 수 있으므로 페이징 처리 필요할 수 있음.
-        # 일단 1000개 제한 (Welfare DB 규모상 충분할 수 있으나, 추후 loop 필요)
-        # 여기서는 간단히 전체 로드 시도 (limit 5000)
-        response = supabase.table("site_pages").select("page_id, metadata").limit(5000).execute()
-        
-        state = {}
-        for item in response.data:
-            pid = item.get("page_id")
-            # metadata가 없거나 last_edited_time이 없으면 None
-            meta = item.get("metadata") or {} 
-            last_edit = meta.get("last_edited_time")
-            category = meta.get("category")
-            
-            if pid and last_edit:
-                state[pid] = {
-                    "last_edited_time": last_edit,
-                    "category": category,
-                    "translations_complete": has_complete_multilingual_metadata(meta),
-                }
-                
-        logger.info(f"📂 [State] DB에서 {len(state)}개의 기존 인덱싱 상태 로드 완료.")
-        return state
-    except Exception as e:
-        logger.warning(f"⚠️ DB 상태 로드 실패 (초기화 진행): {e}")
-        return {}
+class IndexingIncomplete(RuntimeError):
+    def __init__(self, summary):
+        self.summary = summary
+        super().__init__("Indexing incomplete: "+json.dumps(summary,ensure_ascii=False))
+
+def load_state_from_db():
+    state = {}
+    offset = 0
+    while True:
+        # 조회 실패를 초기 DB로 오해하여 전체 재색인하지 않습니다.
+        response = supabase.table("site_pages").select("page_id,metadata").order("page_id").range(offset,offset+499).execute()
+        rows = response.data or []
+        for row in rows:
+            meta = row.get("metadata") or {}
+            state[row["page_id"]] = {
+                "last_edited_time":meta.get("last_edited_time"), "category":meta.get("category"),
+                "translations_complete":has_complete_multilingual_metadata(meta), "metadata":meta,
+            }
+        if len(rows)<500:
+            break
+        offset += len(rows)
+    logger.info("기존 인덱싱 상태 로드: %s건",len(state))
+    return state
 
 def run_indexing():
     # [수정] 실행 시점에 초기화 수행
@@ -165,10 +151,8 @@ def run_indexing():
     
     logger.info("\n🔥🔥🔥 [업데이트] 문서 임베딩(RETRIEVAL_DOCUMENT) 최적화 인덱싱 시작 🔥🔥🔥\n")
     
-    client = get_llm_client()
-    if not client:
-        logger.critical("❌ FATAL: Gemini 모델 로드 실패. 인덱싱을 중단합니다.")
-        return
+    # 문서 쓰기와 무효화가 원자적인 스키마인지 먼저 확인합니다.
+    require_runtime_schema(supabase)
 
     # [수정] DB 기반 상태 로드 (GitHub Actions 등 비상태 환경 대응)
     prev_state = load_state_from_db()
@@ -178,7 +162,9 @@ def run_indexing():
     total_skipped = 0
     translation_pending_pages = []
     has_critical_error = False
-    changed_categories = set()
+    failed_pages = set()
+    deferred_pages = set()
+    total_found = 0
     
     for category_name, db_id in DATABASE_IDS.items():
         logger.info(f"\n[Indexer] '{category_name}' DB 확인 중...")
@@ -189,6 +175,7 @@ def run_indexing():
             has_more = True
             next_cursor = None
             fetch_failed = False
+            seen_cursors = set()
             
             while has_more:
                 query_params = {"database_id": db_id}
@@ -214,9 +201,15 @@ def run_indexing():
                     resp.raise_for_status()
                     response = resp.json()
                     
-                    results.extend(response.get("results", []))
+                    if not isinstance(response.get("results"), list) or type(response.get("has_more")) is not bool:
+                        raise RuntimeError("Invalid Notion pagination response")
+                    results.extend(response["results"])
                     has_more = response.get("has_more")
                     next_cursor = response.get("next_cursor")
+                    if has_more:
+                        if not next_cursor or next_cursor in seen_cursors:
+                            raise RuntimeError("Notion pagination cursor missing/repeated")
+                        seen_cursors.add(next_cursor)
                     time.sleep(0.3) 
                 except Exception as e:
                     logger.error(f"❌ Notion API 호출 실패: {e}")
@@ -230,10 +223,14 @@ def run_indexing():
             
             logger.info(f" - {len(results)}개 페이지 발견.")
 
+            total_found += len(results)
             for page in results:
                 page_id = page.get("id")
                 last_edited = page.get("last_edited_time")
-                if not page_id: continue
+                if not page_id:
+                    has_critical_error = True
+                    failed_pages.add("missing-page-id")
+                    continue
                 
                 current_state[page_id] = last_edited
 
@@ -242,11 +239,25 @@ def run_indexing():
                     page_id in prev_state
                     and prev_state[page_id].get("last_edited_time") == last_edited
                     and prev_state[page_id].get("translations_complete")
+                    and prev_state[page_id].get("category") == category_name
                 ):
                     total_skipped += 1
                     continue
 
-                logger.info(f"⚡️ 처리 시작 (ID: {page_id})")
+                # 수정/번역 보완 문서만 공용 예산 1단위를 사용합니다.
+                try:
+                    allowed = reserve_ai_budget_sync("indexer", AI_DAILY_GLOBAL_LIMIT)
+                except Exception:
+                    allowed = False
+                if not allowed:
+                    deferred_pages.add(page_id)
+                    continue
+                translation_only = (
+                    page_id in prev_state
+                    and prev_state[page_id].get("last_edited_time") == last_edited
+                    and prev_state[page_id].get("category") == category_name
+                )
+                logger.info(f"⚡️ 처리 시작 (ID: {page_id}, translation_only={translation_only})")
 
                 # 데이터 추출
                 try:
@@ -310,7 +321,8 @@ def run_indexing():
                     
                     full_text_for_embedding = "\n".join([p.strip() for p in embedding_parts if p and p.strip()])
                 except Exception as e:
-                    logger.error(f"❌ 데이터 파싱 중 오류 (ID:{page_id}): {e}")
+                    logger.error("데이터 파싱 실패: %s", type(e).__name__)
+                    failed_pages.add(page_id)
                     continue
 
                 if total_processed == 0: 
@@ -336,7 +348,14 @@ def run_indexing():
                             pre_summary = translate_content_simple(chunk_text)
 
                         # [신규] 다국어 번역 (Phase 3)
-                        transl_dict = translate_content_multilingual_sync(title, pre_summary)
+                        previous = prev_state.get(page_id, {}).get("metadata", {}) if translation_only else {}
+                        languages = [lang for lang in ("en","zh","vi") if not all(
+                            isinstance(previous.get(field),str) and previous[field].strip()
+                            for field in (f"title_{lang}",f"pre_summary_{lang}"))]
+                        transl_dict = translate_content_multilingual_sync(title, pre_summary, languages)
+                        for lang in ("en","zh","vi"):
+                            if lang not in languages:
+                                transl_dict[lang] = {"title":previous[f"title_{lang}"],"content":previous[f"pre_summary_{lang}"]}
                         
                         # 번역 결과 추출 (실패 시 빈값)
                         en_data = transl_dict.get("en", {})
@@ -354,12 +373,9 @@ def run_indexing():
                             )
 
                         # 2. 임베딩
-                        embedding = get_gemini_embedding(
-                            full_text_for_embedding, 
-                            task_type="RETRIEVAL_DOCUMENT"
-                        )
-
-                        if not embedding:
+                        embedding = None if translation_only else get_gemini_embedding(
+                            full_text_for_embedding, task_type="RETRIEVAL_DOCUMENT")
+                        if not translation_only and not embedding:
                             logger.warning(f"❌ 임베딩 생성 실패! 건너뜀.")
                             continue
 
@@ -395,9 +411,13 @@ def run_indexing():
 
                 if records_to_insert:
                     try:
-                        supabase.table("site_pages").upsert(records_to_insert, on_conflict="page_id").execute()
+                        if translation_only:
+                            # 기존 임베딩은 변경하지 않습니다.
+                            supabase.table("site_pages").update({"metadata":metadata}).eq("page_id",page_id).execute()
+                        else:
+                            supabase.table("site_pages").upsert(records_to_insert, on_conflict="page_id").execute()
                         total_processed += 1
-                        changed_categories.add(category_name)
+                        # DB trigger가 old/new 카테고리와 전체 범위를 같은 트랜잭션에서 갱신.
                         if not metadata.get("translations_complete"):
                             translation_pending_pages.append(title)
                         
@@ -410,6 +430,9 @@ def run_indexing():
                         logger.error(f"❌ Supabase 저장 실패: {e}")
                         # 저장 실패 시 삭제 정리까지 수행하면 별도 문서까지 잃을 수 있습니다.
                         has_critical_error = True
+                        failed_pages.add(page_id)
+                else:
+                    failed_pages.add(page_id)
 
         except Exception as e:
             error_msg = f"❌ 카테고리 '{category_name}' 처리 중 치명적 오류: {e}\n{traceback.format_exc()}"
@@ -419,6 +442,11 @@ def run_indexing():
 
     # 삭제 처리 로직
     deleted_count = 0
+    deleted_success = 0
+    # 원본 DB 설정 오류 등을 빈 DB로 오해해 전체 삭제하지 않습니다.
+    if prev_state and not total_found:
+        has_critical_error = True
+        logger.error("원본 전체 0건: 전체 삭제 차단")
     if has_critical_error:
         logger.warning("\n[Indexer] ⚠️ 오류 발생으로 삭제 단계 건너뜀.")
     else:
@@ -431,17 +459,15 @@ def run_indexing():
             for del_id in deleted_ids:
                 try:
                     supabase.table("site_pages").delete().eq("page_id", del_id).execute()
-                    deleted_category = prev_state.get(del_id, {}).get("category")
-                    if deleted_category:
-                        changed_categories.add(deleted_category)
+                    deleted_success += 1
+                    # 삭제의 캐시 무효화도 DB trigger에서 수행합니다.
                 except Exception as e:
-                    logger.warning(f"⚠️ 삭제 실패: {e}")
+                    logger.warning("삭제 실패: %s",type(e).__name__)
+                    has_critical_error = True
         
         # save_state(current_state) # 불필요 (DB metadata에 저장됨)
         purge_expired_response_cache(supabase)
-        if changed_categories:
-            # 변경된 카테고리와 전체 범위 버전만 올려 관련된 응답 캐시만 무효화합니다.
-            bump_response_cache_scope_versions(supabase, list(changed_categories))
+        # 개별 쓰기에 trigger가 적용되어 부분 성공도 이미 무효화되어 있습니다.
         # 성공 알림 (옵션: 너무 자주 오면 귀찮으므로 주석 처리하거나, 요약 리포트로 발송 가능)
         # send_email_alert("[Chatbot Indexer] 인덱싱 완료", f"총 {total_processed}건 업데이트됨.")
         if translation_pending_pages:
@@ -450,12 +476,19 @@ def run_indexing():
                 len(translation_pending_pages),
                 ", ".join(translation_pending_pages[:5]),
             )
-        logger.info(
-            "\n[Indexer] ✨ 완료. (업데이트: %s, 건너뜀: %s, 다국어 보류: %s)",
-            total_processed,
-            total_skipped,
-            len(translation_pending_pages),
-        )
+
+
+    summary = {
+        "found":total_found, "updated":total_processed, "skipped":total_skipped,
+        "failed":len(failed_pages), "deferred":len(deferred_pages),
+        "translation_pending":len(translation_pending_pages),
+        "delete_candidates":deleted_count, "deleted":deleted_success, "critical_error":has_critical_error,
+    }
+    logger.info("INDEXING_SUMMARY %s",json.dumps(summary,ensure_ascii=False))
+    if has_critical_error or failed_pages or deferred_pages or translation_pending_pages:
+        raise IndexingIncomplete(summary)
+    logger.info("인덱싱 전체 완료: 발견 문서 모두 처리/검증됨")
+    return summary
 
 if __name__ == "__main__":
     run_indexing()

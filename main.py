@@ -5,6 +5,9 @@ import uuid
 import logging
 import asyncio
 import time
+import hashlib
+import hmac
+from runtime_policy import fallback_intent, normalize_intent, visible_question
 import secrets  # [추가] 보안 토큰 생성
 import re
 from typing import List, Dict, Optional, Literal
@@ -12,7 +15,7 @@ from fastapi import FastAPI, Query, HTTPException, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, HTMLResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from starlette.middleware.sessions import SessionMiddleware
 from dotenv import load_dotenv
 from contextlib import asynccontextmanager
@@ -37,6 +40,11 @@ from utils import (
     build_response_cache_key,
     get_response_cache_async,
     save_response_cache_async,
+    reserve_ai_budget_async,
+    invalidate_response_cache,
+    RESPONSE_CACHE_USE_DIRECT_REST,
+    RESPONSE_CACHE_TABLE,
+    _secret_cache_rest_request_async,
     notion,   
     supabase, 
     # 임시: 비동기 함수들 import 오류 방지
@@ -145,7 +153,7 @@ app.add_middleware(
 SESSION_SECRET = os.getenv("SESSION_SECRET_KEY", secrets.token_hex(32))
 if not os.getenv("SESSION_SECRET_KEY"):
     logger.warning("⚠️ [Security] SESSION_SECRET_KEY가 없어 재시작 시 세션이 초기화됩니다.")
-app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET)
+app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET, https_only=bool(os.getenv("VERCEL_ENV")))
 
 # --- 정적 파일 서빙 ---
 if os.path.exists("static"):
@@ -160,17 +168,34 @@ JOB_RESULT_KEY_PREFIX = "chatbot:job_result:"
 SHOW_MORE_EXACT_TERMS = {
     "더", "다음", "계속", "더보여줘", "다른거", "다른것", "또",
     "more", "next", "showmore", "continue",
-    "xemthêm", "tiếp", "nữa", "tiếptục",
+    "xemthêm", "tiếp", "tiếptheo", "nữa", "tiếptục",
     "更多", "继续", "下一个", "还有吗",
 }
 
 # --- 요청 모델 ---
+class ChatTurn(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=12000)
+
 class ChatRequest(BaseModel):
+    action: Literal["ask", "more"] = "ask"
     question: str = Field(min_length=1, max_length=MAX_QUESTION_LENGTH)
     language: str = Field(default="ko", pattern="^(ko|en|vi|zh)$")
     last_result_ids: List[str] = Field(default_factory=list, max_length=MAX_RESULT_IDS)
     shown_count: int = Field(default=0, ge=0, le=MAX_RESULT_IDS)
     chat_history: List[dict] = Field(default_factory=list, max_length=MAX_CHAT_HISTORY_ITEMS)
+
+    @field_validator("chat_history")
+    @classmethod
+    def validate_history(cls, value):
+        return [ChatTurn.model_validate(turn).model_dump() for turn in value]
+
+    @field_validator("last_result_ids")
+    @classmethod
+    def validate_ids(cls, value):
+        for item in value:
+            uuid.UUID(item)
+        return list(dict.fromkeys(value))
 
 
 class FreeTierDailyLimitExceeded(RuntimeError):
@@ -193,12 +218,12 @@ def reserve_free_tier_request(session: dict) -> None:
 
 def is_initial_cacheable_request(chat_request: ChatRequest) -> bool:
     """이전 대화나 '더 보기' 상태에 의존하지 않는 질문만 공유 캐시합니다."""
-    return not chat_request.chat_history and not chat_request.last_result_ids and chat_request.shown_count == 0
+    return chat_request.action == "ask" and not chat_request.chat_history
 
 
 def is_response_cache_read_eligible(chat_request: ChatRequest, question: str, language: str) -> bool:
     """새 질문 또는 직전 질문을 그대로 반복한 경우에만 공유 캐시를 읽습니다."""
-    if chat_request.last_result_ids or chat_request.shown_count != 0:
+    if chat_request.action == "more":
         return False
     if not chat_request.chat_history:
         return True
@@ -228,47 +253,29 @@ async def cache_response_if_eligible(
     return response
 
 
-async def build_show_more_response(chat_request: ChatRequest, language: str) -> dict:
-    """이전 검색 결과의 다음 카드만 조회하는 빠른 경로입니다."""
-    ui_text = LOCALIZED_UI[language]
-    start = chat_request.shown_count
-    end = start + RESULTS_PER_PAGE
-    target_ids = chat_request.last_result_ids[start:end]
-
-    if not target_ids:
-        return {
-            "status": "complete",
-            "answer": ui_text["no_more"],
-            "last_result_ids": chat_request.last_result_ids,
-            "total_found": len(chat_request.last_result_ids),
-            "shown_count": start,
-        }
-
+async def build_show_more_response(chat_request, language):
+    ui = LOCALIZED_UI[language]
+    ids = chat_request.last_result_ids
+    cursor = min(chat_request.shown_count, len(ids))
+    selected = []
     try:
-        next_pages = await get_supabase_pages_by_ids_async(target_ids)
-        next_pages = await localize_result_pages_async(next_pages, language)
-        formatted_body = format_search_results(next_pages, language)
-        shown_end = start + len(next_pages)
-        remaining = len(chat_request.last_result_ids) - end
-        header = f"<p>{ui_text['more_header'].format(start=start + 1, end=shown_end)}</p>"
-        answer_text = f"{header}<hr>{formatted_body}"
-        answer_text += f"<hr>{ui_text['footer_more']}" if remaining > 0 else f"<hr><p>{ui_text['all_results']}</p>"
-
-        return {
-            "status": "complete",
-            "answer": answer_text,
-            "last_result_ids": chat_request.last_result_ids,
-            "total_found": len(chat_request.last_result_ids),
-            "shown_count": min(end, len(chat_request.last_result_ids)),
-        }
-    except Exception as e:
-        logger.error("더 보기 처리 오류: %s", type(e).__name__)
-        return {
-            "status": "error",
-            "message": ui_text["system_error"],
-            "last_result_ids": chat_request.last_result_ids,
-            "total_found": len(chat_request.last_result_ids),
-        }
+        # 삭제된 문서를 건너뛰며 최대 2개의 실제 문서를 찾습니다.
+        while cursor < len(ids) and len(selected)<RESULTS_PER_PAGE:
+            batch = ids[cursor:cursor+RESULTS_PER_PAGE-len(selected)]
+            selected.extend(await get_supabase_pages_by_ids_async(batch))
+            cursor += len(batch)
+        if not selected:
+            answer = ui["no_more"]
+        else:
+            selected = await localize_result_pages_async(selected, language, allow_live=False)
+            answer = f"<p>{ui['more_header'].format(start=chat_request.shown_count+1,end=cursor)}</p><hr>"
+            answer += format_search_results(selected,language)
+            answer += "<hr>"+(ui["footer_more"] if cursor<len(ids) else ui["all_results"])
+        return {"status":"complete","answer":answer,"last_result_ids":ids,
+                "total_found":len(ids),"shown_count":cursor}
+    except Exception as error:
+        logger.error("더 보기 조회 실패: %s",type(error).__name__)
+        return {"status":"error","message":ui["system_error"]}
 
 # [main.py] 상단 함수 정의 부분에 추가
 
@@ -276,15 +283,17 @@ _memory_rate_limits: Dict[str, List[float]] = {}
 _memory_rate_limit_lock = asyncio.Lock()
 
 
-async def _check_memory_rate_limit(key: str, limit: int, window: int):
-    """Redis가 없는 서버리스 환경에서도 최소한의 요청 제한을 유지합니다."""
+async def _check_memory_rate_limit(key, limit, window):
     now = time.monotonic()
     async with _memory_rate_limit_lock:
-        recent = [timestamp for timestamp in _memory_rate_limits.get(key, []) if now - timestamp < window]
-        if len(recent) >= limit:
+        for expired in [k for k,v in _memory_rate_limits.items() if not v or now-v[-1]>300]:
+            del _memory_rate_limits[expired]
+        if key not in _memory_rate_limits and len(_memory_rate_limits)>=10000:
+            raise HTTPException(status_code=429,detail="Rate limit capacity reached")
+        recent = [t for t in _memory_rate_limits.get(key,[]) if now-t<window]
+        if len(recent)>=limit:
             raise HTTPException(status_code=429, detail="요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.")
-        recent.append(now)
-        _memory_rate_limits[key] = recent
+        _memory_rate_limits[key] = recent+[now]
 
 
 async def check_rate_limit(request: Request, limit: int = RATE_LIMIT_MAX_REQUESTS, window: int = RATE_LIMIT_WINDOW_SECONDS):
@@ -301,7 +310,7 @@ async def check_rate_limit(request: Request, limit: int = RATE_LIMIT_MAX_REQUEST
             client_ip = request.client.host
             
         # 2. Redis 키 생성
-        key = f"rate_limit:{client_ip}"
+        key = f"rate_limit:{request.url.path}:{client_ip}"
         
         # [수정] 비동기 Redis 사용
         if redis_async_client:
@@ -338,13 +347,18 @@ async def read_robots():
 
 @app.get("/health")
 def health_check():
-    return {"status": "ok", "env": "vercel"}
+    # 프로세스 생존 확인용. DB/AI 준비 상태를 보장하지 않습니다.
+    return {"status":"ok", "env":"vercel" if os.getenv("VERCEL_ENV") else "local",
+            "revision":os.getenv("VERCEL_GIT_COMMIT_SHA", "local"), "check":"liveness"}
 
 @app.get("/debug")
-def debug_check():
+def debug_check(request: Request):
     """진단용 엔드포인트: 각 연결 상태를 개별적으로 테스트"""
     if not DEBUG_ENDPOINT_ENABLED:
         raise HTTPException(status_code=404, detail="Not Found")
+    provided = request.headers.get("X-Admin-Secret", "")
+    if not ADMIN_SECRET_KEY or not secrets.compare_digest(provided, ADMIN_SECRET_KEY):
+        raise HTTPException(status_code=401, detail="Unauthorized")
     results = {}
     
     # 1. Supabase 연결 테스트
@@ -359,15 +373,9 @@ def debug_check():
     
     # 2. Gemini 임베딩 테스트
     try:
-        from utils import get_gemini_embedding, KEY_POOL
-        if KEY_POOL:
-            embedding = get_gemini_embedding("테스트")
-            if embedding:
-                results["gemini_embed"] = f"✅ OK (dim: {len(embedding)})"
-            else:
-                results["gemini_embed"] = "❌ Returned None"
-        else:
-            results["gemini_embed"] = "❌ No API keys"
+        from utils import KEY_POOL
+        # 진단 조회가 공용 AI 예산을 우회하여 토큰을 쓰지 않도록 실제 호출하지 않습니다.
+        results["gemini_embed"] = "Configured (not probed)" if KEY_POOL else "No API keys"
     except Exception as e:
         results["gemini_embed"] = f"❌ Error: {type(e).__name__}: {str(e)[:100]}"
     
@@ -384,26 +392,22 @@ def debug_check():
     return results
 
 @app.post("/admin/clear_cache")
-def clear_all_caches(request: Request, secret: Optional[str] = Query(None)):
+async def clear_all_caches(request: Request):
     if not ADMIN_SECRET_KEY:
         raise HTTPException(status_code=404, detail="Not Found")
-    secret = request.headers.get("X-Admin-Secret") or secret
-    if not secret or not secrets.compare_digest(secret, ADMIN_SECRET_KEY):
-        raise HTTPException(status_code=401, detail="Unauthorized")
-    if not redis_client:
-        raise HTTPException(status_code=503, detail="Redis cache is not enabled")
-    try:
-        logger.warning("--- 🔒 관리자 요청: Redis 캐시 초기화 ---")
-        keys_to_delete = []
-        for key_pattern in ["extract:*", "rank:*", "summary:*", f"{JOB_RESULT_KEY_PREFIX}*"]:
-            keys_to_delete.extend(redis_client.scan_iter(match=key_pattern, count=100))
-        if keys_to_delete:
-            redis_client.delete(*keys_to_delete)
-        redis_client.delete(MAIN_ANSWER_CACHE_KEY) 
-        redis_client.delete(JOB_RESULTS_KEY)
-        return {"status": "Redis 캐시 삭제 완료"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"오류: {e}")
+    provided = request.headers.get("X-Admin-Secret", "")
+    if not secrets.compare_digest(provided,ADMIN_SECRET_KEY):
+        raise HTTPException(status_code=401,detail="Unauthorized")
+    if RESPONSE_CACHE_USE_DIRECT_REST:
+        await _secret_cache_rest_request_async("DELETE",RESPONSE_CACHE_TABLE,params={"cache_key":"neq."})
+    elif not await asyncio.to_thread(invalidate_response_cache):
+        raise HTTPException(status_code=503,detail="Response cache unavailable")
+    if redis_async_client:
+        for pattern in ("extract:*","extract_v2:*","rank:*","summary:*","summary_v*:*"):
+            async for key in redis_async_client.scan_iter(match=pattern,count=100):
+                await redis_async_client.delete(key)
+        await redis_async_client.delete(MAIN_ANSWER_CACHE_KEY)
+    return {"status":"응답 캐시 삭제 완료"}
 
 
 
@@ -411,178 +415,91 @@ def clear_all_caches(request: Request, secret: Optional[str] = Query(None)):
 
 @app.post("/chat")
 async def chat_with_bot(chat_request: ChatRequest, request: Request):
-    # 1. 도배 방지 (비동기 호출)
-    await check_rate_limit(request, limit=10, window=60) 
+    try:
+        return await asyncio.wait_for(_chat_with_bot(chat_request,request),40)
+    except asyncio.TimeoutError:
+        return {"status":"error","message":LOCALIZED_UI[chat_request.language]["system_error"]}
 
-    session = request.session
-    question = chat_request.question.strip()
-    chat_history = chat_request.chat_history
-    language = resolve_language(chat_request.language, question)
-    ui_text = LOCALIZED_UI[language]
-    logger.info("질문 수신 (글자 수=%s, 언어=%s)", len(question), language)
-
+async def _chat_with_bot(chat_request: ChatRequest, request: Request):
+    await check_rate_limit(request, limit=10, window=60)
+    question = visible_question(chat_request.question)
     if not question:
         raise HTTPException(status_code=422, detail="질문을 입력해 주세요.")
-
-    visible_question = re.sub(r'\s*\(System[\s\S]*?\)', '', question, flags=re.IGNORECASE).strip()
-    normalized_input = visible_question.lower()
-    input_no_spaces = normalized_input.replace(" ", "")
-
-    # [수정] Redis 상태 확인 (Vercel 환경에서는 강제로 동기 모드)
-    # Vercel 환경 변수가 있거나 Redis 클라이언트가 없으면 동기 모드로 강제 전환
-    force_sync_mode = os.getenv("VERCEL_ENV") == "production" or os.getenv("FORCE_SYNC_MODE") == "true"
-    is_redis_down = force_sync_mode or (redis_async_client is None)
-    
-    if force_sync_mode:
-        logger.info("🔄 Vercel 환경 감지: 동기 모드로 강제 전환")
-
-    # 2. 정확한 '더 보기'는 즉시 처리합니다. (LLM 호출·대기 불필요)
-    if input_no_spaces in SHOW_MORE_EXACT_TERMS and chat_request.last_result_ids:
-        logger.info("더 보기 빠른 경로 처리")
-        return await build_show_more_response(chat_request, language)
-
-    # 정확 일치 캐시는 의도 분석·임베딩·LLM 호출보다 먼저 확인합니다.
-    if is_response_cache_read_eligible(chat_request, question, language):
-        cached_response = await get_response_cache_async(question, language)
-        if cached_response:
-            logger.info("♻️ [Response Cache] Hit")
-            return cached_response
-
-    try:
-        reserve_free_tier_request(session)
-    except FreeTierDailyLimitExceeded:
-        return {"status": "error", "message": ui_text["free_tier_daily_limit"]}
-
-    # 3. AI 의도 분석 (비동기 호출)
-    try:
-        extracted_info = await extract_info_from_question_async(question, chat_history)
-        if isinstance(extracted_info, dict) and "error" in extracted_info:
-            if "free_tier_quota_exceeded" in extracted_info["error"]:
-                return {"status": "error", "message": ui_text["free_tier_quota"]}
-            raise RuntimeError(extracted_info["error"])
-    except FreeTierQuotaExceeded:
-        return {"status": "error", "message": ui_text["free_tier_quota"]}
-    except Exception as e:
-        logger.error("질문 분석 오류: %s", type(e).__name__)
-        return {"status": "error", "message": ui_text["system_error"]}
-
-
-    # 4. 자연어 '더 보기' 요청은 의도 분석 결과로만 처리합니다.
-    is_ai_match = extracted_info.get("intent") == "show_more"
-    is_show_more = is_ai_match
-    
-    # '더 보기' 실행 (Redis가 죽어도 Supabase는 살아있으므로 작동 가능)
-    if is_show_more and chat_request.last_result_ids:
-        logger.info("더 보기 AI 의도 경로 처리")
-        return await build_show_more_response(chat_request, language)
-
-    # 4. 의도별 분기 (Small talk 등)
-    if extracted_info.get("intent") == "safety_block":
-        return await cache_response_if_eligible(chat_request, question, language, {
-            "status": "complete", "answer": ui_text["safety_block"], "last_result_ids": [], "total_found": 0
-        })
-    
-    if extracted_info.get("intent") == "exit":
-        return await cache_response_if_eligible(chat_request, question, language, {
-            "status": "complete", "answer": ui_text["exit"], "last_result_ids": [], "total_found": 0
-        })
-    
-    if extracted_info.get("intent") == "reset":
-        return await cache_response_if_eligible(chat_request, question, language, {
-            "status": "complete", "answer": ui_text["reset"], "last_result_ids": [], "total_found": 0
-        })
-
-    if extracted_info.get("intent") == "out_of_scope":
-        return await cache_response_if_eligible(chat_request, question, language, {
-            "status": "complete", "answer": ui_text["out_of_scope"], "last_result_ids": [], "total_found": 0
-        })
-
-    if extracted_info.get("intent") == "small_talk":
-        answer = ui_text["small_talk"]
-        thanks_keywords = {
-            "ko": ("고마", "감사"),
-            "en": ("thank",),
-            "vi": ("cảm ơn", "cam on"),
-            "zh": ("谢谢", "感謝", "感谢"),
-        }
-        if any(keyword in normalized_input for keyword in thanks_keywords[language]):
-            answer = ui_text["thanks"]
-        return await cache_response_if_eligible(chat_request, question, language, {
-            "status": "complete", "answer": answer, "last_result_ids": [], "total_found": 0
-        })
-
-    if extracted_info.get("intent") == "clarify_category":
-        category_options = [ui_text["cats"].get(category, category) for category in DATABASE_IDS]
-        return await cache_response_if_eligible(chat_request, question, language, {
-            "status": "clarify", "answer": ui_text["clarify"], "options": category_options,
-            "last_result_ids": [], "total_found": 0
-        })
-
-    # 5. 캐시 확인 (Redis Async)
-    if not is_redis_down:
-        try:
-            cached_data = await redis_async_client.hget(MAIN_ANSWER_CACHE_KEY, question)
-            if cached_data:
-                logger.info(f"✅ [API] Cache Hit!")
-                session.clear(); session["last_question"] = question
-                return json.loads(cached_data.decode('utf-8'))
-        except Exception: pass
-
-    # 6. 작업 처리 (비상 모드 포함)
-    logger.info("[API] Job 생성 및 처리 시작.")
-    
+    language = resolve_language(chat_request.language,question)
+    ui = LOCALIZED_UI[language]
+    history = chat_request.chat_history
     job_id = str(uuid.uuid4())
-    ai_category = extracted_info.get("category") if isinstance(extracted_info, dict) else None
-    
-    job_data = {
-        "job_id": job_id, 
-        "question": question, 
-        "language": language,
-        "chat_history": chat_history,
-        "ai_category": ai_category,
-        # 직접 실행과 Redis 작업 경로 모두 worker가 결과의 카테고리 범위까지 저장합니다.
-        "cacheable": is_initial_cacheable_request(chat_request),
-    }
-
-    # [핵심 수정] Redis가 죽었으면 -> Async 직접 실행 (Vercel 최적화)
-    if is_redis_down:
-        logger.info(f"⚡️ [Direct Async] Worker 직접 실행 (Redis Bypass)")
+    def with_id(response):
+        return {**response, "job_id":job_id}
+    if fallback_intent(question)["intent"] == "reset":
+        return with_id({"status":"complete","action":"reset","answer":ui["reset"],
+                        "last_result_ids":[],"total_found":0,"shown_count":0})
+    exact_more = re.sub(r"\s+","",question).lower() in SHOW_MORE_EXACT_TERMS
+    if chat_request.action == "more" or exact_more:
+        return with_id(await build_show_more_response(chat_request,language))
+    if is_response_cache_read_eligible(chat_request,question,language):
+        cached = await get_response_cache_async(question,language)
+        if cached:
+            logger.info("[Response Cache] Hit")
+            return with_id(cached)
+    allow_ai = True
+    try:
+        reserve_free_tier_request(request.session)
+    except FreeTierDailyLimitExceeded:
+        allow_ai = False
+    if allow_ai:
+        ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (request.client.host if request.client else "unknown")
+        actor = hmac.new(SESSION_SECRET.encode(), ip.encode(), hashlib.sha256).hexdigest()
+        allow_ai = await reserve_ai_budget_async(actor)
+    # 사용량 확인 실패/한도 도달은 AI 없는 검색으로 전환합니다.
+    info = await extract_info_from_question_async(question,history) if allow_ai else fallback_intent(question)
+    info = normalize_intent(info,question)
+    if not history:
+        info["search_query"] = question
+    if info["intent"] == "show_more":
+        return with_id(await build_show_more_response(chat_request,language))
+    if info["intent"] == "reset":
+        return with_id({"status":"complete","action":"reset","answer":ui["reset"],
+                        "last_result_ids":[],"total_found":0,"shown_count":0})
+    if info["intent"] == "clarify_category":
+        return with_id({"status":"clarify","answer":ui["clarify"],
+            "options":[ui["cats"].get(c,c) for c in DATABASE_IDS],"last_result_ids":[],"total_found":0})
+    if info["intent"] in ("safety_block","exit","out_of_scope","small_talk"):
+        response={"status":"complete","answer":ui[info["intent"]],"last_result_ids":[],"total_found":0,"shown_count":0}
+        return with_id(await cache_response_if_eligible(chat_request,question,language,response))
+    job_data={"job_id":job_id,"question":question,"language":language,"chat_history":history,
+              "extracted_info":info,"allow_ai":allow_ai,"cacheable":is_initial_cacheable_request(chat_request)}
+    # Redis 선택 시 ping 성공한 경우에만 큐를 사용합니다.
+    force_direct = bool(os.getenv("VERCEL_ENV")) or os.getenv("FORCE_SYNC_MODE","").lower()=="true"
+    if redis_async_client and not force_direct:
         try:
-            from worker import process_job_async
-            
-            # Async 함수 직접 호출 (이제 process_job_async는 진짜 async임)
-            # result는 (final_answer, all_page_ids, total_found) 튜플
-            result = await process_job_async(job_data)
-            
-            if isinstance(result, tuple) and len(result) == 3:
-                final_answer, page_ids, total_found = result
-                response = {
-                    "status": "complete", 
-                    "answer": final_answer,
-                    "last_result_ids": page_ids,
-                    "total_found": total_found
-                }
-                return response
-            else:
-                # 예기치 않은 결과 형식
-                logger.error("Async Worker 결과 형식 오류: %s", type(result).__name__)
-                return {"status": "error", "message": ui_text["system_error"]}
-            
-        except Exception as e:
-            logger.error("Async Worker 처리 실패: %s", type(e).__name__)
-            return {"status": "error", "message": ui_text["system_error"]}
-
-    # Redis가 살아있으면 -> 큐에 넣기 (Async)
-    try: 
-        await redis_async_client.rpush(JOB_QUEUE_KEY, json.dumps(job_data, ensure_ascii=False).encode('utf-8'))
-        session.clear(); session["last_question"] = question
-        return {"message": "요청 접수 완료.", "job_id": job_id}
-    except Exception as e: 
-        logger.error("Redis Push 실패: %s", type(e).__name__)
-        return {"status": "error", "message": ui_text["system_error"]}
+            await asyncio.wait_for(redis_async_client.ping(),1)
+        except Exception:
+            logger.warning("Redis 연결 불가: 직접 실행")
+        else:
+            try:
+                await redis_async_client.rpush(JOB_QUEUE_KEY,json.dumps(job_data,ensure_ascii=False).encode("utf-8"))
+                request.session["job_ids"] = (request.session.get("job_ids", []) + [job_id])[-20:]
+                return {"message":"요청 접수 완료.","job_id":job_id}
+            except Exception:
+                # 전송 성공 여부가 불명확할 수 있어 중복 AI 실행을 피합니다.
+                return {"status":"error","message":ui["system_error"]}
+    from worker import process_job_async
+    try:
+        response = await asyncio.wait_for(process_job_async(job_data), 30)
+        return with_id(response)
+    except asyncio.TimeoutError:
+        logger.warning("작업 전체 제한 시간 초과")
+        return {"status":"error","message":ui["system_error"]}
 
 @app.get("/get_result/{job_id}")
-def get_job_result(job_id: str):
+def get_job_result(job_id: str, request: Request):
+    try:
+        uuid.UUID(job_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Not Found")
+    if job_id not in request.session.get("job_ids", []):
+        raise HTTPException(status_code=404, detail="Not Found")
     try:
         if not redis_client:
             raise HTTPException(status_code=503, detail="결과 저장소를 사용할 수 없습니다.")
@@ -615,28 +532,23 @@ class FeedbackRequest(BaseModel):
 
 @app.post("/feedback")
 async def handle_feedback(feedback_data: FeedbackRequest, request: Request):
-    await check_rate_limit(request, limit=5, window=300)
-    if not notion: raise HTTPException(status_code=503, detail="Notion API 오류")
-    
+    await check_rate_limit(request,limit=5,window=300)
+    if not notion:
+        raise HTTPException(status_code=503,detail="Notion unavailable")
+    props = {
+        "질문":{"title":[{"text":{"content":feedback_data.question[:2000]}}]},
+        "답변":{"rich_text":[{"text":{"content":feedback_data.answer[:2000]}}]},
+        "평가":{"select":{"name":feedback_data.feedback}},
+        "대화내역":{"rich_text":[{"text":{"content":(feedback_data.chat_history or "")[:2000]}}]},
+        "상세의견":{"rich_text":[{"text":{"content":(feedback_data.comment or "")[:2000]}}]},
+        "작업ID":{"rich_text":[{"text":{"content":feedback_data.job_id}}]},
+    }
+    if feedback_data.reason:
+        props["사유"]={"select":{"name":feedback_data.reason}}
     try:
-        notion.pages.create(
-            parent={"database_id": FEEDBACK_DB_ID},
-            properties={
-                "질문": {"title": [{"text": {"content": feedback_data.question[:2000]}}]},
-                "답변": {"rich_text": [{"text": {"content": feedback_data.answer[:2000]}}]},
-                "평가": {"select": {"name": feedback_data.feedback}},
-                
-                # [신규] 사유 (선택 속성으로 저장 -> 통계 가능)
-                "사유": {"select": {"name": feedback_data.reason}} if feedback_data.reason else None,
-                
-                # [신규] 대화내역 (문맥 파악용)
-                "대화내역": {"rich_text": [{"text": {"content": feedback_data.chat_history[:2000]}}]},
-                
-                "상세의견": {"rich_text": [{"text": {"content": feedback_data.comment[:2000] if feedback_data.comment else ""}}]},
-                "작업ID": {"rich_text": [{"text": {"content": feedback_data.job_id}}]}
-            }
-        )
-        return {"status": "success"}
-    except Exception as e:
-        logger.error(f"❌ 피드백 저장 실패: {e}")
-        raise HTTPException(status_code=500, detail="저장 실패")
+        await asyncio.wait_for(asyncio.to_thread(notion.pages.create,
+            parent={"database_id":FEEDBACK_DB_ID}, properties=props),10)
+        return {"status":"success"}
+    except Exception as error:
+        logger.error("피드백 저장 실패: %s",type(error).__name__)
+        raise HTTPException(status_code=503,detail="저장 실패") from error

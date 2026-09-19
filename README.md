@@ -2,9 +2,21 @@
 
 **도봉구 영유아 복지 정보를 쉽고 빠르게 찾아주는 AI 챗봇 서비스**
 
-이 프로젝트는 Notion에 저장된 복지 정보를 **RAG (Retrieval-Augmented Generation)** 기술을 활용해 검색하고, **Google Gemini 2.5** 및 **Llama 3.3** 모델을 통해 사용자 친화적인 답변으로 제공하는 하이브리드 AI 챗봇입니다.
+이 프로젝트는 Notion에 저장된 복지 정보를 **RAG (Retrieval-Augmented Generation)** 기술을 활용해 검색하고, **Google Gemini 2.5** 및 **Groq GPT-OSS** 모델을 통해 사용자 친화적인 답변으로 제공하는 하이브리드 AI 챗봇입니다.
 
 ---
+
+## 2026-09-19 업데이트 적용 전 필수 확인
+
+[배포 및 검증 안내](docs/20260919-rollout.md)를 먼저 확인하세요.
+기존 두 캐시 SQL 다음에 [안전장치 SQL](supabase/20260919_runtime_safety.sql)을
+**실제 운영 Supabase 프로젝트**에 적용한 뒤 새 코드를 배포해야 합니다.
+SQL이 없으면 새 인덱서는 쓰기를 중단하고, 무료 모드 채팅은 AI 없는 검색으로 전환합니다.
+
+로컬 회귀 테스트(실제 비밀키·외부 AI 호출 없음):
+
+    python -m unittest discover -s tests -p "test_*.py" -v
+    node --test tests/frontend.test.cjs
 
 ## 🌟 주요 기능
 
@@ -17,7 +29,7 @@
     - **Fallback Mode**: Redis 장애 시 또는 Vercel(Serverless) 환경에서는 즉시 동기 모드(Synchronous)로 전환되어 중단 없는 서비스 제공.
 - **🛡️ 안정성 및 보안**:
     - **Rate Limiting**: 도배 방지 기능 내장.
-    - **Key Rotation**: 여러 API 키를 순환 사용하여 초당 요청 제한(Rate Limit) 회피.
+    - **무료 사용 안전장치**: Gemini 키 순환 비활성화, Supabase 공용 일일 작업 예산, 한도 소진 시 비AI 키워드 검색. 공급자 무료 플랜 설정은 별도로 확인해야 합니다.
     - **Feedback System**: 사용자의 좋아요/싫어요 피드백을 Notion에 실시간 저장.
 
 ---
@@ -54,7 +66,7 @@ graph TD
 |------|------|------|
 | **Backend** | ![FastAPI](https://img.shields.io/badge/FastAPI-005571?style=flat&logo=fastapi) | 비동기 Python 웹 프레임워크 |
 | **LLM** | ![Gemini](https://img.shields.io/badge/Google%20Gemini-8E75B2?style=flat&logo=google) | 메인 AI 모델 (Gemini 2.5 Flash) |
-| **Backup LLM** | ![Groq](https://img.shields.io/badge/Groq-F55036?style=flat) | Gemini 장애 시 백업 모델 (Llama 3.3) |
+| **Backup LLM** | ![Groq](https://img.shields.io/badge/Groq-F55036?style=flat) | Gemini 장애 시 백업 모델 (GPT-OSS 20B/120B) |
 | **Database** | ![Supabase](https://img.shields.io/badge/Supabase-3ECF8E?style=flat&logo=supabase) | pgvector를 활용한 벡터 데이터베이스 |
 | **CMS** | ![Notion](https://img.shields.io/badge/Notion-000000?style=flat&logo=notion) | 데이터 관리 및 피드백/로그 저장 |
 | **Queue/Cache** | ![Redis](https://img.shields.io/badge/Redis-DC382D?style=flat&logo=redis) | 작업 대기열 및 응답 캐싱 |
