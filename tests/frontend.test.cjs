@@ -560,3 +560,186 @@ test('질문 길이 제한은 서버 상수와 동일하다',()=>{
     assert.ok(match);
     assert.equal(vm.runInContext('MAX_QUESTION_LENGTH',setup()),Number(match[1]));
 });
+
+function pollingContext() {
+    const c=setup();
+    c.boxes=[];
+    c.createBox=()=>{const box=element();c.boxes.push(box);return box;};
+    vm.runInContext("addMessageToBox=()=>createBox();renderChatResponse=async data=>{window.completed=data};currentQuestion='지원';chatHistory=[{role:'user',content:'지원'}];",c);
+    return c;
+}
+function response(data) { return {ok:true,json:async()=>data}; }
+
+test('조회 실패 후 재시도는 기존 작업 GET만 보내고 새 질문 POST를 만들지 않는다',async()=>{
+    const c=pollingContext(), calls=[];
+    c.fetch=async(url,options)=>{
+        calls.push([url,options?.method || 'GET']);
+        if(calls.length===1) return response({job_id:'existing-job'});
+        if(calls.length===2) return {ok:false,status:503};
+        return response({status:'complete',answer:'done'});
+    };
+    await c.fetchChatResponse({question:'지원',language:'ko'});
+    assert.equal(c.boxes[0].children[0].textContent,c.window.CHAT_UI_TEXT.ko.retry_result);
+    await c.boxes[0].children[0].onclick();
+    assert.deepEqual(calls,[['/chat','POST'],['/get_result/existing-job','GET'],['/get_result/existing-job','GET']]);
+    assert.equal(c.window.completed.job_id,'existing-job');
+    assert.equal(vm.runInContext('chatHistory.length',c),1);
+    assert.equal(c.window.isChatBusy(),false);
+});
+
+test('여러 번 조회가 실패해도 동일 작업 ID를 유지한다',async()=>{
+    const c=pollingContext(), calls=[];
+    c.fetch=async(url)=>{
+        calls.push(url);
+        if(calls.length===1) return response({job_id:'keep'});
+        throw new TypeError('network unavailable');
+    };
+    await c.fetchChatResponse({question:'지원'});
+    await c.boxes[0].children[0].onclick();
+    await c.boxes[1].children[0].onclick();
+    assert.deepEqual(calls,['/chat','/get_result/keep','/get_result/keep','/get_result/keep']);
+    assert.equal(c.window.isChatBusy(),false);
+});
+
+test('조회 시간 초과 후에도 새 작업 대신 기존 결과를 확인한다',async()=>{
+    const c=pollingContext(), calls=[];
+    c.fetch=async(url)=>{
+        calls.push(url);
+        if(calls.length===1) return response({job_id:'slow'});
+        if(calls.length===2) throw new DOMException('timeout','AbortError');
+        return response({status:'complete',answer:'done'});
+    };
+    await c.fetchChatResponse({question:'지원'});
+    assert.equal(c.boxes[0].textContent,c.window.CHAT_UI_TEXT.ko.timeout);
+    await c.boxes[0].children[0].onclick();
+    assert.deepEqual(calls,['/chat','/get_result/slow','/get_result/slow']);
+});
+
+test('잘못된 조회 JSON 또는 상태도 기존 작업의 재조회만 허용한다',async()=>{
+    for(const bad of [{ok:true,json:async()=>{throw new SyntaxError('invalid JSON')}},
+                      response({status:'unexpected'})]) {
+        const c=pollingContext();let posts=0,gets=0;
+        c.fetch=async(url)=>{
+            if(url==='/chat'){posts++;return response({job_id:'valid-job'});}
+            gets++;return gets===1 ? bad : response({status:'complete',answer:'done'});
+        };
+        await c.fetchChatResponse({question:'지원'});
+        await c.boxes[0].children[0].onclick();
+        assert.equal(posts,1);assert.equal(gets,2);
+    }
+});
+
+test('작업의 명시적인 실패가 확인된 경우에만 일반 재전송 정책을 적용한다',async()=>{
+    const c=pollingContext();let posts=0,gets=0;
+    c.fetch=async(url)=>{
+        if(url==='/chat'){posts++;return response({job_id:'job-'+posts});}
+        gets++;
+        return gets===1 ? response({status:'error',message:'failed',retryable:true})
+                        : response({status:'complete',answer:'done'});
+    };
+    await c.fetchChatResponse({question:'지원'});
+    assert.equal(c.boxes[0].children[0].textContent,c.window.CHAT_UI_TEXT.ko.retry);
+    await c.boxes[0].children[0].onclick();
+    assert.equal(posts,2);assert.equal(gets,2);
+});
+
+test('작업의 무료 한도 오류는 재시도 버튼을 만들지 않는다',async()=>{
+    const c=pollingContext();
+    c.fetch=async(url)=>response(url==='/chat' ? {job_id:'quota'} : {status:'error',message:'quota',retryable:false});
+    await c.fetchChatResponse({question:'지원'});
+    assert.equal(c.boxes[0].children.length,0);
+    assert.equal(c.window.isChatBusy(),false);
+});
+
+test('404 또는 410 결과 조회는 자동 재전송 없이 안내한다',async()=>{
+    for(const status of [404,410]){
+        const c=pollingContext();let posts=0;
+        c.fetch=async(url)=>{
+            if(url==='/chat'){posts++;return response({job_id:'missing'});}
+            return {ok:false,status};
+        };
+        await c.fetchChatResponse({question:'지원'});
+        assert.equal(c.boxes[0].textContent,c.window.CHAT_UI_TEXT.ko.result_unavailable);
+        assert.equal(c.boxes[0].children.length,0);
+        assert.equal(posts,1);
+    }
+});
+
+test('결과 조회 429의 Retry-After를 지킨 후 기존 결과만 다시 조회한다',async()=>{
+    const c=pollingContext();let now=1000,gets=0,posts=0;
+    c.Date={now:()=>now,parse:Date.parse};
+    vm.runInContext('showToast=()=>{}',c);
+    c.fetch=async(url)=>{
+        if(url==='/chat'){posts++;return response({job_id:'limited'});}
+        gets++;
+        return gets===1 ? {ok:false,status:429,headers:{get:()=> '2'}}
+                        : response({status:'complete',answer:'done'});
+    };
+    await c.fetchChatResponse({question:'지원'});
+    await c.boxes[0].children[0].onclick();
+    assert.equal(gets,1);
+    now=3001;
+    await c.boxes[0].children[0].onclick();
+    assert.equal(posts,1);assert.equal(gets,2);
+});
+
+test('오래된 결과 재조회 버튼은 새 대화 시작 후 작동하지 않는다',async()=>{
+    const c=pollingContext();let count=0;
+    c.fetch=async(url)=>{count++;return url==='/chat' ? response({job_id:'old'}) : {ok:false,status:503};};
+    await c.fetchChatResponse({question:'지원'});
+    vm.runInContext('activeRequestSequence++',c);
+    await c.boxes[0].children[0].onclick();
+    assert.equal(count,2);
+});
+
+test('결과 재조회 버튼은 4개 언어에서 구분해 표시한다',()=>{
+    for(const lang of ['ko','en','vi','zh']){
+        const c=pollingContext(), box=element();
+        c.showRequestError(box,{message:'error'},{question:'q',language:lang},'q',0,0,'job');
+        assert.equal(box.children[0].textContent,c.window.CHAT_UI_TEXT[lang].retry_result);
+        assert.notEqual(box.children[0].textContent,c.window.CHAT_UI_TEXT[lang].retry);
+    }
+});
+
+test('폴링 대기 중 취소는 타이머와 이벤트 리스너를 정리한다',async()=>{
+    const c=pollingContext();let listener=null,removed=0,cleared=0;
+    const signal={aborted:false,addEventListener(name,fn){listener=fn;},
+                  removeEventListener(){removed++;}};
+    c.setTimeout=()=>17;
+    c.clearTimeout=id=>{if(id===17)cleared++;};
+    const pending=c.waitForPoll(signal);
+    listener();
+    await assert.rejects(pending,{name:'AbortError'});
+    assert.equal(removed,1);assert.equal(cleared,1);
+});
+
+test('이미 취소된 폴링은 네트워크 요청 없이 종료한다',async()=>{
+    const c=pollingContext();let count=0;
+    c.fetch=async()=>{count++;throw new Error('unexpected');};
+    const controller=new AbortController();controller.abort();
+    await assert.rejects(c.pollForResult('job',controller.signal),{name:'AbortError'});
+    assert.equal(count,0);
+});
+
+test('결과 렌더링 실패도 이미 완료된 작업을 다시 실행하지 않는다',async()=>{
+    const c=pollingContext();let posts=0,gets=0;
+    vm.runInContext("renderChatResponse=async()=>{throw new Error('render failed')}",c);
+    c.fetch=async(url)=>{
+        if(url==='/chat'){posts++;return response({job_id:'completed'});}
+        gets++;return response({status:'complete',answer:'done'});
+    };
+    await c.fetchChatResponse({question:'지원'});
+    await c.boxes[0].children[0].onclick();
+    assert.equal(posts,1);assert.equal(gets,2);
+});
+
+test('재조회 중 오프라인이면 GET도 새 POST도 보내지 않는다',async()=>{
+    const c=pollingContext();let count=0;
+    vm.runInContext('showToast=()=>{}',c);
+    c.fetch=async(url)=>{count++;return url==='/chat' ? response({job_id:'offline'}) : {ok:false,status:503};};
+    await c.fetchChatResponse({question:'지원'});
+    c.navigator.onLine=false;
+    await c.boxes[0].children[0].onclick();
+    assert.equal(count,2);
+    assert.equal(c.window.isChatBusy(),false);
+});

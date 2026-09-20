@@ -81,6 +81,52 @@ class RouteTests(unittest.TestCase):
         self.client = TestClient(main.app)
         self.addCleanup(self.client.close)
 
+    def quota_one(self):
+        self.patches.enter_context(patch.object(main, "FREE_TIER_ONLY", True))
+        self.patches.enter_context(patch.object(main, "FREE_TIER_DAILY_REQUESTS_PER_SESSION", 1))
+
+    def test_queue_success_does_not_reset_daily_limit_cookie(self):
+        self.quota_one()
+        redis = SimpleNamespace(hget=AsyncMock(return_value=None), rpush=AsyncMock())
+        with patch.dict(os.environ, {"VERCEL_ENV": "preview", "FORCE_SYNC_MODE": "false"}), patch.object(main, "redis_async_client", redis):
+            first = self.client.post("/chat", json={"question": "지원"}).json()
+            second = self.client.post("/chat", json={"question": "다른 지원"}).json()
+        self.assertIn("job_id", first)
+        self.assertEqual(second["code"], "daily_limit")
+        redis.rpush.assert_awaited_once()
+        self.intent.assert_awaited_once()
+
+    def test_legacy_redis_cache_does_not_reset_daily_limit_cookie(self):
+        self.quota_one()
+        redis = SimpleNamespace(hget=AsyncMock(return_value=b'{"status":"complete","answer":"cached"}'))
+        with patch.dict(os.environ, {"VERCEL_ENV": "preview", "FORCE_SYNC_MODE": "false"}), patch.object(main, "redis_async_client", redis):
+            first = self.client.post("/chat", json={"question": "지원"}).json()
+            second = self.client.post("/chat", json={"question": "다른 지원"}).json()
+        self.assertEqual(first["answer"], "cached")
+        self.assertEqual(second["code"], "daily_limit")
+        self.intent.assert_awaited_once()
+
+    def test_direct_worker_still_preserves_daily_limit(self):
+        self.quota_one()
+        with patch.object(worker, "process_job_async", AsyncMock(return_value=("answer", ["p1"], 1))) as job:
+            self.assertEqual(self.client.post("/chat", json={"question": "지원"}).json()["status"], "complete")
+            self.assertEqual(self.client.post("/chat", json={"question": "다른 지원"}).json()["code"], "daily_limit")
+        job.assert_awaited_once()
+
+    def test_exact_response_cache_still_works_after_daily_limit(self):
+        self.quota_one()
+        with patch.object(worker, "process_job_async", AsyncMock(return_value=("answer", ["p1"], 1))):
+            self.client.post("/chat", json={"question": "지원"})
+        self.read.return_value = cached()
+        self.assertEqual(self.client.post("/chat", json={"question": "지원"}).json()["answer"], cached()["answer"])
+        self.intent.assert_awaited_once()
+
+    def test_reset_intent_does_not_clear_daily_allowance(self):
+        self.quota_one()
+        self.intent.return_value = {"intent": "reset"}
+        self.assertEqual(self.client.post("/chat", json={"question": "초기화"}).json()["action"], "reset")
+        self.assertEqual(self.client.post("/chat", json={"question": "지원"}).json()["code"], "daily_limit")
+
     def test_routes_choose_distinct_rate_limit_scopes(self):
         self.read.return_value = cached()
         self.assertEqual(self.client.post("/chat", json={"question": "지원"}).status_code, 200)

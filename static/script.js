@@ -274,7 +274,7 @@ async function renderChatResponse(data, element, question, sequence) {
     }
 }
 
-async function fetchChatResponse(requestBody) {
+async function fetchChatResponse(requestBody, resumeJobId = null) {
     const lang = window.currentLang || 'ko';
     const messages = getRequestMessages();
     const sequence = ++activeRequestSequence;
@@ -290,27 +290,29 @@ async function fetchChatResponse(requestBody) {
     const animation = setTimeout(() => {
         if (text) text.textContent = langData.slow;
     }, 15000);
-    let timeout = setTimeout(() => controller.abort(), 45000);
+    let jobId = resumeJobId;
+    let timeout = setTimeout(() => controller.abort(), jobId ? 120000 : 45000);
     try {
-        const response = await fetch(API_URL_CHAT, {
-            method:'POST', headers:{'Content-Type':'application/json'},
-            body:JSON.stringify(requestBody), signal:controller.signal
-        });
-        if (!response.ok) {
-            const error = new Error('HTTP request failed');
-            error.userMessage = response.status === 429 ? messages.rate_limit : messages.error;
-            error.retryable = [408, 429, 500, 502, 503, 504].includes(response.status);
-            error.retryDelay = retryDelay(response.headers?.get('Retry-After'));
-            throw error;
+        let data;
+        if (!jobId) {
+            const response = await fetch(API_URL_CHAT, {
+                method:'POST', headers:{'Content-Type':'application/json'},
+                body:JSON.stringify(requestBody), signal:controller.signal
+            });
+            if (!response.ok) throw requestHttpError(response, messages);
+            data = await response.json();
+            if (!data.status && data.job_id) jobId = data.job_id;
         }
-        let data = await response.json();
-        if (!data.status && data.job_id) {
+        if (jobId) {
             clearTimeout(timeout);
             timeout = setTimeout(() => controller.abort(), 120000);
-            data = await pollForResult(data.job_id, controller.signal);
+            data = await pollForResult(jobId, controller.signal);
         }
+        if (sequence !== activeRequestSequence) return;
         clearTimeout(animation);
         if (data.status === 'error') {
+            // Only an explicit worker failure can authorize the normal retry path.
+            jobId = null;
             showRequestError(loading, data, requestBody, question, sequence);
         } else {
             await renderChatResponse(data, loading, question, sequence);
@@ -320,7 +322,7 @@ async function fetchChatResponse(requestBody) {
             showRequestError(loading, {
                 message: error.name === 'AbortError' ? messages.timeout : (error.userMessage || messages.error),
                 retryable: error.retryable !== false
-            }, requestBody, question, sequence, error.retryDelay || 0);
+            }, requestBody, question, sequence, error.retryDelay || 0, jobId);
         }
     } finally {
         clearTimeout(timeout);
@@ -330,18 +332,46 @@ async function fetchChatResponse(requestBody) {
             setLoadingState(false);
         }
     }
-    chatBox.scrollTop = chatBox.scrollHeight;
+    if (sequence === activeRequestSequence) chatBox.scrollTop = chatBox.scrollHeight;
+}
+
+function requestHttpError(response, messages, polling = false) {
+    const error = new Error('HTTP request failed');
+    error.userMessage = response.status === 429 ? messages.rate_limit : messages.error;
+    if (polling && [404, 410].includes(response.status)) error.userMessage = messages.result_unavailable;
+    error.retryable = [408, 429, 500, 502, 503, 504].includes(response.status);
+    error.retryDelay = retryDelay(response.headers?.get('Retry-After'));
+    return error;
 }
 
 async function pollForResult(jobId, signal) {
     while (!signal.aborted) {
         const response = await fetch(API_URL_RESULT+jobId, {signal});
-        if (!response.ok) throw new Error('Polling HTTP '+response.status);
+        if (!response.ok) throw requestHttpError(response, getRequestMessages(), true);
         const data = await response.json();
         if (data.status === 'complete' || data.status === 'error') return {...data, job_id:jobId};
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        if (data.status !== 'pending') throw new Error('Invalid polling response');
+        await waitForPoll(signal);
     }
     throw new DOMException('Aborted', 'AbortError');
+}
+
+// Abort pending delay immediately and remove listeners on either completion path.
+function waitForPoll(signal) {
+    return new Promise((resolve, reject) => {
+        let timer;
+        const abort = () => {
+            clearTimeout(timer);
+            signal.removeEventListener('abort', abort);
+            reject(new DOMException('Aborted', 'AbortError'));
+        };
+        if (signal.aborted) { abort(); return; }
+        signal.addEventListener('abort', abort, {once: true});
+        timer = setTimeout(() => {
+            signal.removeEventListener('abort', abort);
+            resolve();
+        }, 1000);
+    });
 }
 
 // --- 6. 헬퍼 함수 ---
@@ -762,7 +792,7 @@ function retryDelay(value) {
     return Number.isFinite(delay) ? Math.max(0, Math.min(delay, 3600000)) : 0;
 }
 
-function showRequestError(element, data, requestBody, question, sequence, delay = 0) {
+function showRequestError(element, data, requestBody, question, sequence, delay = 0, resumeJobId = null) {
     element.textContent = data.message || getRequestMessages().error;
     if (data.retryable === false || !requestBody) return;
     const retry = document.createElement('button');
@@ -770,7 +800,7 @@ function showRequestError(element, data, requestBody, question, sequence, delay 
     const lang = requestBody.language || 'ko';
     const copy = UI_TEXT[lang] || UI_TEXT.ko;
     const readyAt = Date.now() + delay;
-    retry.textContent = delay ? copy.retry_wait + ' (' + Math.ceil(delay / 1000) + 's)' : copy.retry;
+    retry.textContent = delay ? copy.retry_wait + ' (' + Math.ceil(delay / 1000) + 's)' : (resumeJobId ? copy.retry_result : copy.retry);
     retry.onclick = async () => {
         if (sequence !== activeRequestSequence || !canStartChatRequest()) return;
         const remaining = readyAt - Date.now();
@@ -783,7 +813,7 @@ function showRequestError(element, data, requestBody, question, sequence, delay 
         currentQuestion = question;
         retry.disabled = true;
         setLoadingState(true);
-        await fetchChatResponse(requestBody);
+        await fetchChatResponse(requestBody, resumeJobId);
     };
     element.appendChild(retry);
 }

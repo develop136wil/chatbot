@@ -129,6 +129,8 @@ class RequestLimitTests(unittest.IsolatedAsyncioTestCase):
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
         self.stack.enter_context(patch.object(main, "_memory_rate_limits", {}))
+        self.stack.enter_context(patch.object(main, "_memory_rate_limit_expirations", {}))
+        self.stack.enter_context(patch.object(main, "_memory_rate_limit_next_cleanup", 0.0))
         self.stack.enter_context(patch.object(main, "_memory_rate_limit_lock", asyncio.Lock()))
         self.request = SimpleNamespace(headers={}, client=SimpleNamespace(host="test-client"))
 
@@ -219,3 +221,69 @@ class RequestLimitTests(unittest.IsolatedAsyncioTestCase):
             await main.check_rate_limit(request, limit=1, scope="feedback")
             with self.assertRaises(main.HTTPException):
                 await main.check_rate_limit(request, limit=1, scope="feedback")
+
+    async def test_cleanup_removes_inactive_expired_clients(self):
+        with patch.object(main.time, "monotonic", return_value=0):
+            for n in range(1000):
+                await main._check_memory_rate_limit(str(n), 10, 60)
+        with patch.object(main.time, "monotonic", return_value=1000):
+            await main._check_memory_rate_limit("new", 10, 60)
+        self.assertEqual(set(main._memory_rate_limits), {"new"})
+        self.assertEqual(set(main._memory_rate_limit_expirations), {"new"})
+
+    async def test_cleanup_preserves_longer_feedback_window(self):
+        with patch.object(main.time, "monotonic", return_value=0):
+            await main._check_memory_rate_limit("chat", 1, 60)
+            await main._check_memory_rate_limit("feedback", 1, 300)
+        with patch.object(main.time, "monotonic", return_value=61):
+            await main._check_memory_rate_limit("other", 1, 60)
+            with self.assertRaises(main.HTTPException):
+                await main._check_memory_rate_limit("feedback", 1, 300)
+        self.assertNotIn("chat", main._memory_rate_limits)
+        self.assertIn("feedback", main._memory_rate_limits)
+        self.assertEqual(main._memory_rate_limit_expirations["feedback"], 300)
+
+    async def test_successful_request_extends_rolling_memory_expiry(self):
+        with patch.object(main.time, "monotonic", return_value=0):
+            await main._check_memory_rate_limit("active", 2, 60)
+        with patch.object(main.time, "monotonic", return_value=59):
+            await main._check_memory_rate_limit("active", 2, 60)
+        with patch.object(main.time, "monotonic", return_value=61):
+            await main._check_memory_rate_limit("other", 1, 60)
+        self.assertIn("active", main._memory_rate_limits)
+        self.assertEqual(main._memory_rate_limit_expirations["active"], 119)
+
+    async def test_capacity_rejects_new_clients_without_evicting_live_counters(self):
+        with patch.object(main, "MEMORY_RATE_LIMIT_MAX_KEYS", 2):
+            await main._check_memory_rate_limit("a", 2, 60)
+            await main._check_memory_rate_limit("b", 2, 60)
+            with self.assertRaises(main.HTTPException) as caught:
+                await main._check_memory_rate_limit("c", 2, 60)
+            self.assertEqual(caught.exception.status_code, 429)
+            await main._check_memory_rate_limit("a", 2, 60)
+            with self.assertRaises(main.HTTPException):
+                await main._check_memory_rate_limit("a", 2, 60)
+        self.assertEqual(set(main._memory_rate_limits), {"a", "b"})
+
+    async def test_capacity_sweeps_expired_entries_before_scheduled_cleanup(self):
+        with patch.object(main, "MEMORY_RATE_LIMIT_MAX_KEYS", 1):
+            with patch.object(main.time, "monotonic", return_value=0):
+                await main._check_memory_rate_limit("old", 1, 1)
+            with patch.object(main.time, "monotonic", return_value=2):
+                await main._check_memory_rate_limit("new", 1, 60)
+        self.assertEqual(set(main._memory_rate_limits), {"new"})
+
+    async def test_capacity_stays_bounded_under_concurrent_clients(self):
+        with patch.object(main, "MEMORY_RATE_LIMIT_MAX_KEYS", 3):
+            results = await asyncio.gather(*(main._check_memory_rate_limit(str(n), 1, 60)
+                                            for n in range(20)), return_exceptions=True)
+        self.assertEqual(sum(result is None for result in results), 3)
+        self.assertEqual(len(main._memory_rate_limits), 3)
+        self.assertEqual(len(main._memory_rate_limit_expirations), 3)
+
+    async def test_remember_question_clears_context_but_preserves_only_daily_usage(self):
+        session = {"free_tier_usage_date": "2026-09-21", "free_tier_usage_count": 3,
+                   "old_context": "old", "last_question": "old"}
+        main.remember_last_question(session, "new")
+        self.assertEqual(session, {"free_tier_usage_date": "2026-09-21",
+                                  "free_tier_usage_count": 3, "last_question": "new"})

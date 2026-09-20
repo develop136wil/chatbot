@@ -195,6 +195,15 @@ def reserve_free_tier_request(session: dict) -> None:
     session["free_tier_usage_count"] = used + 1
 
 
+def remember_last_question(session: dict, question: str) -> None:
+    """Clear conversation state without erasing the reserved daily allowance."""
+    usage = {key: session[key] for key in ("free_tier_usage_date", "free_tier_usage_count")
+             if key in session}
+    session.clear()
+    session.update(usage)
+    session["last_question"] = question
+
+
 def is_initial_cacheable_request(chat_request: ChatRequest) -> bool:
     """이전 대화나 '더 보기' 상태에 의존하지 않는 질문만 공유 캐시합니다."""
     return chat_request.action == "ask" and not chat_request.chat_history and not chat_request.last_result_ids and chat_request.shown_count == 0
@@ -281,17 +290,34 @@ async def build_show_more_response(chat_request: ChatRequest, language: str) -> 
 
 _memory_rate_limits: Dict[str, List[float]] = {}
 _memory_rate_limit_lock = asyncio.Lock()
+_memory_rate_limit_expirations: Dict[str, float] = {}
+_memory_rate_limit_next_cleanup = 0.0
+MEMORY_RATE_LIMIT_CLEANUP_SECONDS = 60
+MEMORY_RATE_LIMIT_MAX_KEYS = 10000
 
 
 async def _check_memory_rate_limit(key: str, limit: int, window: int):
     """Redis가 없는 서버리스 환경에서도 최소한의 요청 제한을 유지합니다."""
+    global _memory_rate_limit_next_cleanup
     now = time.monotonic()
     async with _memory_rate_limit_lock:
+        at_capacity = key not in _memory_rate_limits and len(_memory_rate_limits) >= MEMORY_RATE_LIMIT_MAX_KEYS
+        if now >= _memory_rate_limit_next_cleanup or at_capacity:
+            expired = [entry for entry, deadline in _memory_rate_limit_expirations.items() if deadline <= now]
+            for entry in expired:
+                _memory_rate_limits.pop(entry, None)
+                _memory_rate_limit_expirations.pop(entry, None)
+            _memory_rate_limit_next_cleanup = now + MEMORY_RATE_LIMIT_CLEANUP_SECONDS
+        if key not in _memory_rate_limits and len(_memory_rate_limits) >= MEMORY_RATE_LIMIT_MAX_KEYS:
+            # Never evict active counters: that would permit rate-limit bypass.
+            raise HTTPException(status_code=429, detail="요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.",
+                                headers={"Retry-After": str(MEMORY_RATE_LIMIT_CLEANUP_SECONDS)})
         recent = [timestamp for timestamp in _memory_rate_limits.get(key, []) if now - timestamp < window]
         if len(recent) >= limit:
             raise HTTPException(status_code=429, detail="요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.")
         recent.append(now)
         _memory_rate_limits[key] = recent
+        _memory_rate_limit_expirations[key] = now + window
 
 
 # Redis executes this read/check/increment/expiry as one atomic operation.
@@ -541,7 +567,7 @@ async def chat_with_bot(chat_request: ChatRequest, request: Request):
             cached_data = await redis_async_client.hget(MAIN_ANSWER_CACHE_KEY, question)
             if cached_data:
                 logger.info(f"✅ [API] Cache Hit!")
-                session.clear(); session["last_question"] = question
+                remember_last_question(session, question)
                 return json.loads(cached_data.decode('utf-8'))
         except Exception: pass
 
@@ -599,7 +625,7 @@ async def chat_with_bot(chat_request: ChatRequest, request: Request):
     # Redis가 살아있으면 -> 큐에 넣기 (Async)
     try: 
         await redis_async_client.rpush(JOB_QUEUE_KEY, json.dumps(job_data, ensure_ascii=False).encode('utf-8'))
-        session.clear(); session["last_question"] = question
+        remember_last_question(session, question)
         return {"message": "요청 접수 완료.", "job_id": job_id}
     except Exception as e: 
         logger.error("Redis Push 실패: %s", type(e).__name__)
