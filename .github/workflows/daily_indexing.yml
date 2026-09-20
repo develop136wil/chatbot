@@ -6,6 +6,11 @@ on:
     - cron: '0 19 * * *'
   workflow_dispatch: # 수동 실행 가능
 
+# Avoid overlapping runs overwriting indexing metadata or cache retry markers.
+concurrency:
+  group: daily-content-indexing
+  cancel-in-progress: false
+
 jobs:
   run-indexer:
     runs-on: ubuntu-latest

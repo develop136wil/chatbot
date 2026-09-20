@@ -294,6 +294,19 @@ async def _check_memory_rate_limit(key: str, limit: int, window: int):
         _memory_rate_limits[key] = recent
 
 
+# Redis executes this read/check/increment/expiry as one atomic operation.
+RATE_LIMIT_LUA = """
+local current = tonumber(redis.call('GET', KEYS[1]) or '0')
+if current > 0 and redis.call('TTL', KEYS[1]) < 0 then
+    redis.call('EXPIRE', KEYS[1], ARGV[2])
+end
+if current >= tonumber(ARGV[1]) then return 0 end
+local count = redis.call('INCR', KEYS[1])
+if count == 1 then redis.call('EXPIRE', KEYS[1], ARGV[2]) end
+return 1
+"""
+
+
 async def check_rate_limit(request: Request, limit: int = RATE_LIMIT_MAX_REQUESTS, window: int = RATE_LIMIT_WINDOW_SECONDS):
     """
     [비동기] 도배 방지 (Rate Limiting) 함수
@@ -312,18 +325,10 @@ async def check_rate_limit(request: Request, limit: int = RATE_LIMIT_MAX_REQUEST
         
         # [수정] 비동기 Redis 사용
         if redis_async_client:
-            current_count = await redis_async_client.get(key)
-            
-            if current_count and int(current_count) >= limit:
-                logger.warning(f"🚫 [Rate Limit] 도배 감지! IP: {client_ip}")
-                raise HTTPException(status_code=429, detail="요청이 너무 많습니다. 1분 뒤에 다시 시도해주세요. 😥")
-                
-            # 파이프라인도 비동기로
-            pipe = redis_async_client.pipeline()
-            await pipe.incr(key)
-            if not current_count:
-                await pipe.expire(key, window)
-            await pipe.execute()
+            allowed = await redis_async_client.eval(RATE_LIMIT_LUA, 1, key, limit, window)
+            if int(allowed) != 1:
+                raise HTTPException(status_code=429, detail="요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.",
+                                    headers={"Retry-After": str(window)})
             return
         
     except HTTPException:

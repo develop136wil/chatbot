@@ -135,9 +135,19 @@ chatBox.addEventListener('click', async (event) => {
 });
 
 
+function canStartChatRequest() {
+    if (isChatLoading) return false;
+    if (navigator.onLine === false) {
+        syncInputAvailability();
+        showToast(getRequestMessages().offline);
+        return false;
+    }
+    return true;
+}
+
 // --- 5. 메인 로직 ---
 async function handleFormSubmit() {
-    if (isChatLoading) return;
+    if (!canStartChatRequest()) return;
     const question = userInput.value.trim();
     if (!question) return;
 
@@ -183,7 +193,7 @@ async function handleFormSubmit() {
 }
 
 async function handleButtonClick(buttonText) {
-    if (isChatLoading) return;
+    if (!canStartChatRequest()) return;
     let newQuestion = pendingContext ? `${pendingContext} ${buttonText}` : buttonText;
     pendingContext = null;
     clearButtons();
@@ -250,7 +260,7 @@ async function renderChatResponse(data, element, question, sequence) {
         more.className = 'show-more-btn';
         more.textContent = labels[window.currentLang || 'ko'];
         more.onclick = () => {
-            if (isChatLoading) return;
+            if (!canStartChatRequest()) return;
             userInput.value = labels[window.currentLang || 'ko'];
             handleFormSubmit();
         };
@@ -572,7 +582,7 @@ window.visualViewport?.addEventListener('resize', () => {
 });
 
 function sendSuggestion(text) {
-    if (isChatLoading) return;
+    if (!canStartChatRequest()) return;
     const userInput = document.getElementById('user-input');
     userInput.value = text;
     toggleInputButtons();
@@ -603,6 +613,8 @@ if (toggleBtn && suggestionContainer) {
 }
 
 window.addEventListener('load', syncSuggestionOverlay);
+
+window.addEventListener('load', syncInputAvailability);
 
 window.addEventListener('offline', () => {
     showToast(getRequestMessages().offline);
@@ -757,7 +769,7 @@ function showRequestError(element, data, requestBody, question, sequence, delay 
     const readyAt = Date.now() + delay;
     retry.textContent = delay ? copy.retry_wait + ' (' + Math.ceil(delay / 1000) + 's)' : copy.retry;
     retry.onclick = async () => {
-        if (isChatLoading || sequence !== activeRequestSequence) return;
+        if (sequence !== activeRequestSequence || !canStartChatRequest()) return;
         const remaining = readyAt - Date.now();
         if (remaining > 0) {
             showToast(copy.retry_wait + ' (' + Math.ceil(remaining / 1000) + 's)');

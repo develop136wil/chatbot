@@ -1,5 +1,7 @@
 # UX 안내·오류·다국어 개선 — 1차 구현
 
+최신 인덱싱 복구·오프라인 요청 보완과 141개 테스트 결과는 [후속 기록](indexer-recovery.md)을 참고하세요.
+
 작업일: 2026-09-20
 브랜치: `codex/no-sql-ui-observability-20260920`
 대상: `develop136wil/chatbot`만 수정

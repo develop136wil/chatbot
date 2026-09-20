@@ -17,7 +17,7 @@
     <script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
     <script src="/static/ui-text.js?v=2026.09.20-ux"></script>
-    <script src="/static/script.js?v=2026.09.20-input" defer></script>
+    <script src="/static/script.js?v=2026.09.20-offline" defer></script>
 
     <script>
         window.currentLang = 'ko'; 
@@ -115,6 +115,7 @@
             if (welcomeEl) welcomeEl.innerHTML = data.welcome;
             if (timeEl) timeEl.innerText = data.time;
             if (inputEl) { inputEl.placeholder = data.placeholder; inputEl.setAttribute('aria-label', data.input_label); }
+            if (typeof syncInputAvailability === 'function') syncInputAvailability();
             document.getElementById('mic-btn')?.setAttribute('aria-label', data.mic_label);
             document.getElementById('send-btn')?.setAttribute('aria-label', data.send_label);
             document.getElementById('suggestion-toggle-btn')?.setAttribute('aria-label', data.toggle_open);

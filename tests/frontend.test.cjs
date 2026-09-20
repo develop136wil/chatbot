@@ -421,3 +421,70 @@ test('조합이 끝난 Enter는 한 번 전송하며 Shift+Enter는 줄바꿈을
     assert.equal(pressInputKey(c),true);
     assert.equal(c.window.submissions,1);
 });
+
+function offlineContext() {
+    const c=setup();
+    c.navigator.onLine=false;
+    vm.runInContext("window.sentCount=0;showToast=text=>{window.notice=text};fetchChatResponse=async()=>{window.sentCount++};userInput.value='보존할 질문';chatHistory=[{role:'user',content:'이전 질문'}];pendingContext='기존 문맥';",c);
+    return c;
+}
+function assertOfflineUnchanged(c) {
+    assert.equal(c.window.sentCount,0);
+    assert.equal(c.document.getElementById('user-input').value,'보존할 질문');
+    assert.equal(vm.runInContext('chatHistory.length',c),1);
+    assert.equal(vm.runInContext('pendingContext',c),'기존 문맥');
+    assert.equal(c.window.isChatBusy(),false);
+}
+test('오프라인 직접 전송은 요청·입력 삭제·대화 변경 전에 차단한다',async()=>{
+    const c=offlineContext();
+    await c.handleFormSubmit();
+    assertOfflineUnchanged(c);
+    assert.equal(c.window.notice,c.window.CHAT_UI_TEXT.ko.offline);
+});
+test('오프라인 명확화 버튼도 기존 문맥을 잃지 않는다',async()=>{
+    const c=offlineContext();
+    await c.handleButtonClick('돌봄');
+    assertOfflineUnchanged(c);
+});
+test('오프라인 추천 질문은 입력을 덮거나 지연 전송을 예약하지 않는다',()=>{
+    const c=offlineContext();let timers=0;
+    c.setTimeout=()=>{timers++};
+    c.sendSuggestion('추천 질문');
+    assertOfflineUnchanged(c);
+    assert.equal(timers,0);
+});
+test('오프라인 더 보기 버튼은 입력을 덮거나 새 대화를 만들지 않는다',async()=>{
+    const c=offlineContext();c.box=element();
+    await vm.runInContext("renderChatResponse({status:'complete',answer:'답변',last_result_ids:['a','b','c'],shown_count:2},box,'질문',0)",c);
+    const before=vm.runInContext('chatHistory.length',c);
+    c.box.children[0].onclick();
+    assert.equal(c.window.sentCount,0);
+    assert.equal(c.document.getElementById('user-input').value,'보존할 질문');
+    assert.equal(vm.runInContext('chatHistory.length',c),before);
+});
+test('오프라인 재시도는 버튼을 영구 잠그지 않고 복구 후 수동 클릭만 전송한다',async()=>{
+    const c=offlineContext();c.box=element();
+    vm.runInContext("showRequestError(box,{message:'오류'},{question:'원래 질문',language:'ko'},'원래 질문',0)",c);
+    const button=c.box.children[0];
+    await button.onclick();
+    assertOfflineUnchanged(c);
+    assert.notEqual(button.disabled,true);
+    c.navigator.onLine=true;
+    c.windowEvents.online[0]();
+    assert.equal(c.window.sentCount,0);
+    await button.onclick();
+    assert.equal(c.window.sentCount,1);
+});
+test('오프라인 첫 화면 초기화도 전송·마이크를 잠근다',()=>{
+    const c=offlineContext();
+    for(const fn of c.windowEvents.load) fn();
+    assertInputDisabled(c,true);
+    assert.equal(c.document.getElementById('user-input').placeholder,c.window.CHAT_UI_TEXT.ko.offline);
+});
+test('오프라인 중 언어 변경은 해당 언어의 연결 안내를 유지한다',()=>{
+    const c=offlineContext();c.localStorage={getItem:()=>null,setItem(){}};
+    loadHome(c);
+    c.changeLanguage('vi');
+    assert.equal(c.document.getElementById('user-input').placeholder,c.window.CHAT_UI_TEXT.vi.offline);
+    assertInputDisabled(c,true);
+});
