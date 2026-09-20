@@ -1,6 +1,6 @@
 {
-  "name": "도봉구 영유아 복지",
-  "short_name": "복지탐색기",
+  "name": "도봉구 영유아 복지톡",
+  "short_name": "복지톡",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#FFFFFF",

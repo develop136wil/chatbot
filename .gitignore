@@ -33,3 +33,5 @@ test_*.py
 
 # Local data
 chroma-data/
+# Offline regression tests are versioned.
+!tests/test_*.py

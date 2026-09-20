@@ -1,3 +1,4 @@
+from observability import timed_async, traced_job
 import os
 import json
 import time
@@ -24,6 +25,9 @@ try:
         build_response_cache_scopes,
         resolve_language,
         LOCALIZED_UI,
+        SearchUnavailable,
+        JobProcessingError,
+        FreeTierQuotaExceeded,
         supabase,
         notion
     )
@@ -64,6 +68,8 @@ REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 logger.info("[Worker] 클라이언트 초기화 중...")
 
 # --- 메인 처리 함수 (Async) ---
+@traced_job
+@timed_async("worker_total")
 async def process_job_async(job_data: Dict[str, Any]) -> Tuple[str, List[str], int]:
     start_time = time.time()
     question = job_data.get("question", "")
@@ -95,18 +101,14 @@ async def process_job_async(job_data: Dict[str, Any]) -> Tuple[str, List[str], i
             print("[Worker] Supabase search started")
             raw_results = await search_supabase_async(question, extracted_info_mock, keywords=target_keywords)
             print(f"[Worker] Supabase search completed (results={len(raw_results or [])})")
+        except FreeTierQuotaExceeded:
+            raise
         except Exception as e:
-            logger.error(f"❌ Supabase 검색 실패: {e}")
-            return ui_text["system_error"], [], 0
+            logger.error("Supabase 검색 실패: %s", type(e).__name__)
+            raise SearchUnavailable("search unavailable") from e
 
-        if not raw_results: 
-            if job_data.get("cacheable"):
-                await save_response_cache_async(
-                    question,
-                    target_lang_code,
-                    {"status": "complete", "answer": ui_text["not_found"], "last_result_ids": [], "total_found": 0},
-                    scopes=["__all__"],
-                )
+        if not raw_results:
+            # 빈 결과는 일시적 실패와 혼동될 수 있어 공유 응답 캐시에 저장하지 않습니다.
             return ui_text["not_found"], [], 0
 
         # [Step 3] 중복 제거 (CPU Bound - Fast enough)
@@ -145,10 +147,10 @@ async def process_job_async(job_data: Dict[str, Any]) -> Tuple[str, List[str], i
             body = format_search_results(final_display_metadata, target_lang_code)
         except Exception as e:
             logger.error(f"❌ 결과 포맷팅 실패: {e}")
-            body = ui_text["system_error"]
+            raise JobProcessingError("format unavailable") from e
         
         header = ui_text["header_found"]
-        final_answer = f"{header}<hr>{body}"
+        final_answer = f"{header}<hr>{body}<p class=\"service-notice\">{ui_text['eligibility_notice']}</p>"
 
         if len(reranked_results) > display_count:
             final_answer += f"<hr>{ui_text['footer_more']}"
@@ -176,10 +178,11 @@ async def process_job_async(job_data: Dict[str, Any]) -> Tuple[str, List[str], i
                 
         return final_answer, all_page_ids, len(all_page_ids)
 
+    except (SearchUnavailable, JobProcessingError, FreeTierQuotaExceeded):
+        raise
     except Exception as e:
-        logger.error(f"🔥 작업 처리 중 치명적 오류: {e}")
-        traceback.print_exc()
-        return ui_text["system_error"], [], 0
+        logger.error("작업 처리 실패: %s", type(e).__name__)
+        raise JobProcessingError("answer unavailable") from e
 
 # Notion 로그 저장을 위한 Async Wrapper
 async def save_notion_log_async(question, category, keywords):
@@ -203,6 +206,7 @@ async def save_notion_log_async(question, category, keywords):
 # 작업 핸들러 (Redis 응답용)
 async def handle_job(redis_client, queue_item, semaphore):
     job_id = None
+    job_data = {}
     try:
         _, job_json = queue_item
         job_data = json.loads(job_json.decode('utf-8'))
@@ -232,7 +236,11 @@ async def handle_job(redis_client, queue_item, semaphore):
         if job_id:
             error_result = {
                 "status": "error",
-                "message": "처리 중 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
+                "message": LOCALIZED_UI[resolve_language(job_data.get("language"))][
+                    "free_tier_quota" if isinstance(e, FreeTierQuotaExceeded) else "system_error"],
+                "code": ("provider_limit" if isinstance(e, FreeTierQuotaExceeded)
+                         else "search_unavailable" if isinstance(e, SearchUnavailable) else "answer_unavailable"),
+                "retryable": not isinstance(e, FreeTierQuotaExceeded)
             }
             try:
                 await redis_client.setex(

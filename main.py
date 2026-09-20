@@ -5,6 +5,7 @@ import uuid
 import logging
 import asyncio
 import time
+from observability import ChatTimingMiddleware, current_request_id
 import secrets  # [추가] 보안 토큰 생성
 import re
 from typing import List, Dict, Optional, Literal
@@ -34,6 +35,7 @@ from utils import (
     get_supabase_pages_by_ids_async,
     format_search_results,
     FreeTierQuotaExceeded,
+    SearchUnavailable,
     build_response_cache_key,
     get_response_cache_async,
     save_response_cache_async,
@@ -119,6 +121,7 @@ async def lifespan(app: FastAPI):
 
 # app 생성 시 lifespan 적용
 app = FastAPI(lifespan=lifespan)
+app.add_middleware(ChatTimingMiddleware)
 
 # --- CORS 설정 ---
 # [보안 강화] 실제 도메인만 명시적 허용
@@ -160,12 +163,13 @@ JOB_RESULT_KEY_PREFIX = "chatbot:job_result:"
 SHOW_MORE_EXACT_TERMS = {
     "더", "다음", "계속", "더보여줘", "다른거", "다른것", "또",
     "more", "next", "showmore", "continue",
-    "xemthêm", "tiếp", "nữa", "tiếptục",
+    "xemthêm", "tiếp", "tiếptheo", "thêm", "nữa", "tiếptục",
     "更多", "继续", "下一个", "还有吗",
 }
 
 # --- 요청 모델 ---
 class ChatRequest(BaseModel):
+    action: Literal["ask", "more"] = "ask"
     question: str = Field(min_length=1, max_length=MAX_QUESTION_LENGTH)
     language: str = Field(default="ko", pattern="^(ko|en|vi|zh)$")
     last_result_ids: List[str] = Field(default_factory=list, max_length=MAX_RESULT_IDS)
@@ -193,15 +197,15 @@ def reserve_free_tier_request(session: dict) -> None:
 
 def is_initial_cacheable_request(chat_request: ChatRequest) -> bool:
     """이전 대화나 '더 보기' 상태에 의존하지 않는 질문만 공유 캐시합니다."""
-    return not chat_request.chat_history and not chat_request.last_result_ids and chat_request.shown_count == 0
+    return chat_request.action == "ask" and not chat_request.chat_history and not chat_request.last_result_ids and chat_request.shown_count == 0
 
 
 def is_response_cache_read_eligible(chat_request: ChatRequest, question: str, language: str) -> bool:
     """새 질문 또는 직전 질문을 그대로 반복한 경우에만 공유 캐시를 읽습니다."""
-    if chat_request.last_result_ids or chat_request.shown_count != 0:
+    if chat_request.action == "more":
         return False
     if not chat_request.chat_history:
-        return True
+        return is_initial_cacheable_request(chat_request)
 
     # 대화 문맥은 보존하되, 바로 직전 사용자 질문을 완전히 반복한 경우는
     # 같은 독립 답변을 재사용해 토큰을 절약합니다.
@@ -246,12 +250,15 @@ async def build_show_more_response(chat_request: ChatRequest, language: str) -> 
 
     try:
         next_pages = await get_supabase_pages_by_ids_async(target_ids)
+        if not next_pages:
+            return {"status": "error", "code": "results_changed", "retryable": False,
+                    "message": ui_text["results_changed"]}
         next_pages = await localize_result_pages_async(next_pages, language)
         formatted_body = format_search_results(next_pages, language)
         shown_end = start + len(next_pages)
         remaining = len(chat_request.last_result_ids) - end
         header = f"<p>{ui_text['more_header'].format(start=start + 1, end=shown_end)}</p>"
-        answer_text = f"{header}<hr>{formatted_body}"
+        answer_text = f"{header}<hr>{formatted_body}<p class=\"service-notice\">{ui_text['eligibility_notice']}</p>"
         answer_text += f"<hr>{ui_text['footer_more']}" if remaining > 0 else f"<hr><p>{ui_text['all_results']}</p>"
 
         return {
@@ -265,7 +272,7 @@ async def build_show_more_response(chat_request: ChatRequest, language: str) -> 
         logger.error("더 보기 처리 오류: %s", type(e).__name__)
         return {
             "status": "error",
-            "message": ui_text["system_error"],
+            "message": ui_text["system_error"], "code": "search_unavailable", "retryable": True,
             "last_result_ids": chat_request.last_result_ids,
             "total_found": len(chat_request.last_result_ids),
         }
@@ -437,7 +444,7 @@ async def chat_with_bot(chat_request: ChatRequest, request: Request):
         logger.info("🔄 Vercel 환경 감지: 동기 모드로 강제 전환")
 
     # 2. 정확한 '더 보기'는 즉시 처리합니다. (LLM 호출·대기 불필요)
-    if input_no_spaces in SHOW_MORE_EXACT_TERMS and chat_request.last_result_ids:
+    if chat_request.action == "more" or input_no_spaces in SHOW_MORE_EXACT_TERMS:
         logger.info("더 보기 빠른 경로 처리")
         return await build_show_more_response(chat_request, language)
 
@@ -446,22 +453,26 @@ async def chat_with_bot(chat_request: ChatRequest, request: Request):
         cached_response = await get_response_cache_async(question, language)
         if cached_response:
             logger.info("♻️ [Response Cache] Hit")
+            cached_response = dict(cached_response)
+            if cached_response.get("answer") == ui_text["reset"]:
+                cached_response["action"] = "reset"
+            cached_response["job_id"] = str(uuid.uuid4())
             return cached_response
 
     try:
         reserve_free_tier_request(session)
     except FreeTierDailyLimitExceeded:
-        return {"status": "error", "message": ui_text["free_tier_daily_limit"]}
+        return {"status": "error", "message": ui_text["free_tier_daily_limit"], "code": "daily_limit", "retryable": False}
 
     # 3. AI 의도 분석 (비동기 호출)
     try:
         extracted_info = await extract_info_from_question_async(question, chat_history)
         if isinstance(extracted_info, dict) and "error" in extracted_info:
             if "free_tier_quota_exceeded" in extracted_info["error"]:
-                return {"status": "error", "message": ui_text["free_tier_quota"]}
+                return {"status": "error", "message": ui_text["free_tier_quota"], "code": "provider_limit", "retryable": False}
             raise RuntimeError(extracted_info["error"])
     except FreeTierQuotaExceeded:
-        return {"status": "error", "message": ui_text["free_tier_quota"]}
+        return {"status": "error", "message": ui_text["free_tier_quota"], "code": "provider_limit", "retryable": False}
     except Exception as e:
         logger.error("질문 분석 오류: %s", type(e).__name__)
         return {"status": "error", "message": ui_text["system_error"]}
@@ -472,7 +483,7 @@ async def chat_with_bot(chat_request: ChatRequest, request: Request):
     is_show_more = is_ai_match
     
     # '더 보기' 실행 (Redis가 죽어도 Supabase는 살아있으므로 작동 가능)
-    if is_show_more and chat_request.last_result_ids:
+    if is_show_more:
         logger.info("더 보기 AI 의도 경로 처리")
         return await build_show_more_response(chat_request, language)
 
@@ -488,9 +499,10 @@ async def chat_with_bot(chat_request: ChatRequest, request: Request):
         })
     
     if extracted_info.get("intent") == "reset":
-        return await cache_response_if_eligible(chat_request, question, language, {
-            "status": "complete", "answer": ui_text["reset"], "last_result_ids": [], "total_found": 0
-        })
+        return {
+            "status": "complete", "action": "reset", "answer": ui_text["reset"],
+            "last_result_ids": [], "total_found": 0, "shown_count": 0,
+        }
 
     if extracted_info.get("intent") == "out_of_scope":
         return await cache_response_if_eligible(chat_request, question, language, {
@@ -535,7 +547,8 @@ async def chat_with_bot(chat_request: ChatRequest, request: Request):
     ai_category = extracted_info.get("category") if isinstance(extracted_info, dict) else None
     
     job_data = {
-        "job_id": job_id, 
+        "job_id": job_id,
+        "trace_id": current_request_id(),
         "question": question, 
         "language": language,
         "chat_history": chat_history,
@@ -558,6 +571,7 @@ async def chat_with_bot(chat_request: ChatRequest, request: Request):
                 final_answer, page_ids, total_found = result
                 response = {
                     "status": "complete", 
+                    "job_id": job_id,
                     "answer": final_answer,
                     "last_result_ids": page_ids,
                     "total_found": total_found
@@ -568,9 +582,14 @@ async def chat_with_bot(chat_request: ChatRequest, request: Request):
                 logger.error("Async Worker 결과 형식 오류: %s", type(result).__name__)
                 return {"status": "error", "message": ui_text["system_error"]}
             
+        except FreeTierQuotaExceeded:
+            return {"status": "error", "message": ui_text["free_tier_quota"],
+                    "code": "provider_limit", "retryable": False}
         except Exception as e:
             logger.error("Async Worker 처리 실패: %s", type(e).__name__)
-            return {"status": "error", "message": ui_text["system_error"]}
+            return {"status": "error", "message": ui_text["system_error"],
+                    "code": "search_unavailable" if isinstance(e, SearchUnavailable) else "answer_unavailable",
+                    "retryable": True}
 
     # Redis가 살아있으면 -> 큐에 넣기 (Async)
     try: 
@@ -615,28 +634,23 @@ class FeedbackRequest(BaseModel):
 
 @app.post("/feedback")
 async def handle_feedback(feedback_data: FeedbackRequest, request: Request):
-    await check_rate_limit(request, limit=5, window=300)
-    if not notion: raise HTTPException(status_code=503, detail="Notion API 오류")
-    
+    await check_rate_limit(request,limit=5,window=300)
+    if not notion:
+        raise HTTPException(status_code=503,detail="Notion unavailable")
+    props = {
+        "질문":{"title":[{"text":{"content":feedback_data.question[:2000]}}]},
+        "답변":{"rich_text":[{"text":{"content":feedback_data.answer[:2000]}}]},
+        "평가":{"select":{"name":feedback_data.feedback}},
+        "대화내역":{"rich_text":[{"text":{"content":(feedback_data.chat_history or "")[:2000]}}]},
+        "상세의견":{"rich_text":[{"text":{"content":(feedback_data.comment or "")[:2000]}}]},
+        "작업ID":{"rich_text":[{"text":{"content":feedback_data.job_id}}]},
+    }
+    if feedback_data.reason:
+        props["사유"]={"select":{"name":feedback_data.reason}}
     try:
-        notion.pages.create(
-            parent={"database_id": FEEDBACK_DB_ID},
-            properties={
-                "질문": {"title": [{"text": {"content": feedback_data.question[:2000]}}]},
-                "답변": {"rich_text": [{"text": {"content": feedback_data.answer[:2000]}}]},
-                "평가": {"select": {"name": feedback_data.feedback}},
-                
-                # [신규] 사유 (선택 속성으로 저장 -> 통계 가능)
-                "사유": {"select": {"name": feedback_data.reason}} if feedback_data.reason else None,
-                
-                # [신규] 대화내역 (문맥 파악용)
-                "대화내역": {"rich_text": [{"text": {"content": feedback_data.chat_history[:2000]}}]},
-                
-                "상세의견": {"rich_text": [{"text": {"content": feedback_data.comment[:2000] if feedback_data.comment else ""}}]},
-                "작업ID": {"rich_text": [{"text": {"content": feedback_data.job_id}}]}
-            }
-        )
-        return {"status": "success"}
-    except Exception as e:
-        logger.error(f"❌ 피드백 저장 실패: {e}")
-        raise HTTPException(status_code=500, detail="저장 실패")
+        await asyncio.wait_for(asyncio.to_thread(notion.pages.create,
+            parent={"database_id":FEEDBACK_DB_ID}, properties=props),10)
+        return {"status":"success"}
+    except Exception as error:
+        logger.error("피드백 저장 실패: %s",type(error).__name__)
+        raise HTTPException(status_code=503,detail="저장 실패") from error

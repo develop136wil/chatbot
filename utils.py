@@ -1,3 +1,4 @@
+from observability import timed_async
 import sys
 # UTF-8 출력 설정 (Windows 인코딩 오류 방지)
 # UTF-8 출력 설정 (Windows 인코딩 오류 방지)
@@ -116,6 +117,14 @@ GLOBAL_CACHE_SCOPE = "__all__"
 _response_cache_error_logged = False
 
 
+class SearchUnavailable(RuntimeError):
+    """검색을 완료할 수 없음. 정상적인 빈 결과와 구분합니다."""
+
+
+class JobProcessingError(RuntimeError):
+    """답변 조립 실패. 사용자에게 정상 답변으로 전달하지 않습니다."""
+
+
 class FreeTierQuotaExceeded(RuntimeError):
     """무료 티어 한도 초과 시 유료/다른 공급자 우회를 막기 위한 예외입니다."""
 
@@ -152,13 +161,13 @@ SUPPORTED_LANGUAGE_CODES = {"ko", "en", "vi", "zh"}
 LOCALIZED_UI = {
     "ko": {
         "header_found": "🔎 <b>정보를 찾았습니다!</b>",
-        "footer_more": "<p>🔍 <b>아직 결과가 더 남아있습니다.</b> '더 보여줘' 또는 '다음'을 입력해 보세요.</p>",
+        "footer_more": "<p>아래 ‘더 보기’에서 다음 결과를 확인할 수 있어요.</p>",
         "more_header": "🔎 <b>추가 정보 ({start}~{end}번째)</b>",
         "all_results": "✅ <b>모든 결과를 확인했습니다.</b>",
         "no_more": "더 이상 표시할 결과가 없습니다.",
-        "not_found": "관련 정보를 찾지 못했습니다. 😥",
-        "system_error": "시스템 오류가 발생했습니다. 😥",
-        "free_tier_quota": "오늘의 무료 AI 처리 한도에 도달했습니다. 잠시 후 다시 시도해 주세요.",
+        "not_found": "입력한 내용과 일치하는 정보를 찾지 못했어요. 서비스 이름이나 아이의 개월 수를 바꿔 검색해 보세요.",
+        "system_error": "일시적인 오류로 정보를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.",
+        "free_tier_quota": "AI 서비스의 요청 제한으로 지금 처리하기 어려워요. 정확한 재개 시점은 확인되지 않았어요. 잠시 후 다시 이용해 주세요.",
         "free_tier_daily_limit": "이 브라우저의 오늘 무료 질문 한도에 도달했습니다. 내일 다시 이용해 주세요.",
         "safety_block": "비속어는 삼가주세요. 😥 복지 정보에 대해 질문해 주세요.",
         "exit": "네, 알겠습니다. 언제든 다시 찾아주세요! 😊",
@@ -168,16 +177,22 @@ LOCALIZED_UI = {
         "thanks": "도움이 되어 기쁩니다! 😊",
         "clarify": "어떤 복지 정보가 궁금하신가요?",
         "cats": {},
+        "results_changed": "이전 검색 결과의 자료를 불러올 수 없어요. 원래 질문으로 다시 검색해 주세요.",
+        "source_label": "자료 원문 보기",
+        "updated_label": "자료 수정",
+        "date_note": "정책 시행일과 다를 수 있어요.",
+        "translation_notice": "번역이 준비되지 않은 부분은 한국어 원문으로 표시해요.",
+        "eligibility_notice": "지원 대상·신청 방법은 자료 원문과 담당 기관에서 확인해 주세요."
     },
     "en": {
         "header_found": "🔎 <b>Here is the information I found!</b>",
-        "footer_more": "<p>🔍 <b>There are more results.</b> Try typing 'Show more' or 'Next'.</p>",
+        "footer_more": "<p>Use ‘Show more’ below to see the next results.</p>",
         "more_header": "🔎 <b>Additional information ({start}–{end})</b>",
         "all_results": "✅ <b>You've viewed all results.</b>",
         "no_more": "There are no more results to display.",
-        "not_found": "I couldn't find related information. 😥",
-        "system_error": "A system error occurred. Please try again. 😥",
-        "free_tier_quota": "Today's free AI capacity has been reached. Please try again later.",
+        "not_found": "No matching information was found. Try a service name or your child’s age in months.",
+        "system_error": "We could not load the information due to a temporary error. Please try again later.",
+        "free_tier_quota": "The AI service is limiting requests. We cannot confirm when it will resume. Please try again later.",
         "free_tier_daily_limit": "This browser has reached its free daily question limit. Please try again tomorrow.",
         "safety_block": "Please avoid offensive language. 😥 Please ask about welfare information.",
         "exit": "Understood. Please visit again anytime! 😊",
@@ -186,17 +201,30 @@ LOCALIZED_UI = {
         "small_talk": "Hello! I am the Dobong-gu infant and child welfare chatbot. How can I help?",
         "thanks": "I'm glad I could help! 😊",
         "clarify": "What welfare information would you like to know?",
-        "cats": {"의료/재활": "Medical/Rehab", "교육/보육": "Edu/Care", "가족 지원": "Family Support", "돌봄/양육": "Childcare", "생활 지원": "Living Support", "기타": "Others"},
+        "cats": {
+            "의료/재활": "Medical/Rehab",
+            "교육/보육": "Edu/Care",
+            "가족 지원": "Family Support",
+            "돌봄/양육": "Childcare",
+            "생활 지원": "Living Support",
+            "기타": "Others"
+        },
+        "results_changed": "The previous results could not be loaded. Search again using your original question.",
+        "source_label": "View source",
+        "updated_label": "Document updated",
+        "date_note": "This may differ from the policy’s effective date.",
+        "translation_notice": "Sections without a prepared translation are shown in Korean.",
+        "eligibility_notice": "Confirm eligibility and how to apply in the source and with the responsible organization."
     },
     "vi": {
         "header_found": "🔎 <b>Tôi đã tìm thấy thông tin!</b>",
-        "footer_more": "<p>🔍 <b>Vẫn còn kết quả.</b> Hãy thử nhập 'Xem thêm' hoặc 'Tiếp theo'.</p>",
+        "footer_more": "<p>Chọn ‘Xem thêm’ bên dưới để xem các kết quả tiếp theo.</p>",
         "more_header": "🔎 <b>Thông tin bổ sung ({start}–{end})</b>",
         "all_results": "✅ <b>Bạn đã xem tất cả kết quả.</b>",
         "no_more": "Không còn kết quả để hiển thị.",
-        "not_found": "Không tìm thấy thông tin liên quan. 😥",
-        "system_error": "Đã xảy ra lỗi hệ thống. Vui lòng thử lại. 😥",
-        "free_tier_quota": "Đã đạt giới hạn xử lý AI miễn phí hôm nay. Vui lòng thử lại sau.",
+        "not_found": "Không tìm thấy thông tin phù hợp. Hãy thử tên dịch vụ hoặc tuổi của trẻ theo tháng.",
+        "system_error": "Không thể tải thông tin do lỗi tạm thời. Vui lòng thử lại sau.",
+        "free_tier_quota": "Dịch vụ AI đang giới hạn yêu cầu. Chưa xác định được thời điểm hoạt động trở lại. Vui lòng thử lại sau.",
         "free_tier_daily_limit": "Trình duyệt này đã đạt giới hạn câu hỏi miễn phí hôm nay. Vui lòng thử lại vào ngày mai.",
         "safety_block": "Vui lòng tránh dùng ngôn ngữ xúc phạm. 😥 Hãy hỏi về thông tin phúc lợi.",
         "exit": "Đã hiểu. Hãy quay lại bất cứ lúc nào! 😊",
@@ -205,17 +233,30 @@ LOCALIZED_UI = {
         "small_talk": "Xin chào! Tôi là chatbot phúc lợi trẻ nhỏ của quận Dobong. Tôi có thể giúp gì cho bạn?",
         "thanks": "Rất vui vì đã giúp được bạn! 😊",
         "clarify": "Bạn muốn tìm hiểu thông tin phúc lợi nào?",
-        "cats": {"의료/재활": "Y tế/PHCN", "교육/보육": "Giáo dục/Trông trẻ", "가족 지원": "Hỗ trợ gia đình", "돌봄/양육": "Chăm sóc", "생활 지원": "Hỗ trợ đời sống", "기타": "Khác"},
+        "cats": {
+            "의료/재활": "Y tế/PHCN",
+            "교육/보육": "Giáo dục/Trông trẻ",
+            "가족 지원": "Hỗ trợ gia đình",
+            "돌봄/양육": "Chăm sóc",
+            "생활 지원": "Hỗ trợ đời sống",
+            "기타": "Khác"
+        },
+        "results_changed": "Không thể tải các kết quả trước đó. Vui lòng tìm lại bằng câu hỏi ban đầu.",
+        "source_label": "Xem nguồn",
+        "updated_label": "Cập nhật tài liệu",
+        "date_note": "Có thể khác ngày chính sách có hiệu lực.",
+        "translation_notice": "Các phần chưa có bản dịch được hiển thị bằng tiếng Hàn.",
+        "eligibility_notice": "Hãy xác nhận điều kiện và cách đăng ký trong tài liệu nguồn và với cơ quan phụ trách."
     },
     "zh": {
         "header_found": "🔎 <b>为您找到以下信息！</b>",
-        "footer_more": "<p>🔍 <b>还有更多结果。</b> 请输入“更多”或“下一个”。</p>",
+        "footer_more": "<p>点击下方“更多”查看后续结果。</p>",
         "more_header": "🔎 <b>补充信息（第{start}–{end}项）</b>",
         "all_results": "✅ <b>您已查看全部结果。</b>",
         "no_more": "没有更多结果可显示。",
-        "not_found": "未找到相关信息。😥",
-        "system_error": "系统发生错误，请稍后重试。😥",
-        "free_tier_quota": "今日免费 AI 处理额度已用完，请稍后再试。",
+        "not_found": "未找到匹配的信息。请尝试输入服务名称或孩子的月龄。",
+        "system_error": "暂时无法加载信息，请稍后重试。",
+        "free_tier_quota": "AI服务目前限制了请求，暂时无法确认恢复时间，请稍后再试。",
         "free_tier_daily_limit": "此浏览器今日的免费提问额度已用完，请明天再试。",
         "safety_block": "请避免使用不当语言。😥 请咨询福利信息。",
         "exit": "好的，随时欢迎您再次访问！😊",
@@ -224,8 +265,21 @@ LOCALIZED_UI = {
         "small_talk": "您好！我是道峰区婴幼儿福利聊天机器人。有什么可以帮您？",
         "thanks": "很高兴能帮到您！😊",
         "clarify": "您想了解哪类福利信息？",
-        "cats": {"의료/재활": "医疗/康复", "교육/보육": "教育/保育", "가족 지원": "家庭支持", "돌봄/양육": "照护/养育", "생활 지원": "生活支持", "기타": "其他"},
-    },
+        "cats": {
+            "의료/재활": "医疗/康复",
+            "교육/보육": "教育/保育",
+            "가족 지원": "家庭支持",
+            "돌봄/양육": "照护/养育",
+            "생활 지원": "生活支持",
+            "기타": "其他"
+        },
+        "results_changed": "无法加载之前的结果，请使用原来的问题重新搜索。",
+        "source_label": "查看资料原文",
+        "updated_label": "资料更新",
+        "date_note": "可能与政策生效日期不同。",
+        "translation_notice": "尚未翻译的部分以韩语原文显示。",
+        "eligibility_notice": "请在资料原文中查看并向负责机构确认申请条件和方法。"
+    }
 }
 
 
@@ -455,12 +509,23 @@ def build_response_cache_scopes(results: List[Dict[str, Any]], ai_category: Opti
     return sorted(scopes)
 
 
+LEGACY_EMPTY_ANSWERS = ['관련 정보를 찾지 못했습니다. 😥', "I couldn't find related information. 😥", 'Không tìm thấy thông tin liên quan. 😥', '未找到相关信息。😥']
+LEGACY_ERROR_ANSWERS = ['시스템 오류가 발생했습니다. 😥', 'A system error occurred. Please try again. 😥', 'Đã xảy ra lỗi hệ thống. Vui lòng thử lại. 😥', '系统发生错误，请稍后重试。😥']
+
+
 def _is_valid_cached_response(response: Any) -> bool:
     if not isinstance(response, dict):
         return False
     if response.get("status") not in {"complete", "clarify"}:
         return False
-    return isinstance(response.get("answer"), str)
+    answer = response.get("answer")
+    if not isinstance(answer, str):
+        return False
+    empty_answers = LEGACY_EMPTY_ANSWERS + [v["not_found"] for v in LOCALIZED_UI.values()]
+    error_answers = LEGACY_ERROR_ANSWERS + [v["system_error"] for v in LOCALIZED_UI.values()]
+    if answer in empty_answers or any(message in answer for message in error_answers):
+        return False
+    return True
 
 
 def _log_response_cache_error_once(action: str, error: Exception) -> None:
@@ -505,6 +570,7 @@ async def _secret_cache_rest_request_async(
     return result.json() if result.content else []
 
 
+@timed_async("cache_read")
 async def get_response_cache_async(question: str, language: str) -> Optional[dict]:
     """AI 호출 전에 Supabase의 정확 일치 응답 캐시를 조회합니다."""
     if not RESPONSE_CACHE_ENABLED or not _response_cache_is_available():
@@ -591,6 +657,7 @@ async def get_response_cache_scope_versions_async(scopes: List[str]) -> Optional
         return None
 
 
+@timed_async("cache_write")
 async def save_response_cache_async(
     question: str, language: str, response: dict, scopes: Optional[List[str]] = None
 ) -> None:
@@ -827,6 +894,7 @@ def get_gemini_embedding(text: str, task_type: str = "SEMANTIC_SIMILARITY") -> O
         raise e
 
 # --- [신규] 비동기 임베딩 함수 ---
+@timed_async("embedding")
 async def get_gemini_embedding_async(text: str, task_type: str = "SEMANTIC_SIMILARITY") -> Optional[List[float]]:
     """비동기 버전의 임베딩 함수 (동기 함수를 비동기로 래핑)"""
     import asyncio
@@ -1220,6 +1288,7 @@ def _fallback_question_info(question: str) -> dict:
     }
 
 
+@timed_async("intent")
 async def extract_info_from_question_async(question: str, chat_history: list[dict] = []) -> dict:
     history_formatted = "(이전 대화 없음)"
     if chat_history:
@@ -1692,7 +1761,8 @@ import asyncio
 
 def get_supabase_pages_by_ids(page_ids: list) -> list:
     """ID 목록으로 Supabase 데이터 조회 (동기 버전)"""
-    if not page_ids or not supabase: return []
+    if not page_ids: return []
+    if not supabase: raise SearchUnavailable("store unavailable")
     try:
         response = supabase.table("site_pages").select("*").in_("page_id", page_ids).execute()
         
@@ -1700,12 +1770,12 @@ def get_supabase_pages_by_ids(page_ids: list) -> list:
         unique_pages = {item['page_id']: item['metadata'] for item in response.data}
         return [unique_pages[pid] for pid in page_ids if pid in unique_pages]
     except Exception as e:
-        print(f"❌ Supabase 조회 오류: {e}")
-        return []
+        raise SearchUnavailable("page lookup unavailable") from e
 
 async def get_supabase_pages_by_ids_async(page_ids: list) -> list:
     """ID 목록으로 Supabase 데이터 조회 (비동기 버전)"""
-    if not page_ids or not supabase: return []
+    if not page_ids: return []
+    if not supabase: raise SearchUnavailable("store unavailable")
     
     # ThreadPoolExecutor로 동기 호출을 비동기처럼 실행
     loop = asyncio.get_event_loop()
@@ -1713,8 +1783,7 @@ async def get_supabase_pages_by_ids_async(page_ids: list) -> list:
         result = await loop.run_in_executor(None, get_supabase_pages_by_ids, page_ids)
         return result
     except Exception as e:
-        print(f"❌ Supabase 비동기 조회 오류: {e}")
-        return []
+        raise SearchUnavailable("page lookup unavailable") from e
 
 # --- 8. 포맷팅 함수 ---
 
@@ -1814,6 +1883,8 @@ def clean_summary_text(text: str, language: str = "ko") -> str:
     return empty_messages.get(language, empty_messages["ko"])
 
 def format_search_results(pages_metadata: list, language: str = "ko") -> str:
+    language = resolve_language(language)
+    ui = LOCALIZED_UI[language]
     cards_html = []
     
     # 1. [기존] Markdown 볼드체 패턴
@@ -1889,8 +1960,20 @@ def format_search_results(pages_metadata: list, language: str = "ko") -> str:
         url = raw_url if raw_url.startswith(("https://", "http://")) else ""
         safe_url = html.escape(url, quote=True)
         
-        copy_text = f"[{raw_category}] {raw_title}\n\n{clean_summary_text(meta.get('pre_summary', ''), language)}\n\n🔗 자세히 보기: {url}"
+        copy_text = f"[{raw_category}] {raw_title}\n\n{clean_summary_text(meta.get('pre_summary', ''), language)}\n\n🔗 {ui['source_label']}: {url}"
         safe_copy_text = html.escape(copy_text, quote=True)
+
+        provenance = []
+        edited = meta.get("last_edited_time")
+        if isinstance(edited, str):
+            try:
+                date = datetime.fromisoformat(edited.replace("Z", "+00:00")).date().isoformat()
+                provenance.append(html.escape(f"{ui['updated_label']}: {date} · {ui['date_note']}"))
+            except ValueError:
+                pass  # Unknown dates are never fabricated.
+        if meta.get("_translation_missing"):
+            provenance.append(html.escape(ui["translation_notice"]))
+        source_note = "".join(f'<p class="source-note">{note}</p>' for note in provenance)
 
         html_rows = []
         current_margin_left = "20px"
@@ -2001,9 +2084,10 @@ def format_search_results(pages_metadata: list, language: str = "ko") -> str:
             <div class="card-header-badge">{category}</div>
             <h3 class="card-title">{title}</h3>
             <div class="card-body">{html_summary}</div>
+            {source_note}
             <div class="card-footer">
-                {f'<a href="{safe_url}" target="_blank" rel="noopener noreferrer" class="detail-link">자세히 보기</a>' if url else ''}
-                <button class="card-share-btn" data-copy="{safe_copy_text}">공유하기</button>
+                {f'<a href="{safe_url}" target="_blank" rel="noopener noreferrer" class="detail-link">{html.escape(ui["source_label"])}</a>' if url else ''}
+                <button class="card-share-btn" data-copy="{safe_copy_text}">{html.escape({"ko":"공유","en":"Share","vi":"Chia sẻ","zh":"分享"}[language])}</button>
             </div>
         </div>
         """
@@ -2192,6 +2276,7 @@ def search_supabase(question: str, extracted_info: dict, keywords: list = []) ->
     
     return results
 
+@timed_async("search")
 async def search_supabase_async(question: str, extracted_info: dict, keywords: list = []) -> list:
     """
     [Upgrade] 키워드 리스트를 SQL에 직접 전달하여 정확도 향상
@@ -2201,7 +2286,8 @@ async def search_supabase_async(question: str, extracted_info: dict, keywords: l
     # [핵심 수정] 인덱싱 시 RETRIEVAL_DOCUMENT 사용 → 검색 쿼리는 반드시 RETRIEVAL_QUERY 사용
     # SEMANTIC_SIMILARITY(기존 기본값)와 RETRIEVAL_DOCUMENT는 벡터 공간이 달라 유사도가 낮게 나옴
     query_embedding = await get_gemini_embedding_async(question, task_type="RETRIEVAL_QUERY")
-    if not query_embedding: return []
+    if not query_embedding:
+        raise SearchUnavailable("embedding unavailable")
 
     # 2. 검색어 확장 (만약 입력된 keywords가 없으면 여기서 생성)
     if not keywords:
@@ -2264,7 +2350,8 @@ async def search_supabase_async(question: str, extracted_info: dict, keywords: l
                     results.append(doc)
                     
         except Exception as e:
-            print(f"⚠️ 2차 검색 실패: {e}")
+            logger.warning("전체 검색 실패: %s", type(e).__name__)
+            raise SearchUnavailable("search unavailable") from e
 
         # [★신규 추가] 나이(월령) 기반 필터링 로직
         user_age = extracted_info.get("age")
@@ -2432,12 +2519,15 @@ Translate the following welfare service titles into {language_name}.
         return titles
 
 
+@timed_async("localization")
 async def localize_result_pages_async(pages_metadata: List[Dict[str, Any]], language: str) -> List[Dict[str, Any]]:
     """일반 검색과 '더 보여줘'가 동일한 카드 현지화 경로를 사용하게 합니다."""
     language = resolve_language(language)
     if language == "ko" or not pages_metadata:
         return pages_metadata
 
+    from copy import deepcopy
+    pages_metadata = deepcopy(pages_metadata)
     ui_text = LOCALIZED_UI[language]
     title_targets: List[Tuple[int, str]] = []
     summary_targets: List[Tuple[int, Any]] = []
@@ -2464,18 +2554,21 @@ async def localize_result_pages_async(pages_metadata: List[Dict[str, Any]], lang
         if translated_summary:
             metadata["pre_summary"] = translated_summary
         else:
-            summary_targets.append((index, translate_content_simple_async(metadata.get("pre_summary", ""), language)))
+            summary_targets.append((index, metadata.get("pre_summary", "")))
 
     # 인덱싱 때 저장된 다국어 필드는 그대로 사용합니다. 실시간 번역은 카드마다
     # 추가 토큰을 쓰므로 무료 전용 모드에서는 명시적으로 켜지 않은 한 수행하지 않습니다.
     if not LIVE_TRANSLATION_ENABLED:
+        for index, _ in title_targets + summary_targets:
+            page = pages_metadata[index]
+            page.get("metadata", page)["_translation_missing"] = True
         return pages_metadata
 
     tasks: List[Any] = []
     if title_targets:
         tasks.append(translate_titles_batch_async([title for _, title in title_targets], language))
     if summary_targets:
-        tasks.append(asyncio.gather(*[task for _, task in summary_targets]))
+        tasks.append(asyncio.gather(*[translate_content_simple_async(text, language) for _, text in summary_targets]))
 
     if not tasks:
         return pages_metadata
@@ -2506,6 +2599,7 @@ async def localize_result_pages_async(pages_metadata: List[Dict[str, Any]], lang
 # 중복 정의를 제거하였습니다. (위 1652, 408라인의 정의를 사용합니다.)
 # 중복 정의 시 Python은 마지막 정의로 덮어쓰는 문제가 있었습니다.
 
+@timed_async("rerank")
 async def rerank_search_results_async(question: str, results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """[Async] 검색 결과 재정렬"""
     if not results: return []
@@ -2556,6 +2650,7 @@ async def rerank_search_results_async(question: str, results: List[Dict[str, Any
         logger.error(f"⚠️ Async Rerank Error: {e}")
         return results
 
+@timed_async("keyword_expansion")
 async def expand_search_query_async(question: str) -> list:
     """[Async] 검색어 확장 (Groq -> Gemini Fallback)"""
     # 1. 전처리 (Sync 로직 재사용 - 간단 버전)
