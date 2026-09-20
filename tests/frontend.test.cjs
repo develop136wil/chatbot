@@ -488,3 +488,75 @@ test('오프라인 중 언어 변경은 해당 언어의 연결 안내를 유지
     assert.equal(c.document.getElementById('user-input').placeholder,c.window.CHAT_UI_TEXT.vi.offline);
     assertInputDisabled(c,true);
 });
+
+function lengthContext(lang='ko') {
+    const c=setup(); c.window.currentLang=lang;
+    vm.runInContext("window.sentCount=0;showToast=text=>{window.notice=text};fetchChatResponse=async body=>{window.sentCount++;window.sent=body};addMessageToBox=()=>({});chatHistory=[{role:'user',content:'previous'}];pendingContext='context';",c);
+    return c;
+}
+
+test('4개 언어에서 전송 한도 초과 시 입력·대화·문맥을 보존한다',async()=>{
+    for(const lang of ['ko','en','vi','zh']) {
+        const c=lengthContext(lang);
+        const suffixLength=vm.runInContext("Array.from(buildServerQuestion('')).length",c);
+        const value='가'.repeat(2001-suffixLength);
+        c.document.getElementById('user-input').value=value;
+        await c.handleFormSubmit();
+        assert.equal(c.window.sentCount,0);
+        assert.equal(c.document.getElementById('user-input').value,value);
+        assert.equal(vm.runInContext('chatHistory.length',c),1);
+        assert.equal(vm.runInContext('pendingContext',c),'context');
+        assert.equal(c.window.isChatBusy(),false);
+        assert.equal(c.window.notice,c.window.CHAT_UI_TEXT[lang].question_too_long.replace('{limit}',String(2000-suffixLength)));
+    }
+});
+
+test('언어 지시문 포함 정확히 2000자인 질문은 전송된다',async()=>{
+    for(const lang of ['ko','en','vi','zh']) {
+        const c=lengthContext(lang);
+        const suffixLength=vm.runInContext("Array.from(buildServerQuestion('')).length",c);
+        c.document.getElementById('user-input').value='가'.repeat(2000-suffixLength);
+        await c.handleFormSubmit();
+        assert.equal(c.window.sentCount,1);
+        assert.equal(Array.from(c.window.sent.question).length,2000);
+        assert.equal(c.window.sent.language,lang);
+        assert.equal(c.document.getElementById('user-input').value,'');
+    }
+});
+
+test('이모지 길이는 UTF-16 단위가 아닌 서버와 같은 코드 포인트로 센다',async()=>{
+    const c=lengthContext();
+    c.document.getElementById('user-input').value='😀'.repeat(2000);
+    await c.handleFormSubmit();
+    assert.equal(c.window.sentCount,1);
+    assert.equal(Array.from(c.window.sent.question).length,2000);
+    const rejected=lengthContext();
+    rejected.document.getElementById('user-input').value='😀'.repeat(2001);
+    await rejected.handleFormSubmit();
+    assert.equal(rejected.window.sentCount,0);
+});
+
+test('긴 명확화 질문도 버튼과 기존 문맥을 삭제하지 않는다',async()=>{
+    const c=lengthContext('vi');
+    vm.runInContext("pendingContext='a'.repeat(1990);window.cleared=0;clearButtons=()=>{window.cleared++};userInput.value='draft';",c);
+    await c.handleButtonClick('childcare');
+    assert.equal(c.window.sentCount,0);
+    assert.equal(c.window.cleared,0);
+    assert.equal(vm.runInContext('pendingContext.length',c),1990);
+    assert.equal(c.document.getElementById('user-input').value,'draft');
+    assert.equal(c.window.isChatBusy(),false);
+});
+
+test('짧은 명확화 질문과 언어 지시문은 기존대로 전송한다',async()=>{
+    const c=lengthContext('en');
+    await c.handleButtonClick('childcare');
+    assert.equal(c.window.sentCount,1);
+    assert.equal(c.window.sent.question,'context childcare \n\n(System: Please answer strictly in English.)');
+    assert.equal(vm.runInContext('pendingContext',c),null);
+});
+
+test('질문 길이 제한은 서버 상수와 동일하다',()=>{
+    const match=fs.readFileSync('main.py','utf8').match(/^MAX_QUESTION_LENGTH = (\d+)$/m);
+    assert.ok(match);
+    assert.equal(vm.runInContext('MAX_QUESTION_LENGTH',setup()),Number(match[1]));
+});

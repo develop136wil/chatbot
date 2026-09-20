@@ -307,11 +307,11 @@ return 1
 """
 
 
-async def check_rate_limit(request: Request, limit: int = RATE_LIMIT_MAX_REQUESTS, window: int = RATE_LIMIT_WINDOW_SECONDS):
+async def check_rate_limit(request: Request, limit: int = RATE_LIMIT_MAX_REQUESTS, window: int = RATE_LIMIT_WINDOW_SECONDS, *, scope: str = "chat"):
     """
     [비동기] 도배 방지 (Rate Limiting) 함수
     """
-    key = "rate_limit:unknown"
+    key = f"rate_limit:{scope}:unknown"
     try:
         # 1. 사용자 IP 가져오기
         client_ip = request.headers.get("X-Forwarded-For")
@@ -321,7 +321,7 @@ async def check_rate_limit(request: Request, limit: int = RATE_LIMIT_MAX_REQUEST
             client_ip = request.client.host
             
         # 2. Redis 키 생성
-        key = f"rate_limit:{client_ip}"
+        key = f"rate_limit:{scope}:{client_ip}"
         
         # [수정] 비동기 Redis 사용
         if redis_async_client:
@@ -424,7 +424,7 @@ def clear_all_caches(request: Request, secret: Optional[str] = Query(None)):
 @app.post("/chat")
 async def chat_with_bot(chat_request: ChatRequest, request: Request):
     # 1. 도배 방지 (비동기 호출)
-    await check_rate_limit(request, limit=10, window=60) 
+    await check_rate_limit(request, limit=10, window=60, scope="chat")
 
     session = request.session
     question = chat_request.question.strip()
@@ -639,7 +639,7 @@ class FeedbackRequest(BaseModel):
 
 @app.post("/feedback")
 async def handle_feedback(feedback_data: FeedbackRequest, request: Request):
-    await check_rate_limit(request,limit=5,window=300)
+    await check_rate_limit(request, limit=5, window=300, scope="feedback")
     if not notion:
         raise HTTPException(status_code=503,detail="Notion unavailable")
     props = {

@@ -22,3 +22,28 @@ jobs:
       - run: python -m pip install -r requirements.txt
       - run: python -m unittest discover -s tests -p 'test_*.py' -v
       - run: node --test tests/frontend.test.cjs
+
+  redis-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379/tcp
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements.txt
+      - name: Verify actual Redis Lua, concurrency and expiry
+        run: python -m unittest discover -s tests -p 'redis_integration.py' -v
+        env:
+          CHATBOT_REDIS_INTEGRATION: '1'
+          CHATBOT_TEST_REDIS_PORT: ${{ job.services.redis.ports[6379] }}

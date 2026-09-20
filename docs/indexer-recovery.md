@@ -95,3 +95,9 @@ navigator.onLine이 true인 실제 통신 장애는 기존 요청 오류/수동 
 다음 배포 때 run_indexer.py, main.py, 프런트엔드, 테스트,
 .github/workflows/daily_indexing.yml을 함께 반영해야 합니다.
 현재 로컬 변경만으로 기존 예약 Actions나 운영 챗봇이 바뀌지는 않습니다.
+
+## 후속 요청 안전장치 검증
+
+기능별 요청 제한 분리, 긴 질문 보호 및 실제 Redis CI 검증은
+[요청 안전장치 검증](request-guard-verification.md)을 참고하세요.
+위 테스트 수와 로컬 전용 검증 설명은 이 문서 작성 단계의 기록입니다.

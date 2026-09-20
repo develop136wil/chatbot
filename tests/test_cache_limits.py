@@ -161,7 +161,7 @@ class RequestLimitTests(unittest.IsolatedAsyncioTestCase):
                 await main.check_rate_limit(self.request, limit=3, window=60)
             self.assertEqual(caught.exception.status_code, 429)
             memory.assert_not_awaited()
-        redis.eval.assert_awaited_once_with(main.RATE_LIMIT_LUA, 1, "rate_limit:test-client", 3, 60)
+        redis.eval.assert_awaited_once_with(main.RATE_LIMIT_LUA, 1, "rate_limit:chat:test-client", 3, 60)
 
     async def test_redis_admission_is_one_atomic_call_per_request(self):
         # Models the Redis atomic admission result; does not execute a Redis server.
@@ -189,3 +189,33 @@ class RequestLimitTests(unittest.IsolatedAsyncioTestCase):
             session["free_tier_usage_date"] = "1900-01-01"
             main.reserve_free_tier_request(session)
             self.assertEqual(session["free_tier_usage_count"], 1)
+
+    async def test_chat_and_feedback_memory_counters_are_independent(self):
+        with patch.object(main, "redis_async_client", None):
+            for _ in range(5):
+                await main.check_rate_limit(self.request, limit=10, window=60, scope="chat")
+            for _ in range(5):
+                await main.check_rate_limit(self.request, limit=5, window=300, scope="feedback")
+            with self.assertRaises(main.HTTPException) as caught:
+                await main.check_rate_limit(self.request, limit=5, window=300, scope="feedback")
+            self.assertEqual(caught.exception.status_code, 429)
+            await main.check_rate_limit(self.request, limit=10, window=60, scope="chat")
+        self.assertEqual(len(main._memory_rate_limits["rate_limit:chat:test-client"]), 6)
+        self.assertEqual(len(main._memory_rate_limits["rate_limit:feedback:test-client"]), 5)
+
+    async def test_redis_receives_distinct_scope_keys_and_original_limits(self):
+        redis = SimpleNamespace(eval=AsyncMock(return_value=1))
+        with patch.object(main, "redis_async_client", redis):
+            await main.check_rate_limit(self.request, limit=10, window=60, scope="chat")
+            await main.check_rate_limit(self.request, limit=5, window=300, scope="feedback")
+        self.assertEqual([call.args[2:] for call in redis.eval.await_args_list],
+                         [("rate_limit:chat:test-client", 10, 60),
+                          ("rate_limit:feedback:test-client", 5, 300)])
+
+    async def test_missing_client_keeps_separate_fallback_scope(self):
+        request = SimpleNamespace(headers={}, client=None)
+        with patch.object(main, "redis_async_client", None):
+            await main.check_rate_limit(request, limit=1, scope="chat")
+            await main.check_rate_limit(request, limit=1, scope="feedback")
+            with self.assertRaises(main.HTTPException):
+                await main.check_rate_limit(request, limit=1, scope="feedback")

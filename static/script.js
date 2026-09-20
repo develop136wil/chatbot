@@ -145,25 +145,34 @@ function canStartChatRequest() {
     return true;
 }
 
+// The API limit counts Unicode code points, including the existing language suffix.
+const MAX_QUESTION_LENGTH = 2000;
+function buildServerQuestion(question) {
+    const names = {en: 'English', vi: 'Vietnamese', zh: 'Chinese'};
+    const name = names[window.currentLang];
+    return question + (name ? ' \n\n(System: Please answer strictly in ' + name + '.)' : '');
+}
+
+function validateQuestionLength(question) {
+    if (Array.from(buildServerQuestion(question)).length <= MAX_QUESTION_LENGTH) return true;
+    const limit = MAX_QUESTION_LENGTH - Array.from(buildServerQuestion('')).length;
+    showToast(getRequestMessages().question_too_long.replace('{limit}', String(limit)));
+    userInput.focus();
+    return false;
+}
+
 // --- 5. 메인 로직 ---
 async function handleFormSubmit() {
     if (!canStartChatRequest()) return;
     const question = userInput.value.trim();
-    if (!question) return;
+    if (!question || !validateQuestionLength(question)) return;
 
     pendingContext = null;
     currentQuestion = question;
     clearButtons();
     setLoadingState(true);
 
-    let serverQuestion = question;
-    if (window.currentLang === 'en') {
-        serverQuestion += " \n\n(System: Please answer strictly in English.)";
-    } else if (window.currentLang === 'vi') {
-        serverQuestion += " \n\n(System: Please answer strictly in Vietnamese.)";
-    } else if (window.currentLang === 'zh') {
-        serverQuestion += " \n\n(System: Please answer strictly in Chinese.)";
-    }
+    const serverQuestion = buildServerQuestion(question);
 
     let requestBody = {
         question: serverQuestion,
@@ -194,21 +203,15 @@ async function handleFormSubmit() {
 
 async function handleButtonClick(buttonText) {
     if (!canStartChatRequest()) return;
-    let newQuestion = pendingContext ? `${pendingContext} ${buttonText}` : buttonText;
+    const newQuestion = pendingContext ? `${pendingContext} ${buttonText}` : buttonText;
+    if (!validateQuestionLength(newQuestion)) return;
     pendingContext = null;
     clearButtons();
     addMessageToBox('user', newQuestion);
     currentQuestion = newQuestion;
     setLoadingState(true);
 
-    let serverQuestion = newQuestion;
-    if (window.currentLang === 'en') {
-        serverQuestion += " \n\n(System: Please answer strictly in English.)";
-    } else if (window.currentLang === 'vi') {
-        serverQuestion += " \n\n(System: Please answer strictly in Vietnamese.)";
-    } else if (window.currentLang === 'zh') {
-        serverQuestion += " \n\n(System: Please answer strictly in Chinese.)";
-    }
+    const serverQuestion = buildServerQuestion(newQuestion);
 
     const requestBody = {
         question: serverQuestion,

@@ -74,12 +74,34 @@ class RouteTests(unittest.TestCase):
     def setUp(self):
         self.patches = ExitStack()
         self.addCleanup(self.patches.close)
-        self.patches.enter_context(patch.object(main, "check_rate_limit", AsyncMock()))
+        self.rate_limit = self.patches.enter_context(patch.object(main, "check_rate_limit", AsyncMock()))
         self.read = self.patches.enter_context(patch.object(main, "get_response_cache_async", AsyncMock(return_value=None)))
         self.intent = self.patches.enter_context(patch.object(main, "extract_info_from_question_async", AsyncMock(return_value={"intent": "search", "category": None})))
         self.save = self.patches.enter_context(patch.object(main, "save_response_cache_async", AsyncMock()))
         self.client = TestClient(main.app)
         self.addCleanup(self.client.close)
+
+    def test_routes_choose_distinct_rate_limit_scopes(self):
+        self.read.return_value = cached()
+        self.assertEqual(self.client.post("/chat", json={"question": "지원"}).status_code, 200)
+        self.assertEqual(self.rate_limit.await_args.kwargs, {"limit": 10, "window": 60, "scope": "chat"})
+        with patch.object(main, "notion", None):
+            result = self.client.post("/feedback", json={"question": "질문", "answer": "답변",
+                                      "job_id": "test-id", "feedback": "👍"})
+        self.assertEqual(result.status_code, 503)
+        self.assertEqual(self.rate_limit.await_args.kwargs, {"limit": 5, "window": 300, "scope": "feedback"})
+
+    def test_question_limit_accepts_unicode_codepoints_at_boundary(self):
+        self.read.return_value = cached()
+        for text in ("가" * 2000, "😀" * 2000):
+            self.assertEqual(self.client.post("/chat", json={"question": text}).status_code, 200)
+        self.intent.assert_not_awaited()
+
+    def test_question_limit_rejects_oversize_before_rate_limit_or_ai(self):
+        for text in ("가" * 2001, "😀" * 2001):
+            self.assertEqual(self.client.post("/chat", json={"question": text}).status_code, 422)
+        self.rate_limit.assert_not_awaited()
+        self.intent.assert_not_awaited()
 
     def test_cache_hit_does_not_call_ai_or_mutate_cached_object(self):
         stored = cached()
