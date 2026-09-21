@@ -8,31 +8,31 @@ window.CHAT_UI_TEXT = {
     "toggle_close": "접기",
     "chips": [
       {
-        "label": "🏥 발달 검사",
+        "label": "발달 검사",
         "text": "영유아 발달검사"
       },
       {
-        "label": "💰 아동수당",
+        "label": "아동수당",
         "text": "아동수당 지급"
       },
       {
-        "label": "🍼 양육수당",
+        "label": "양육수당",
         "text": "양육수당 지원"
       },
       {
-        "label": "🧒 아이돌봄",
+        "label": "아이돌봄",
         "text": "아이돌봄 서비스"
       },
       {
-        "label": "🏫 보육료",
+        "label": "보육료",
         "text": "보육료 지원"
       },
       {
-        "label": "🧩 발달재활",
+        "label": "발달재활",
         "text": "발달재활서비스 바우처"
       },
       {
-        "label": "🏠 가족양육지원",
+        "label": "가족양육지원",
         "text": "장애아가족 양육지원"
       }
     ],
@@ -95,31 +95,31 @@ window.CHAT_UI_TEXT = {
     "toggle_close": "Collapse",
     "chips": [
       {
-        "label": "🏥 Development check",
+        "label": "Development check",
         "text": "Development test"
       },
       {
-        "label": "💰 Child Allowance",
+        "label": "Child Allowance",
         "text": "Child allowance"
       },
       {
-        "label": "🍼 Parenting Pay",
+        "label": "Parenting Pay",
         "text": "Parenting allowance"
       },
       {
-        "label": "🧒 Child Care",
+        "label": "Child Care",
         "text": "Child care service"
       },
       {
-        "label": "🏫 Daycare Fee",
+        "label": "Daycare Fee",
         "text": "Childcare fee support"
       },
       {
-        "label": "🧩 Rehab Voucher",
+        "label": "Rehab Voucher",
         "text": "Developmental rehabilitation"
       },
       {
-        "label": "🏠 Family Support",
+        "label": "Family Support",
         "text": "Family support for disabled children"
       }
     ],
@@ -182,31 +182,31 @@ window.CHAT_UI_TEXT = {
     "toggle_close": "Thu gọn",
     "chips": [
       {
-        "label": "🏥 Kiểm tra phát triển",
+        "label": "Kiểm tra phát triển",
         "text": "Kiểm tra phát triển"
       },
       {
-        "label": "💰 Trợ cấp trẻ em",
+        "label": "Trợ cấp trẻ em",
         "text": "Trợ cấp trẻ em"
       },
       {
-        "label": "🍼 Trợ cấp nuôi dưỡng",
+        "label": "Trợ cấp nuôi dưỡng",
         "text": "Trợ cấp nuôi dưỡng"
       },
       {
-        "label": "🧒 Chăm sóc trẻ",
+        "label": "Chăm sóc trẻ",
         "text": "Dịch vụ chăm sóc trẻ"
       },
       {
-        "label": "🏫 Phí nhà trẻ",
+        "label": "Phí nhà trẻ",
         "text": "Hỗ trợ phí nhà trẻ"
       },
       {
-        "label": "🧩 Phục hồi chức năng",
+        "label": "Phục hồi chức năng",
         "text": "Phiếu phục hồi chức năng"
       },
       {
-        "label": "🏠 Hỗ trợ gia đình",
+        "label": "Hỗ trợ gia đình",
         "text": "Hỗ trợ gia đình trẻ khuyết tật"
       }
     ],
@@ -269,31 +269,31 @@ window.CHAT_UI_TEXT = {
     "toggle_close": "收起",
     "chips": [
       {
-        "label": "🏥 发育检查",
+        "label": "发育检查",
         "text": "婴幼儿发育检查"
       },
       {
-        "label": "💰 儿童津贴",
+        "label": "儿童津贴",
         "text": "儿童津贴"
       },
       {
-        "label": "🍼 养育津贴",
+        "label": "养育津贴",
         "text": "养育津贴"
       },
       {
-        "label": "🧒 儿童照护",
+        "label": "儿童照护",
         "text": "儿童照护服务"
       },
       {
-        "label": "🏫 保育费",
+        "label": "保育费",
         "text": "保育费支持"
       },
       {
-        "label": "🧩 康复代金券",
+        "label": "康复代金券",
         "text": "发育康复代金券"
       },
       {
-        "label": "🏠 家庭支持",
+        "label": "家庭支持",
         "text": "残疾儿童家庭养育支持"
       }
     ],

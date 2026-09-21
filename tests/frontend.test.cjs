@@ -266,7 +266,7 @@ test('라이트 모드만 선언하고 다크 시스템 테마 분기를 제거�
     assert.match(html,/<meta name="color-scheme" content="only light">/);
     assert.ok(html.indexOf('name="color-scheme"') < html.indexOf('rel="stylesheet"'));
     for (const source of [css,html,js]) assert.doesNotMatch(source,/prefers-color-scheme\s*:\s*dark/i);
-    assert.match(html,/style\.css\?v=2026\.09\.21-welcome-final/);
+    assert.match(html,/style\.css\?v=2026\.09\.21-type-glass/);
 });
 
 test('라이트 고정 후에도 동작 줄이기와 사용자 고대비 설정을 방해하지 않는다', () => {
@@ -312,14 +312,14 @@ test('화면 높이 변경은 과거 답변을 강제로 맨 아래로 스크롤
     assert.equal(vm.runInContext('chatBox.scrollTop',c),200);
 });
 
-test('추천 질문 끝 여백은 번역된 접기 버튼 너비를 반영한다', () => {
+test('추천 질문 스크롤 영역은 번역된 접기 버튼과 분리한다', () => {
     for(const width of [72,154]) {
         const c=overlaySetup({width});
         c.syncInputOverlay();
         assert.equal(c.document.documentElement.style['--suggestion-toggle-width'],width+'px');
     }
     const css=fs.readFileSync('static/style.css','utf8');
-    assert.match(css,/#suggestion-container\s*\{[^}]*padding:\s*10px calc\(var\(--suggestion-toggle-width, 100px\) \+ 32px\)/);
+    assert.match(css,/#suggestion-container\s*\{[^}]*width: calc\(min\(100%, 600px\) - var\(--suggestion-toggle-width, 100px\) - 24px\)/);
     assert.match(css,/#suggestion-container\s*\{[^}]*mask-image:\s*none/);
 });
 
@@ -745,8 +745,12 @@ test('시작 화면·제목·설치 앱의 한국어 이름이 일치한다',()=
 test('글라스 제목의 상위 영역이 불투명한 배경으로 효과를 덮지 않는다',()=>{
     const css=fs.readFileSync('static/style.css','utf8');
     const top=css.match(/\.chat-topbar\s*\{([^}]+)\}/)[1];
-    assert.match(top,/background: var\(--glass-bg\)/);
-    assert.match(top,/backdrop-filter: var\(--glass-blur\)/);
+    assert.match(top,/background: transparent; border: 0/);
+    const surface=css.match(/\.chat-topbar::before\s*\{([^}]+)\}/)[1];
+    assert.match(surface,/background: rgba\(249, 250, 251, .98\)/);
+    assert.match(surface,/mask-image: linear-gradient\(to bottom, #000 0%, #000 65%, transparent 100%\)/);
+    assert.match(surface,/pointer-events: none/);
+    assert.match(surface,/backdrop-filter: var\(--glass-blur\)/);
     assert.doesNotMatch(top,/background: var\(--bg-color\)/);
     assert.match(css,/\.message\.user p\s*\{[^}]*white-space: pre-wrap/);
 });
@@ -1007,7 +1011,7 @@ test('결과 더 보기는 회색 버튼이며 문의는 답변 바깥 보조 �
     const more=css.match(/\.show-more-btn\s*\{([^}]+)\}/)[1];
     assert.ok(more.includes('color: #344054; background: #EAECF0'));
     assert.match(css,/\.contact-actions\s*\{[^}]*grid-column: 2/);
-    assert.match(css,/#welcome-title\s*\{[^}]*font-size: 22px/);
+    assert.match(css,/#welcome-title\s*\{[^}]*font-size: 24px/);
 });
 test('새 프런트엔드는 질문·답변을 피드백 API로 전송하는 코드를 포함하지 않는다',()=>{
     const source=fs.readFileSync('static/script.js','utf8');
@@ -1089,7 +1093,7 @@ test('답변 포커스 보정은 가려진 키보드 제어에만 작동한다',
 test('시각 디자인은 유지하고 폰트 지연·장식 이미지·카드 동작 줄이기를 보완한다',()=>{
     const css=fs.readFileSync('static/style.css','utf8'),html=fs.readFileSync('static/index.html','utf8');
     const faces=css.match(/@font-face\s*\{[^}]+\}/g);
-    assert.equal(faces.length,2);assert.ok(faces.every(rule=>rule.includes('font-display: swap')));
+    assert.equal(faces.length,1);assert.ok(faces.every(rule=>rule.includes('font-display: swap')));
     assert.match(css,/\.result-card \{ animation: none; opacity: 1; \}/);
     assert.doesNotMatch(html,/alt="(?:bot|icon)"/);
     assert.match(css,/scroll-padding-top: calc\(var\(--chat-top-height/);
@@ -1171,15 +1175,15 @@ test('한국어 첫 제목은 의미 단위 두 줄이며 설명의 줄 간격�
     assert.equal(c.document.getElementById('welcome-title').textContent,'우리 아이에게\n필요한 지원을 찾아보세요');
     const css=fs.readFileSync('static/style.css','utf8');
     assert.match(css,/#welcome-title\s*\{[^}]*white-space: pre-line/);
-    assert.match(css,/#welcome-msg\s*\{[^}]*line-height: 1.5;/);
+    assert.match(css,/#welcome-msg\s*\{[^}]*line-height: 1.35;/);
 });
 
 test('상단 브랜드는 작은 크기로 유지하고 고정 높이로 자르지 않는다',()=>{
     const css=fs.readFileSync('static/style.css','utf8');
-    assert.match(css,/\.chat-topbar \.chat-header h2\s*\{[^}]*font-size: 16px/);
+    assert.match(css,/\.chat-topbar \.chat-header h2\s*\{[^}]*font-size: 15px/);
     assert.match(css,/\.chat-topbar \.header-icon\s*\{[^}]*width: 24px; height: 24px/);
     const header=css.match(/\.chat-topbar \.chat-header\s*\{([^}]+)\}/)[1];
-    assert.match(header,/min-height: 49px/);
+    assert.match(header,/min-height: 50px/);
     assert.doesNotMatch(header,/(?:^|;)\s*height:|overflow: hidden/);
 });
 
@@ -1195,4 +1199,61 @@ test('정보 수집 안내 명칭과 Pretendard 제목 굵기를 보존한다',(
     assert.match(title,/font-weight: 800/);
     assert.match(title,/font-family: 'Pretendard', 'SF Pro', sans-serif/);
     assert.doesNotMatch(title,/-webkit-text-stroke/);
+});
+
+test('장식 서체 로딩을 제거하고 추천 질문은 텍스트만 유지한다',()=>{
+    const css=fs.readFileSync('static/style.css','utf8'),html=fs.readFileSync('static/index.html','utf8');
+    assert.doesNotMatch(css+html,/ONE Mobile POP/);
+    assert.match(css,/\.splash-title\s*\{[^}]*font-family: 'Pretendard'/);
+    assert.match(css,/body\s*\{[^}]*font-family: 'Pretendard', 'SF Pro', sans-serif/);
+    const c=setup();
+    for(const lang of ['ko','en','vi','zh']){
+        const chips=c.window.CHAT_UI_TEXT[lang].chips;
+        assert.equal(chips.length,7);
+        for(const chip of chips){
+            assert.doesNotMatch(chip.label,/\p{Extended_Pictographic}/u);
+            assert.ok(chip.label.trim()&&chip.text.trim());
+        }
+    }
+});
+
+
+test('입력창 주변 표면은 투명하고 주의 문구는 2px 간격이다',()=>{
+    const css=fs.readFileSync('static/style.css','utf8');
+    const foot=[...css.matchAll(/\.chat-input-box\s*\{([^}]+)\}/g)].at(-1)[1];
+    assert.match(foot,/gap: 2px/);
+    assert.match(foot,/background: transparent; border-top: 0/);
+    assert.match(foot,/backdrop-filter: none/);
+    assert.match(css,/#welcome-title\s*\{[^}]*line-height: 1.15/);
+});
+
+
+test('접기 버튼의 강조를 줄이고 펼침 상태에 따라 세로 중앙을 맞춘다',()=>{
+    const c=overlaySetup();
+    c.syncInputOverlay();
+    assert.equal(c.document.documentElement.style['--suggestion-toggle-offset'],'20px');
+    // This test isolates layout measurement; the shared stub has a no-op classList.
+    c.document.querySelector('.suggestion-container').classList.contains=name=>name==='hidden';
+    c.syncInputOverlay();
+    assert.equal(c.document.documentElement.style['--suggestion-toggle-offset'],'6px');
+    const css=fs.readFileSync('static/style.css','utf8');
+    assert.match(css,/\.toggle-text\s*\{[^}]*font-weight: 500/);
+    assert.match(css,/\.toggle-icon\s*\{[^}]*width: 12px; height: 12px/);
+    assert.match(css,/#suggestion-toggle-btn\s*\{[^}]*box-shadow: 0 2px 4px rgba\(0, 0, 0, .03\)/);
+});
+
+
+test('키보드로 일부만 보이는 추천 질문에 초점을 옮기면 가로 영역 안으로 드러낸다',()=>{
+    const c=overlaySetup(),tray=c.document.querySelector('.suggestion-container');
+    tray.scrollLeft=0;tray.getBoundingClientRect=()=>({left:0,right:200});
+    const target={classList:{contains:n=>n==='suggestion-chip'},matches:()=>true,
+        getBoundingClientRect:()=>({left:190,right:290})};
+    c.revealFocusedSuggestion({target});
+    assert.equal(tray.scrollLeft,94);
+    target.matches=()=>false;
+    c.revealFocusedSuggestion({target});
+    assert.equal(tray.scrollLeft,94);
+    target.matches=()=>true;target.getBoundingClientRect=()=>({left:-10,right:40});
+    c.revealFocusedSuggestion({target});
+    assert.equal(tray.scrollLeft,80);
 });

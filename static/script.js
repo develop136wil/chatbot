@@ -786,9 +786,12 @@ function syncInputOverlay() {
     const pinned = chatBox.scrollHeight - chatBox.scrollTop - chatBox.clientHeight < 100;
     const expanded = !suggestionContainer.classList.contains('hidden');
     const toggleRect = toggleBtn.getBoundingClientRect();
+    const suggestionHeight = suggestionContainer.getBoundingClientRect().height;
     const metrics = overlayMetrics(footer.getBoundingClientRect().height,
-        suggestionContainer.getBoundingClientRect().height,
-        toggleRect.height, expanded);
+        suggestionHeight, toggleRect.height, expanded);
+    // The tray has symmetric vertical padding and an 8px bottom margin.
+    document.documentElement.style.setProperty('--suggestion-toggle-offset',
+        (expanded ? Math.max(0, 8 + (suggestionHeight - toggleRect.height) / 2) : 6) + 'px');
     document.documentElement.style.setProperty('--suggestion-toggle-width',
         Math.max(0, Math.ceil(toggleRect.width || 0)) + 'px');
     document.documentElement.style.setProperty('--chat-footer-height', metrics.footer + 'px');
@@ -807,6 +810,22 @@ window.addEventListener('load', () => {
             .filter(Boolean).forEach(element => observer.observe(element));
     }
 });
+// Some browsers leave a partly visible chip clipped when it receives focus.
+function revealFocusedSuggestion(event) {
+    const target = event.target;
+    if (!target?.classList?.contains('suggestion-chip') ||
+        !target.matches?.(':focus-visible') || !suggestionContainer ||
+        suggestionContainer.classList.contains('hidden')) return;
+    const rect = target.getBoundingClientRect();
+    const viewport = suggestionContainer.getBoundingClientRect();
+    if (rect.right > viewport.right - 4) {
+        suggestionContainer.scrollLeft += rect.right - viewport.right + 4;
+    } else if (rect.left < viewport.left + 4) {
+        suggestionContainer.scrollLeft += rect.left - viewport.left - 4;
+    }
+}
+suggestionContainer?.addEventListener('focusin', revealFocusedSuggestion);
+
 window.addEventListener('resize', syncInputOverlay);
 userInput.addEventListener('input', () => requestAnimationFrame(syncInputOverlay));
 

@@ -58,12 +58,35 @@ function contrast(a,b){
  check('시작 설명은 쉼표 뒤 지정 줄바꿈',await page.locator('#welcome-msg').evaluate(el=>el.textContent.includes(',\n')&&getComputedStyle(el).whiteSpace==='pre-line'));
 
  check('한국어 첫 제목 지정 두 줄',await page.locator('#welcome-title').evaluate(el=>el.textContent==='우리 아이에게\n필요한 지원을 찾아보세요'&&getComputedStyle(el).whiteSpace==='pre-line'&&Math.abs(el.getBoundingClientRect().height-2*parseFloat(getComputedStyle(el).lineHeight))<1));
- check('첫 설명 12px·줄 높이 18px',await page.locator('#welcome-msg').evaluate(el=>getComputedStyle(el).fontSize==='12px'&&getComputedStyle(el).lineHeight==='18px'));
- check('첫 제목 굵기·조밀한 행간',await page.locator('#welcome-title').evaluate(el=>getComputedStyle(el).fontWeight==='800'&&getComputedStyle(el).webkitTextStrokeWidth==='0px'&&getComputedStyle(el).fontFamily.startsWith('Pretendard')&&getComputedStyle(el).lineHeight==='27.5px'));
+ check('첫 설명 12px·줄 높이 16.2px',await page.locator('#welcome-msg').evaluate(el=>getComputedStyle(el).fontSize==='12px'&&getComputedStyle(el).lineHeight==='16.2px'));
+ check('첫 제목 굵기·조밀한 행간',await page.locator('#welcome-title').evaluate(el=>getComputedStyle(el).fontWeight==='800'&&getComputedStyle(el).webkitTextStrokeWidth==='0px'&&getComputedStyle(el).fontFamily.startsWith('Pretendard')&&getComputedStyle(el).lineHeight==='27.6px'));
  check('정보 수집 안내 명칭',await page.locator('#analytics-label').textContent()==='정보 수집 안내');
  check('브랜드 제목',await page.locator('#header-title').textContent()==='도봉구 영유아 복지정보자료집');
- const fontDisplays=await page.evaluate(()=>[...document.fonts].filter(f=>['SF Pro','ONE Mobile POP'].includes(f.family.replace(/["']/g,''))).map(f=>f.display));
- check('기존 로컬 폰트 swap',fontDisplays.length>=2&&fontDisplays.every(v=>v==='swap'),fontDisplays);
+ const fontDisplays=await page.evaluate(()=>[...document.fonts].filter(f=>['SF Pro'].includes(f.family.replace(/["']/g,''))).map(f=>f.display));
+ check('기존 로컬 폰트 swap',fontDisplays.length>=1&&fontDisplays.every(v=>v==='swap'),fontDisplays);
+ check('ONE Mobile POP 등록·프리로드 없음',await page.evaluate(()=>![...document.fonts].some(f=>f.family.includes('ONE Mobile'))&&![...document.querySelectorAll('link[rel="preload"]')].some(l=>l.href.includes('ONE'))));
+ check('추천 질문 텍스트·투명 영역·개별 글라스',await page.evaluate(()=>{
+  const tray=getComputedStyle(document.getElementById('suggestion-container'));
+  return tray.backgroundColor==='rgba(0, 0, 0, 0)'&&tray.backgroundImage==='none'&&tray.backdropFilter==='none'&&[...document.querySelectorAll('.suggestion-chip')].every(el=>!/[\u{1F300}-\u{1FAFF}]/u.test(el.textContent)&&getComputedStyle(el).backdropFilter==='blur(10px)');
+ }));
+ check('상단 Pretendard 및 좌측 정렬',await page.evaluate(()=>{
+  const name=document.getElementById('header-title'),bar=document.querySelector('.chat-topbar .chat-header'),icon=document.querySelector('.header-icon');
+  return getComputedStyle(name).fontFamily.startsWith('Pretendard')&&getComputedStyle(name).fontWeight==='600'&&Math.abs(icon.getBoundingClientRect().left-bar.getBoundingClientRect().left-24)<1;
+ }));
+ const chipColors=await page.locator('.suggestion-chip').first().evaluate(el=>{
+  const s=getComputedStyle(el);return {fg:s.color.match(/[\d.]+/g).map(Number),bg:s.backgroundColor.match(/[\d.]+/g).map(Number)};
+ });
+ const chipAlpha=chipColors.bg[3]??1,chipWorstBg=chipColors.bg.slice(0,3).map(v=>v*chipAlpha);
+ check('글라스 버튼 검정 배경 합성 대비 4.5 이상',contrast(chipColors.fg,chipWorstBg)>=4.5);
+ check('상단 배경만 아래로 투명해지고 경계선 없음',await page.evaluate(()=>{
+  const el=document.querySelector('.chat-topbar'),a=getComputedStyle(el),b=getComputedStyle(el,'::before');
+  return a.backgroundColor==='rgba(0, 0, 0, 0)'&&a.borderBottomWidth==='0px'&&a.opacity==='1'&&a.maskImage==='none'&&b.maskImage.includes('65%')&&b.maskImage.includes('100%')&&b.backgroundColor==='rgba(249, 250, 251, 0.98)'&&b.maskImage.includes('rgba(0, 0, 0, 0)')&&b.pointerEvents==='none';
+ }));
+ check('입력창 외부 투명·주의 문구 간격 2px',await page.evaluate(()=>{
+  const footer=document.querySelector('.chat-input-box'),style=getComputedStyle(footer);
+  const input=document.querySelector('.composer-controls').getBoundingClientRect(),notice=document.getElementById('privacy-notice').getBoundingClientRect();
+  return style.backgroundColor==='rgba(0, 0, 0, 0)'&&style.borderTopWidth==='0px'&&style.backdropFilter==='none'&&Math.abs(notice.top-input.bottom-2)<.1;
+ }));
  await page.screenshot({path:path.join(out,'welcome-mobile.png')});
  for(const [width,height] of [[320,812],[390,844],[768,1024],[1280,900],[812,375]]){
   await page.setViewportSize({width,height});
@@ -74,6 +97,8 @@ function contrast(a,b){
     document.activeElement?.blur();
     await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
     document.getElementById('chat-box').scrollTo({top:0,behavior:'instant'});
+    await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+    document.getElementById('chat-box').scrollTo({top:0,behavior:'instant'});
    },lang);
    const state=await page.evaluate(()=>{
     const welcome=document.getElementById('welcome-msg'),header=document.getElementById('header-title');
@@ -81,17 +106,35 @@ function contrast(a,b){
      welcome:welcome.scrollWidth<=welcome.clientWidth+1,header:header.scrollWidth<=header.clientWidth+1,
      titleSize:parseFloat(getComputedStyle(document.getElementById('welcome-title')).fontSize),flags:document.querySelectorAll('.language-flag').length};
    });
-   check('첫 화면 reflow '+width+'x'+height+' '+lang,state.page&&state.welcome&&state.header&&state.titleSize===22&&state.flags===4,state);
+   check('첫 화면 reflow '+width+'x'+height+' '+lang,state.page&&state.welcome&&state.header&&state.titleSize===24&&state.flags===4,state);
 
    check('첫 안내와 국기 시작 높이 정렬 '+width+' '+lang,await page.evaluate(()=>Math.abs(document.getElementById('welcome-title').getBoundingClientRect().top-document.querySelector('.lang-btn').getBoundingClientRect().top)<=8));
+   const toggleLayout=await page.evaluate(()=>{
+    const tray=document.getElementById('suggestion-container'),toggle=document.getElementById('suggestion-toggle-btn');
+    const r=tray.getBoundingClientRect(),t=toggle.getBoundingClientRect(),chip=tray.firstElementChild.getBoundingClientRect();
+    return {gap:t.left-r.right,centers:Math.abs((chip.top+chip.bottom-t.top-t.bottom)/2),width:r.width,
+     weight:getComputedStyle(toggle.querySelector('.toggle-text')).fontWeight,icon:getComputedStyle(toggle.querySelector('.toggle-icon')).width,
+     glass:getComputedStyle(toggle).backdropFilter};
+   });
+   check('접기 버튼 분리·중앙 정렬 '+width+' '+lang,toggleLayout.gap>=7&&toggleLayout.centers<1&&toggleLayout.width>100&&toggleLayout.weight==='500'&&toggleLayout.icon==='12px'&&toggleLayout.glass==='blur(10px)',toggleLayout);
+   await page.locator('.suggestion-chip').first().focus();
+   for(let chipIndex=1;chipIndex<await page.locator('.suggestion-chip').count();chipIndex++)await page.keyboard.press('Tab');
+   await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+   const lastReachable=await page.locator('.suggestion-chip').last().evaluate(el=>{
+    const r=el.getBoundingClientRect(),tray=el.parentElement.getBoundingClientRect(),t=document.getElementById('suggestion-toggle-btn').getBoundingClientRect();
+    return {left:r.left,right:r.right,trayLeft:tray.left,trayRight:tray.right,toggleLeft:t.left,scroll:el.parentElement.scrollLeft};
+   });
+   check('마지막 추천 질문 키보드 접근 '+width+' '+lang,lastReachable.left>=lastReachable.trayLeft&&lastReachable.right<=lastReachable.trayRight+1&&lastReachable.right<lastReachable.toggleLeft,lastReachable);
+   await page.evaluate(()=>{document.activeElement?.blur();document.getElementById('suggestion-container').scrollLeft=0;});
+   check('첫 안내 좌측 24px 정렬 '+width+' '+lang,await page.evaluate(()=>Math.abs(document.getElementById('welcome-title').getBoundingClientRect().left-document.querySelector('.chat-container').getBoundingClientRect().left-24)<1));
    const brand=await page.evaluate(()=>{
     const bar=document.querySelector('.chat-topbar'),name=document.getElementById('header-title'),icon=document.querySelector('.header-icon');
     const b=bar.getBoundingClientRect(),n=name.getBoundingClientRect(),i=icon.getBoundingClientRect(),style=getComputedStyle(bar);
     return {height:b.height,font:parseFloat(getComputedStyle(name).fontSize),icon:i.width,
      contained:n.top>=b.top&&n.bottom<=b.bottom&&n.left>=b.left&&n.right<=b.right,
-     glass:style.backdropFilter.includes('blur('),visible:style.visibility==='visible'&&style.opacity==='1'};
+     glass:getComputedStyle(bar,'::before').backdropFilter.includes('blur('),visible:style.visibility==='visible'&&style.opacity==='1'};
    });
-   check('작은 상단 브랜드·글라스 보존 '+width+' '+lang,brand.height>=50&&brand.font===(width<=390?15:16)&&brand.icon===24&&brand.contained&&brand.glass&&brand.visible,brand);
+   check('작은 상단 브랜드·글라스 보존 '+width+' '+lang,brand.height>=50&&brand.font===15&&brand.icon===24&&brand.contained&&brand.glass&&brand.visible,brand);
    await page.locator('.analytics-disclosure summary').click();
    check('통계 안내/개인정보 reflow '+width+' '+lang,await page.evaluate(()=>[document.getElementById('analytics-notice'),document.getElementById('privacy-notice')].every(el=>el.scrollWidth<=el.clientWidth+1)));
    await page.locator('.analytics-disclosure summary').click();
@@ -103,6 +146,8 @@ function contrast(a,b){
    }));
   }
  }
+ await page.setViewportSize({width:1280,height:900});await page.evaluate(()=>changeLanguage('ko'));
+ await page.screenshot({path:path.join(out,'welcome-desktop.png')});
  await page.setViewportSize({width:390,height:844});
  for(const lang of ['ko','en','vi','zh']){
   await page.evaluate(l=>changeLanguage(l),lang);
@@ -164,6 +209,14 @@ function contrast(a,b){
  check('문의는 답변 아래 배치',await page.locator('.contact-actions').evaluate(el=>el.getBoundingClientRect().top>=el.parentElement.querySelector('.message').getBoundingClientRect().bottom));
  check('버튼 최소 web 터치 크기',await page.locator('.show-more-btn').evaluate(el=>{const r=el.getBoundingClientRect();return r.width>=24&&r.height>=24;}));
  await page.screenshot({path:path.join(out,'answer-mobile.png')});
+ await page.setViewportSize({width:1280,height:900});
+ await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+ check('데스크톱 답변 아래 입력창 표시',await page.locator('#user-input').evaluate(el=>{
+  const r=el.getBoundingClientRect(),style=getComputedStyle(el);
+  return r.height>0&&r.top>=0&&r.bottom<=innerHeight&&style.visibility==='visible';
+ }));
+ await page.screenshot({path:path.join(out,'answer-desktop.png')});
+ await page.setViewportSize({width:390,height:844});
  await page.locator('.contact-actions summary').click();
  for(const width of [320,390,600]){
   await page.setViewportSize({width,height:844});
