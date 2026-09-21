@@ -710,23 +710,38 @@ body {
     padding: 4px 0;
     overflow-wrap: anywhere;
 }
-.contact-content > a {
+.message.assistant a.contact-email {
+    display: inline-flex;
+    align-items: center;
+    min-height: 32px;
+    padding: 4px 12px;
+    box-sizing: border-box;
+    border: 1px solid #DDE2E8;
+    border-radius: 16px;
+    background: rgba(255, 255, 255, .65);
     color: #344054;
-    text-decoration: underline;
-    text-underline-offset: 3px;
+    font: inherit;
+    text-decoration: none;
 }
 .contact-copy {
-    margin-left: 8px;
-    padding: 6px 8px;
+    margin-left: 4px;
+    padding: 4px 8px;
     min-height: 32px;
-    border: 1px solid #D0D5DD;
-    border-radius: 8px;
+    border: 0;
+    border-radius: 16px;
     background: transparent;
     color: #475467;
     font: inherit;
     cursor: pointer;
 }
-.contact-content > p { margin: 6px 0 0; font-size: 12px; line-height: 1.6; }
+.message.assistant a.contact-email:hover, .contact-copy:hover { background: #E4E7EC; }
+.message.assistant .contact-address {
+    margin: 4px 0 0;
+    color: #667085;
+    font-size: 12px;
+    line-height: 1.6;
+    user-select: text;
+}
 .contact-actions summary:focus-visible, .contact-content a:focus-visible,
 .contact-copy:focus-visible { outline: 2px solid #667085; outline-offset: 3px; }
 .contact-status { display: block; }
@@ -1390,6 +1405,16 @@ body {
 .toast { overflow-wrap: anywhere; }
 @media (prefers-reduced-motion: reduce) {
     .chat-box { scroll-behavior: auto; }
-    .message-row, .toast, .skeleton-box, .splash-content { animation: none; transition: none; }
+    .message-row, .toast, .skeleton-box, .splash-content, .suggestion-container, #suggestion-toggle-btn { animation: none; transition: none; }
     .result-card { animation: none; opacity: 1; }
+}
+
+/* Quiet first-run notices, separate from the conversational welcome. */
+#welcome-msg > span:last-child { font-size: 12px; color: var(--text-secondary); }
+#analytics-notice {
+    margin: -4px 0 16px 54px;
+    font-size: 11px;
+    line-height: 1.6;
+    text-align: left;
+    color: var(--text-secondary);
 }

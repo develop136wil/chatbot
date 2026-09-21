@@ -266,7 +266,7 @@ test('라이트 모드만 선언하고 다크 시스템 테마 분기를 제거�
     assert.match(html,/<meta name="color-scheme" content="only light">/);
     assert.ok(html.indexOf('name="color-scheme"') < html.indexOf('rel="stylesheet"'));
     for (const source of [css,html,js]) assert.doesNotMatch(source,/prefers-color-scheme\s*:\s*dark/i);
-    assert.match(html,/style\.css\?v=2026\.09\.21-design-contract/);
+    assert.match(html,/style\.css\?v=2026\.09\.21-welcome-support/);
 });
 
 test('라이트 고정 후에도 동작 줄이기와 사용자 고대비 설정을 방해하지 않는다', () => {
@@ -942,6 +942,9 @@ for (const lang of ['ko','en','vi','zh']) {
         assert.equal(mail.searchParams.get('subject'),c.window.CHAT_UI_TEXT[lang].contact.subject);
         assert.doesNotMatch(mail.href,/PRIVATE/);
         assert.equal(content.children[1].type,'button');
+        assert.equal(content.children[0].textContent,c.window.CHAT_UI_TEXT[lang].contact.open);
+        assert.equal(content.children[2].className,'contact-address');
+        assert.equal(content.children.length,4);
     });
     test(lang+' 주소 복사는 실제 성공 확인 후 표시하고 네트워크 요청을 안 한다',async()=>{
         const c=setup(),box=element();let copied='',requests=0;
@@ -962,7 +965,7 @@ for (const lang of ['ko','en','vi','zh']) {
             const content=box.children[0].children[1];
             await content.children[1].onclick();
             assert.equal(content.children[3].textContent,c.window.CHAT_UI_TEXT[lang].contact.copy_failed);
-            assert.equal(content.children[0].textContent,'chanyoung@devleop136.com');
+            assert.equal(content.children[2].textContent,'chanyoung@devleop136.com');
             assert.equal(content.children[1].disabled,false);
         }
     });
@@ -985,7 +988,7 @@ test('재시도 불가 오류에도 이메일 문의가 남는다',()=>{
 });
 test('첫 안내에는 문의 메뉴 없이 다국어 안내와 통계 고지를 유지한다',()=>{
     const html=fs.readFileSync('static/index.html','utf8');
-    assert.doesNotMatch(html,/welcome-contact|addContactActions/);
+    assert.doesNotMatch(html,/welcome-contact|addContactActions|time-notice/);
     const c=setup();loadHome(c);
     for (const lang of ['en','vi','zh','ko']) {
         c.changeLanguage(lang);
@@ -1085,4 +1088,35 @@ test('시각 디자인은 유지하고 폰트 지연·장식 이미지·카드 �
     assert.doesNotMatch(html,/alt="(?:bot|icon)"/);
     assert.match(css,/scroll-padding-top: calc\(var\(--chat-top-height/);
     assert.match(css,/scroll-padding-bottom: var\(--chat-bottom-padding/);
+});
+
+
+test('요청 시작 시 추천 질문을 접고 완료 후에도 유지하며 수동으로 다시 열 수 있다',()=>{
+    const suggestions=element(),toggle=element(),footer=element();
+    for(const el of [suggestions,toggle]){
+        const names=new Set();
+        el.classList={add:n=>names.add(n),remove:n=>names.delete(n),contains:n=>names.has(n),
+            toggle(n){if(names.has(n))names.delete(n);else names.add(n);}};
+        el.getBoundingClientRect=()=>({height:40,width:100});
+    }
+    footer.getBoundingClientRect=()=>({height:76});
+    const c=setup({toggle,selectors:{'.suggestion-container':suggestions,'.chat-input-box':footer}});
+    c.setLoadingState(true);
+    assert.equal(suggestions.classList.contains('hidden'),true);
+    assert.equal(suggestions.inert,true);
+    assert.equal(toggle.attributes['aria-expanded'],'false');
+    c.setLoadingState(false);
+    assert.equal(suggestions.classList.contains('hidden'),true);
+    toggle.events.click[0]();
+    assert.equal(suggestions.classList.contains('hidden'),false);
+    assert.equal(suggestions.inert,false);
+    assert.equal(toggle.attributes['aria-expanded'],'true');
+});
+test('빈 질문과 길이 제한 초과는 추천 질문을 자동으로 접지 않는다',async()=>{
+    const c=setup();let collapsed=0;c.collapseSuggestions=()=>{collapsed++;};
+    c.document.getElementById('user-input').value='';
+    await c.handleFormSubmit();
+    c.document.getElementById('user-input').value='x'.repeat(50000);
+    await c.handleFormSubmit();
+    assert.equal(collapsed,0);
 });

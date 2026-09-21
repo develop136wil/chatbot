@@ -2,8 +2,7 @@
 window.CHAT_UI_TEXT = {
   "ko": {
     "title": "도봉구 영유아 복지정보자료집",
-    "welcome": "<span>도봉구 영유아 복지정보를 찾아드려요.</span><span>“24개월 아이가 받을 수 있는 지원”처럼 물어보세요.</span><span>이름·연락처 등 개인정보는 입력하지 마세요.</span>",
-    "time": "관련 정보를 안내하며, 최종 지원 여부는 담당 기관에서 확인해 주세요.",
+    "welcome": "<span>도봉구 영유아 복지정보를 찾아드려요.</span><span>어떤 지원이 궁금하신가요?</span><span>이름·연락처 등 개인정보는 입력하지 마세요.</span>",
     "placeholder": "예: 24개월 아이가 받을 수 있는 지원",
     "toggle_open": "추천 질문",
     "toggle_close": "접기",
@@ -78,18 +77,16 @@ window.CHAT_UI_TEXT = {
     "contact": {
       "label": "문의 · 불편 신고",
       "subject": "복지정보 챗봇 문의",
-      "open": "메일 앱 열기",
+      "open": "이메일로 문의",
       "copy": "주소 복사",
       "copied": "이메일 주소를 복사했어요.",
-      "copy_failed": "위 이메일 주소를 길게 누르거나 선택해 복사해 주세요.",
-      "note": "주소를 누르면 메일 앱이 열려요. 대화 내용은 자동 첨부되지 않아요. 주민등록번호 등 민감한 정보는 보내지 마세요."
+      "copy_failed": "이메일 주소를 길게 누르거나 선택해 복사해 주세요."
     },
     "analytics_notice": "서비스 개선을 위해 분야·언어·이용 결과 등의 통계를 수집할 수 있어요. 통계에는 질문 원문을 저장하지 않아요."
   },
   "en": {
     "title": "Dobong Child Welfare Guide",
-    "welcome": "<span>Find welfare support for young children and families in Dobong-gu.</span><span>Try asking “What support is available for a 24-month-old child?”</span><span>Please do not enter names, contact details or other personal information.</span>",
-    "time": "This is an information guide. Confirm eligibility with the responsible organization.",
+    "welcome": "<span>Find welfare support for young children and families in Dobong-gu.</span><span>What support would you like to know about?</span><span>Please do not enter names, contact details or other personal information.</span>",
     "placeholder": "E.g. support for a 24-month-old child",
     "toggle_open": "Suggested Questions",
     "toggle_close": "Collapse",
@@ -164,18 +161,16 @@ window.CHAT_UI_TEXT = {
     "contact": {
       "label": "Contact · Report a problem",
       "subject": "Welfare chatbot inquiry",
-      "open": "Open email app",
+      "open": "Email us",
       "copy": "Copy address",
       "copied": "Email address copied.",
-      "copy_failed": "Select or long-press the email address above to copy it.",
-      "note": "Tap the address to open your email app. Chat history is not attached automatically. Please do not send sensitive personal information."
+      "copy_failed": "Select or long-press the email address to copy it."
     },
     "analytics_notice": "We may collect topic, language and usage outcomes to improve this service. These statistics do not store your question text."
   },
   "vi": {
     "title": "Cẩm nang phúc lợi trẻ em Dobong",
-    "welcome": "<span>Tìm thông tin hỗ trợ cho trẻ nhỏ và gia đình tại quận Dobong.</span><span>Hãy thử hỏi: “Trẻ 24 tháng tuổi có thể nhận hỗ trợ gì?”</span><span>Vui lòng không nhập tên, thông tin liên hệ hoặc thông tin cá nhân khác.</span>",
-    "time": "Đây là thông tin tham khảo. Hãy xác nhận điều kiện hưởng hỗ trợ với cơ quan phụ trách.",
+    "welcome": "<span>Tìm thông tin hỗ trợ cho trẻ nhỏ và gia đình tại quận Dobong.</span><span>Bạn muốn tìm hiểu hỗ trợ nào?</span><span>Vui lòng không nhập tên, thông tin liên hệ hoặc thông tin cá nhân khác.</span>",
     "placeholder": "Ví dụ: Hỗ trợ cho trẻ 24 tháng tuổi",
     "toggle_open": "Câu hỏi gợi ý",
     "toggle_close": "Thu gọn",
@@ -250,18 +245,16 @@ window.CHAT_UI_TEXT = {
     "contact": {
       "label": "Liên hệ · Báo sự cố",
       "subject": "Liên hệ về chatbot phúc lợi",
-      "open": "Mở ứng dụng email",
+      "open": "Liên hệ qua email",
       "copy": "Sao chép địa chỉ",
       "copied": "Đã sao chép địa chỉ email.",
-      "copy_failed": "Chọn hoặc nhấn giữ địa chỉ email ở trên để sao chép.",
-      "note": "Nhấn vào địa chỉ để mở ứng dụng email. Lịch sử trò chuyện không được tự động đính kèm. Vui lòng không gửi thông tin cá nhân nhạy cảm."
+      "copy_failed": "Chọn hoặc nhấn giữ địa chỉ email để sao chép."
     },
     "analytics_notice": "Chúng tôi có thể thu thập thống kê về chủ đề, ngôn ngữ và kết quả sử dụng để cải thiện dịch vụ. Thống kê này không lưu nội dung câu hỏi."
   },
   "zh": {
     "title": "道峰区婴幼儿福利指南",
-    "welcome": "<span>为您查找道峰区婴幼儿及家庭的福利信息。</span><span>例如：“24个月的孩子可以获得哪些支持？”</span><span>请勿输入姓名、联系方式等个人信息。</span>",
-    "time": "本服务提供信息参考，是否符合申请条件请向负责机构确认。",
+    "welcome": "<span>为您查找道峰区婴幼儿及家庭的福利信息。</span><span>您想了解哪些支持项目？</span><span>请勿输入姓名、联系方式等个人信息。</span>",
     "placeholder": "例如：24个月孩子可以获得哪些支持？",
     "toggle_open": "推荐提问",
     "toggle_close": "收起",
@@ -336,11 +329,10 @@ window.CHAT_UI_TEXT = {
     "contact": {
       "label": "联系我们 · 问题反馈",
       "subject": "福利信息聊天机器人咨询",
-      "open": "打开邮件应用",
+      "open": "邮件咨询",
       "copy": "复制地址",
       "copied": "已复制邮箱地址。",
-      "copy_failed": "请选择或长按上方邮箱地址进行复制。",
-      "note": "点击地址可打开邮件应用。聊天记录不会自动附加。请勿发送敏感个人信息。"
+      "copy_failed": "请选择或长按邮箱地址进行复制。"
     },
     "analytics_notice": "我们可能收集主题、语言及使用结果等统计数据以改进服务。这些统计数据不保存您的问题原文。"
   }

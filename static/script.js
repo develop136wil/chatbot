@@ -523,7 +523,8 @@ function addContactActions(container, language = window.currentLang || 'ko') {
     content.className = 'contact-content';
     const email = document.createElement('a');
     email.href = 'mailto:' + CONTACT_EMAIL + '?subject=' + encodeURIComponent(copy.subject);
-    email.textContent = CONTACT_EMAIL;
+    email.className = 'contact-email';
+    email.textContent = copy.open;
     email.setAttribute('aria-label', copy.open + ': ' + CONTACT_EMAIL);
     content.appendChild(email);
     const button = document.createElement('button');
@@ -546,9 +547,10 @@ function addContactActions(container, language = window.currentLang || 'ko') {
         }
     };
     content.appendChild(button);
-    const note = document.createElement('p');
-    note.textContent = copy.note;
-    content.appendChild(note);
+    const address = document.createElement('p');
+    address.className = 'contact-address';
+    address.textContent = CONTACT_EMAIL;
+    content.appendChild(address);
     content.appendChild(status);
     details.appendChild(content);
     container.appendChild(details);
@@ -569,7 +571,10 @@ function setLoadingState(isLoading) {
     isChatLoading = isLoading;
     document.querySelectorAll('.lang-btn, .suggestion-chip, .clarify-btn, .show-more-btn').forEach(button => { button.disabled = isLoading; });
     syncInputAvailability();
-    if (isLoading) userInput.blur();
+    if (isLoading) {
+        userInput.blur();
+        collapseSuggestions();
+    }
 }
 // --- 7. 음성 인식 로직 ---
 let recognition;
@@ -618,6 +623,16 @@ function sendSuggestion(text) {
 
 const toggleBtn = document.getElementById('suggestion-toggle-btn');
 const suggestionContainer = document.querySelector('.suggestion-container');
+
+// Collapse only when a valid request starts; completion never reopens the tray.
+function collapseSuggestions() {
+    if (!suggestionContainer || !toggleBtn) return;
+    const focused = document.activeElement;
+    if (focused && suggestionContainer.contains?.(focused)) toggleBtn.focus();
+    suggestionContainer.classList.add('hidden');
+    toggleBtn.classList.add('active');
+    syncSuggestionOverlay();
+}
 
 function syncSuggestionOverlay() {
     if (!chatBox || !suggestionContainer) return;

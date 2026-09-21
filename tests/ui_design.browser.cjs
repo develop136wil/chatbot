@@ -16,12 +16,17 @@ function contrast(a,b){
  const root=process.cwd(),out=fs.mkdtempSync(path.join(os.tmpdir(),'chatbot-design-qa-'));
  const browser=await chromium.launch({headless:true,executablePath:process.env.CHATBOT_TEST_BROWSER||'C:/Program Files/Google/Chrome/Application/chrome.exe'});
  try{
+ let finishChat;
  const page=await browser.newPage({viewport:{width:390,height:844},reducedMotion:'reduce'});
  page.on('pageerror',e=>errors.push(e.message));
  await page.route('**/*',async route=>{
   const url=new URL(route.request().url());
   // No CDN or user traffic: only local assets and synthetic DOM content.
   if(url.hostname!=='chatbot-ui.test'){await route.fulfill({contentType:'text/javascript',body:''});return;}
+  if(url.pathname==='/chat'){
+   await new Promise(resolve=>{finishChat=resolve;});
+   await route.fulfill({contentType:'application/json',body:JSON.stringify({status:'complete',answer:'로컬 전송 검사'})});return;
+  }
   const rel=url.pathname==='/'?'static/index.html':decodeURIComponent(url.pathname.slice(1));
   const file=path.resolve(root,rel);
   if(!file.startsWith(path.resolve(root,'static')+path.sep)||!fs.existsSync(file)||!fs.statSync(file).isFile()){
@@ -31,6 +36,8 @@ function contrast(a,b){
  });
  await page.goto('http://chatbot-ui.test/');await page.evaluate(()=>document.fonts.ready);
  check('첫 안내 문의 없음',await page.locator('.contact-actions').count()===0);
+ check('첫 안내의 기관 확인 고지 제거',await page.locator('#time-notice').count()===0);
+ check('통계 고지는 말풍선 밖 작은 글씨',await page.locator('#analytics-notice').evaluate(el=>!el.closest('.message')&&getComputedStyle(el).fontSize==='11px'));
  check('브랜드 제목',await page.locator('#header-title').textContent()==='도봉구 영유아 복지정보자료집');
  const fontDisplays=await page.evaluate(()=>[...document.fonts].filter(f=>['SF Pro','ONE Mobile POP'].includes(f.family.replace(/["']/g,''))).map(f=>f.display));
  check('기존 로컬 폰트 swap',fontDisplays.length>=2&&fontDisplays.every(v=>v==='swap'),fontDisplays);
@@ -48,7 +55,31 @@ function contrast(a,b){
    check('첫 화면 reflow '+width+'x'+height+' '+lang,state.page&&state.welcome&&state.header&&state.spans===3&&state.flags===4,state);
   }
  }
- await page.setViewportSize({width:390,height:844});await page.evaluate(()=>changeLanguage('ko'));
+ await page.setViewportSize({width:390,height:844});
+ for(const lang of ['ko','en','vi','zh']){
+  await page.evaluate(l=>changeLanguage(l),lang);
+  if(await page.locator('#suggestion-toggle-btn').getAttribute('aria-expanded')==='false')await page.locator('#suggestion-toggle-btn').click();
+  finishChat=null;
+  if(lang==='ko'){
+   await page.locator('#user-input').fill('보육료 지원');
+   await page.locator('#send-btn').click();
+  }else await page.locator('.suggestion-chip').first().click();
+  await page.waitForFunction(()=>isChatBusy());
+  const collapsed=await page.locator('#suggestion-container').evaluate(el=>el.classList.contains('hidden')&&el.inert&&getComputedStyle(el).opacity==='0');
+  check(lang+' 전송 시작 시 추천 질문 자동 접기',collapsed&&await page.locator('#suggestion-toggle-btn').getAttribute('aria-expanded')==='false');
+  for(let attempt=0;!finishChat&&attempt<200;attempt++)await new Promise(r=>setTimeout(r,10));
+  assert.ok(finishChat,'로컬 요청이 도착해야 합니다');
+  finishChat();
+  await page.waitForFunction(()=>!isChatBusy());
+  check(lang+' 답변 후에도 접힌 상태 유지',await page.locator('#suggestion-container').evaluate(el=>el.inert));
+ }
+ await page.evaluate(()=>{
+  document.querySelectorAll('.message-row').forEach((el,i)=>{if(i>0)el.remove();});
+  changeLanguage('ko');
+ });
+ await page.locator('#suggestion-toggle-btn').click();
+ check('전송 이후 추천 질문 수동 펼치기',await page.locator('#suggestion-toggle-btn').getAttribute('aria-expanded')==='true');
+
  await page.evaluate(async()=>{
   const box=addMessageToBox('assistant','로컬 UI 점검 · 실제 검색 결과 아님');
   await renderChatResponse({status:'complete',answer:'로컬 UI 점검 · 실제 검색 결과 아님',last_result_ids:['fixture-a','fixture-b','fixture-c'],shown_count:2},box,'test',activeRequestSequence);
@@ -85,6 +116,11 @@ function contrast(a,b){
  check('버튼 최소 web 터치 크기',await page.locator('.show-more-btn').evaluate(el=>{const r=el.getBoundingClientRect();return r.width>=24&&r.height>=24;}));
  await page.screenshot({path:path.join(out,'answer-mobile.png')});
  await page.locator('.contact-actions summary').click();
+ check('문의 링크는 기본 파란색이 아닌 기존 본문 톤',await page.locator('.contact-email').evaluate(el=>getComputedStyle(el).color)==='rgb(52, 64, 84)');
+ check('긴 문의 안내 대신 이메일 주소만 표시',await page.locator('.contact-content p').textContent()==='chanyoung@devleop136.com');
+ await page.evaluate(()=>{collapseSuggestions();document.getElementById('chat-box').scrollTop=document.getElementById('chat-box').scrollHeight;});
+ await page.screenshot({path:path.join(out,'contact-mobile.png')});
+ await page.locator('#suggestion-toggle-btn').click();
  const hiddenBefore=await page.evaluate(()=>{
   const box=document.getElementById('chat-box'),target=document.querySelector('.contact-copy');
   box.style.scrollBehavior='auto';box.scrollTop+=target.getBoundingClientRect().top-(innerHeight-90);
