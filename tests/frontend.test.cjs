@@ -237,7 +237,8 @@ test('저장된 언어가 새로고침 후 복원되고 접근성 이름도 바�
     assert.equal(c.window.currentLang,'vi');
     assert.equal(c.document.documentElement.lang,'vi');
     assert.equal(c.document.getElementById('user-input').attributes['aria-label'],c.window.CHAT_UI_TEXT.vi.input_label);
-    assert.equal(c.document.getElementById('scroll-bottom-btn').textContent,c.window.CHAT_UI_TEXT.vi.scroll_bottom);
+    assert.equal(c.document.getElementById('scroll-bottom-btn').textContent,'↓');
+    assert.equal(c.document.getElementById('scroll-bottom-btn').attributes['aria-label'],c.window.CHAT_UI_TEXT.vi.scroll_bottom);
     assert.ok(writes.length);
 });
 test('언어 저장소 접근이 차단되어도 첫 화면이 정상 초기화된다', () => {
@@ -281,7 +282,7 @@ test('라이트 모드만 선언하고 다크 시스템 테마 분기를 제거�
     assert.match(html,/<meta name="color-scheme" content="only light">/);
     assert.ok(html.indexOf('name="color-scheme"') < html.indexOf('rel="stylesheet"'));
     for (const source of [css,html,js]) assert.doesNotMatch(source,/prefers-color-scheme\s*:\s*dark/i);
-    assert.match(html,/style\.css\?v=2026\.09\.21-loading/);
+    assert.match(html,/style\.css\?v=2026\.09\.21-compact/);
 });
 
 test('라이트 고정 후에도 동작 줄이기와 사용자 고대비 설정을 방해하지 않는다', () => {
@@ -956,4 +957,48 @@ test('로딩 팁은 원본 3줄 스켈레톤과 14px 진행 문구·12px 팁을 
     for(const rule of ['font-size: 14px','font-weight: 600','color: #333','margin: 0 0 8px']) assert.ok(action.includes(rule));
     for(const rule of ['font-size: 12px','font-weight: 400','color: #888','margin: 0','line-height: 1.6']) assert.ok(tip.includes(rule));
     assert.doesNotMatch(css,/\.tip-text\s*\{[^}]*margin-top:\s*12px/);
+});
+
+
+test('더 보기는 작은 보조 버튼 크기와 명시적인 button 타입을 유지한다',async()=>{
+    const css=fs.readFileSync('static/style.css','utf8');
+    const rule=css.match(/\.show-more-btn\s*\{([^}]+)\}/)[1];
+    for(const token of ['font-size: 13px','min-height: 32px','padding: 5px 12px','width: auto','max-width: 100%']) assert.ok(rule.includes(token));
+    const c=setup(),box=element();
+    await c.renderChatResponse({status:'complete',answer:'ok',last_result_ids:['1','2','3'],total_found:3},box,'질문',0);
+    assert.equal(box.children[0].type,'button');
+});
+
+test('최신 답변 화살표는 모든 언어의 접근성 이름과 툴팁을 유지한다',()=>{
+    const c=setup();loadHome(c);
+    for(const lang of ['ko','en','vi','zh']){
+        c.changeLanguage(lang);
+        const button=c.document.getElementById('scroll-bottom-btn');
+        assert.equal(button.textContent,'↓');
+        assert.equal(button.attributes['aria-label'],c.window.CHAT_UI_TEXT[lang].scroll_bottom);
+        assert.equal(button.attributes.title,c.window.CHAT_UI_TEXT[lang].scroll_bottom);
+    }
+    const css=fs.readFileSync('static/style.css','utf8');
+    assert.match(css,/#scroll-bottom-btn\s*\{[^}]*position: absolute; left: auto; right: 12px/);
+    assert.match(css,/@media \(max-height: 480px\)[\s\S]*?#scroll-bottom-btn \{ display: none; \}/);
+});
+
+test('카드 소제목은 내용 변경 없이 정확한 독립 레이블에만 적용한다',()=>{
+    const c=setup();
+    for(const label of ['운영 목적:','기본검사(무료):','Purpose:','Basic assessment (free):','Mục đích:','Kiểm tra cơ bản (miễn phí):','服务目的：','基本检查（免费）：']){
+        const classes=[];const item={textContent:label,nextElementSibling:{},classList:{add:x=>classes.push(x)}};
+        const box={querySelectorAll:()=>[item]};
+        c.decorateCardSubheadings(box);c.decorateCardSubheadings(box);
+        assert.ok(classes.every(x=>x==='card-subheading'));
+        assert.equal(classes.length,2);assert.equal(item.textContent,label);
+    }
+});
+
+test('일반 문장·링크·마지막 빈 소제목은 소제목으로 바꾸지 않는다',()=>{
+    const c=setup();let changed=0;
+    const rows=['운영 목적: 서비스를 지원합니다.','지원 안내','https://example.org:','기본검사(유료):']
+      .map(text=>({textContent:text,nextElementSibling:{},classList:{add:()=>changed++}}));
+    rows.push({textContent:'운영 목적:',nextElementSibling:null,classList:{add:()=>changed++}});
+    c.decorateCardSubheadings({querySelectorAll:()=>rows});
+    assert.equal(changed,0);
 });

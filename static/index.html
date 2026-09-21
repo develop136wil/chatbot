@@ -12,12 +12,12 @@
     <link rel="preload" href="/static/ONE Mobile POP.ttf" as="font" type="font/ttf" crossorigin>
     <link rel="preload" href="/static/SF-Pro.ttf" as="font" type="font/ttf" crossorigin>
 
-    <link rel="stylesheet" href="/static/style.css?v=2026.09.21-loading">
+    <link rel="stylesheet" href="/static/style.css?v=2026.09.21-compact">
 
     <script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
-    <script src="/static/ui-text.js?v=2026.09.21-loading"></script>
-    <script src="/static/script.js?v=2026.09.21-loading" defer></script>
+    <script src="/static/ui-text.js?v=2026.09.21-compact"></script>
+    <script src="/static/script.js?v=2026.09.21-compact" defer></script>
 
     <script>
         window.currentLang = 'ko'; 
@@ -90,7 +90,7 @@
             <span class="toggle-text">접기</span> <span class="toggle-icon"></span>
         </button>
 
-        <button id="scroll-bottom-btn">가장 아래로 가기</button>
+        <button type="button" id="scroll-bottom-btn" aria-label="최신 답변으로 이동" title="최신 답변으로 이동">↓</button>
 
         <div class="chat-input-box">
             <textarea aria-label="복지정보 질문" id="user-input" placeholder="예: 24개월 아이가 받을 수 있는 지원" rows="1" autocomplete="off"></textarea>
@@ -128,7 +128,11 @@
             document.getElementById('send-btn')?.setAttribute('aria-label', data.send_label);
             document.getElementById('suggestion-toggle-btn')?.setAttribute('aria-label', data.toggle_open);
             const bottom = document.getElementById('scroll-bottom-btn');
-            if (bottom) bottom.textContent = data.scroll_bottom;
+            if (bottom) {
+                bottom.textContent = '↓';
+                bottom.setAttribute('aria-label', data.scroll_bottom);
+                bottom.setAttribute('title', data.scroll_bottom);
+            }
             const selector = document.querySelector('.lang-floating-container');
             if (selector) selector.setAttribute('aria-label', data.language_label);
             const note = document.getElementById('language-note');

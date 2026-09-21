@@ -266,6 +266,7 @@ async function renderChatResponse(data, element, question, sequence) {
         const labels = Object.fromEntries(Object.entries(UI_TEXT).map(([lang, copy]) => [lang, copy.more]));
         const more = document.createElement('button');
         more.className = 'show-more-btn';
+        more.type = 'button';
         more.textContent = labels[window.currentLang || 'ko'];
         more.onclick = () => {
             if (!canStartChatRequest()) return;
@@ -761,7 +762,18 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 });
 
+function decorateCardSubheadings(container) {
+    // Display-only: applies to cached answers too, without rewriting source content.
+    const heading = /^(?:운영\s*목적|기본\s*검사\s*\(무료\)|Purpose|Basic\s+(?:check|assessment)\s*\(free\)|Mục đích|Kiểm tra cơ bản\s*\(miễn phí\)|服务目的|基本检查\s*[（(]免费[）)])\s*[:：]\s*$/iu;
+    container.querySelectorAll('.card-body li').forEach(item => {
+        if (item.nextElementSibling && heading.test(item.textContent.trim())) {
+            item.classList.add('card-subheading');
+        }
+    });
+}
+
 function translateCardButtons(container) {
+    decorateCardSubheadings(container);
     const copy = getRequestMessages();
     container.querySelectorAll('.detail-link').forEach(el => { el.innerText = copy.detail; });
     container.querySelectorAll('.card-share-btn').forEach(el => { el.innerText = copy.share; });

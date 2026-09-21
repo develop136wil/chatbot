@@ -1416,15 +1416,15 @@ body {
 }
 
 .show-more-btn {
-    margin-top: 12px;
-    padding: 10px 16px;
-    border: 1px solid #8A7561;
-    border-radius: 18px;
-    color: #223047;
-    background: #FFF4CB;
-    font: inherit;
+    display: inline-flex; align-items: center; justify-content: center;
+    margin-top: 8px; padding: 5px 12px; min-height: 32px;
+    max-width: 100%; width: auto;
+    border: 1px solid #E2D6AE; border-radius: 16px;
+    color: #594B2B; background: #FFF9E7;
+    font-family: inherit; font-size: 13px; font-weight: 500; line-height: 1.4;
     cursor: pointer;
 }
+.show-more-btn:hover:not(:disabled) { background: #FFF1C2; }
 .show-more-btn:disabled { opacity: 0.55; cursor: wait; }
 .show-more-btn:focus-visible { outline: 3px solid #5684CC; outline-offset: 3px; }
 
@@ -1436,7 +1436,26 @@ body {
 }
 .suggestion-container { bottom: var(--chat-footer-height, 76px); }
 #suggestion-toggle-btn { bottom: calc(var(--chat-footer-height, 76px) + 6px); }
-#scroll-bottom-btn { bottom: calc(var(--chat-bottom-padding, 162px) + 8px); }
+/* The 60px rail is already reserved outside the card text. */
+#scroll-bottom-btn {
+    position: absolute; left: auto; right: 12px; margin-left: 0;
+    bottom: calc(var(--chat-bottom-padding, 162px) + 8px);
+    width: 36px; min-width: 36px; height: 36px; padding: 0;
+    border-radius: 50%; font-size: 20px; font-weight: 400;
+    transform: translateY(6px);
+}
+#scroll-bottom-btn.show { transform: translateY(0); }
+#scroll-bottom-btn:hover { transform: translateY(-2px); }
+#scroll-bottom-btn:active { transform: scale(.95); }
+@media (max-height: 480px) {
+    /* Avoid overlapping the flag rail on short/landscape screens. */
+    #scroll-bottom-btn { display: none; }
+}
+.card-body li.card-subheading {
+    list-style: none; margin-left: 0 !important;
+    margin-top: 8px; margin-bottom: 4px !important;
+    font-weight: 600; color: #344054;
+}
 .message-bubble, .result-card, .card-body { min-width: 0; overflow-wrap: anywhere; }
 .card-footer { flex-wrap: wrap; }
 .card-footer .detail-link, .card-footer .card-share-btn {
