@@ -269,6 +269,43 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(result.status_code, 410)
         self.assertNotIn("success", result.text)
 
+class AnalyticsRouteTests(unittest.TestCase):
+    setUp = RouteTests.setUp
+    def test_cache_hit_recorded_without_ai_or_question_text(self):
+        import analytics
+        self.read.return_value=cached()
+        calls=[]
+        async def rpc(name,payload,**kwargs):
+            calls.append((name,payload))
+            return payload["p_attempt"] if name.endswith("_begin") else True
+        with patch.dict(os.environ,{"ENABLE_CHAT_ANALYTICS":"true"}), patch.object(analytics,"rpc",AsyncMock(side_effect=rpc)):
+            result=self.client.post("/chat",json={"question":"PRIVATE_STAT_QUESTION","analytics_id":"12345678-1234-1234-1234-123456789abc"}).json()
+        self.assertEqual(result["status"],"complete")
+        self.assertIn("analytics_token",result)
+        self.assertNotIn("PRIVATE_STAT_QUESTION",str(calls))
+        self.assertTrue(calls[-1][1]["p_cache_hit"])
+        self.assertEqual(calls[-1][1]["p_outcome"],"answered")
+        self.intent.assert_not_awaited()
+
+    def test_collection_failure_does_not_block_cached_answer(self):
+        import analytics
+        self.read.return_value=cached()
+        with patch.dict(os.environ,{"ENABLE_CHAT_ANALYTICS":"true"}), patch.object(analytics,"rpc",AsyncMock(return_value=None)):
+            result=self.client.post("/chat",json={"question":"지원"}).json()
+        self.assertEqual(result["answer"],"저장된 답변")
+        self.assertNotIn("analytics_token",result)
+
+    def test_exact_more_is_not_a_question_in_statistics(self):
+        import analytics
+        calls=[]
+        async def rpc(name,payload,**kwargs):
+            calls.append((name,payload))
+            return payload["p_attempt"] if name.endswith("_begin") else True
+        with patch.dict(os.environ,{"ENABLE_CHAT_ANALYTICS":"true"}), patch.object(analytics,"rpc",AsyncMock(side_effect=rpc)):
+            result=self.client.post("/chat",json={"question":"더 보여주세요"}).json()
+        self.assertEqual(result["status"],"complete")
+        self.assertEqual(calls[-1][1]["p_kind"],"more")
+
 class WorkerContractTests(unittest.IsolatedAsyncioTestCase):
     async def test_worker_keeps_tuple_and_existing_calls_with_trace(self):
         from observability import timed_async, current_request_id

@@ -47,6 +47,36 @@ const SHOW_MORE_KEYWORDS = new Set([
     "更多", "继续", "下", "下一个", "还有吗"
 ]);
 
+// Statistics use an opaque per-request ID, never the question text or destination URL.
+const analyticsMessages = new WeakMap();
+let suggestedAnalyticsText = null;
+function analyticsSource() {
+    try {
+        const source = new URL(window.location.href).searchParams.get('utm_source');
+        return source === null ? 'direct' : ['website','qr','partner'].includes(source) ? source : 'unknown';
+    } catch (_) { return 'unknown'; }
+}
+function attachAnalyticsMetadata(body) {
+    if (!body.analytics_id && window.crypto?.randomUUID) body.analytics_id = window.crypto.randomUUID();
+    if (!body.entry_source) body.entry_source = analyticsSource();
+    if (!body.input_method) {
+        body.input_method = currentQuestion === suggestedAnalyticsText ? 'suggestion' : 'typed';
+        suggestedAnalyticsText = null;
+    }
+}
+async function trackSourceClick(message) {
+    const state = analyticsMessages.get(message);
+    if (!state || state.busy || state.sent) return;
+    state.busy = true;
+    try {
+        const response = await fetch('/analytics/source-click', {method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({token:state.token}), keepalive:true});
+        state.sent = response.ok;
+    } catch (_) { /* Navigation is never blocked by statistics. */ }
+    finally { state.busy = false; }
+}
+
 const REQUEST_MESSAGES = UI_TEXT;
 
 function getRequestMessages() {
@@ -134,6 +164,8 @@ chatBox.addEventListener('click', async (event) => {
         const buttonText = event.target.innerText;
         handleButtonClick(buttonText);
     }
+    const detail = event.target.closest?.('.detail-link');
+    if (detail) void trackSourceClick(detail.closest('.message'));
     const shareButton = event.target.closest?.('.card-share-btn');
     if (shareButton) await shareCard(shareButton);
 });
@@ -218,6 +250,7 @@ async function handleButtonClick(buttonText) {
     const serverQuestion = buildServerQuestion(newQuestion);
 
     const requestBody = {
+        input_method: "clarification",
         question: serverQuestion,
         language: window.currentLang || 'ko',
         action: "ask",
@@ -246,6 +279,7 @@ async function renderChatResponse(data, element, question, sequence) {
     await typeWriterEffect(element, formatAssistantAnswer(data.answer));
     if (sequence !== activeRequestSequence) return;
     translateCardButtons(element);
+    if (data.analytics_token) analyticsMessages.set(element, {token:data.analytics_token, busy:false, sent:false});
     if (data.action === 'reset') {
         chatHistory = [];
         pendingContext = null;
@@ -298,6 +332,7 @@ function startLoadingTips(element, language) {
 }
 
 async function fetchChatResponse(requestBody, resumeJobId = null) {
+    attachAnalyticsMetadata(requestBody);
     const lang = window.currentLang || 'ko';
     const messages = getRequestMessages();
     const sequence = ++activeRequestSequence;
@@ -560,6 +595,7 @@ window.visualViewport?.addEventListener('resize', () => {
 
 function sendSuggestion(text) {
     if (!canStartChatRequest()) return;
+    suggestedAnalyticsText = text;
     const userInput = document.getElementById('user-input');
     userInput.value = text;
     toggleInputButtons();

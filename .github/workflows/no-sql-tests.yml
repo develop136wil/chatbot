@@ -1,4 +1,4 @@
-name: SQL-free Offline Regression
+name: Chatbot Regression
 on:
   push:
     branches: [main, codex/no-sql-ui-observability-20260920]
@@ -47,3 +47,31 @@ jobs:
         env:
           CHATBOT_REDIS_INTEGRATION: '1'
           CHATBOT_TEST_REDIS_PORT: ${{ job.services.redis.ports[6379] }}
+
+
+  analytics-sql:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: chatbot_analytics_test
+          POSTGRES_PASSWORD: test-only
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - run: python -m pip install "psycopg[binary]"
+      - run: python -m unittest discover -s tests -p 'analytics_sql_integration.py' -v
+        env:
+          CHATBOT_ANALYTICS_SQL_TEST: '1'
+          CHATBOT_TEST_PG_PORT: ${{ job.services.postgres.ports[5432] }}

@@ -266,7 +266,7 @@ test('라이트 모드만 선언하고 다크 시스템 테마 분기를 제거�
     assert.match(html,/<meta name="color-scheme" content="only light">/);
     assert.ok(html.indexOf('name="color-scheme"') < html.indexOf('rel="stylesheet"'));
     for (const source of [css,html,js]) assert.doesNotMatch(source,/prefers-color-scheme\s*:\s*dark/i);
-    assert.match(html,/style\.css\?v=2026\.09\.21-contact/);
+    assert.match(html,/style\.css\?v=2026\.09\.21-analytics/);
 });
 
 test('라이트 고정 후에도 동작 줄이기와 사용자 고대비 설정을 방해하지 않는다', () => {
@@ -994,4 +994,36 @@ test('첫 화면의 문의 메뉴도 언어 선택에 맞춰 갱신한다',()=>{
 test('새 프런트엔드는 질문·답변을 피드백 API로 전송하는 코드를 포함하지 않는다',()=>{
     const source=fs.readFileSync('static/script.js','utf8');
     assert.doesNotMatch(source,/submitFeedback|addFeedbackButtons|API_URL_FEEDBACK|fetch\(['"]\/feedback/);
+});
+
+test('통계용 ID는 새 질문마다 생성하고 동일 요청 재전송에서는 보존한다',()=>{
+    const c=setup();let next=0;c.window.crypto={randomUUID:()=> 'opaque-'+(++next)};
+    const body={question:'PRIVATE_QUESTION'};
+    c.attachAnalyticsMetadata(body);c.attachAnalyticsMetadata(body);
+    assert.equal(body.analytics_id,'opaque-1');
+    const other={question:'PRIVATE_QUESTION'};c.attachAnalyticsMetadata(other);
+    assert.equal(other.analytics_id,'opaque-2');
+});
+test('유입 경로는 허용 목록만 전송하고 전체 URL은 전송하지 않는다',()=>{
+    const c=setup();c.URL=URL;
+    for (const [url,expected] of [['https://test.invalid/?utm_source=qr','qr'],
+        ['https://test.invalid/?utm_source=PRIVATE_URL','unknown'],['https://test.invalid/','direct']]) {
+        c.window.location.href=url;const body={};c.attachAnalyticsMetadata(body);
+        assert.equal(body.entry_source,expected);
+        assert.doesNotMatch(JSON.stringify(body),/PRIVATE_URL|https:/);
+    }
+});
+test('원문 클릭은 서명 토큰만 보내고 반복 클릭을 중복 전송하지 않는다',async()=>{
+    const c=setup();c.box=element();const calls=[];
+    vm.runInContext("analyticsMessages.set(box,{token:'signed-token',busy:false,sent:false})",c);
+    c.fetch=async(url,options)=>{calls.push({url,body:JSON.parse(options.body)});return {ok:true};};
+    await c.trackSourceClick(c.box);await c.trackSourceClick(c.box);
+    assert.equal(calls.length,1);assert.deepEqual(calls[0],{url:'/analytics/source-click',body:{token:'signed-token'}});
+});
+test('원문 클릭 통계 오류는 화면 동작을 실패시키지 않는다',async()=>{
+    const c=setup();c.box=element();let count=0;
+    vm.runInContext("analyticsMessages.set(box,{token:'signed-token',busy:false,sent:false})",c);
+    c.fetch=async()=>{count++;throw new Error('offline');};
+    await c.trackSourceClick(c.box);await c.trackSourceClick(c.box);
+    assert.equal(count,2);
 });

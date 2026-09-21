@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>이용 통계 · 도봉구 영유아 복지정보자료집</title>
+<link rel="icon" href="/static/header-icon.png"><link rel="stylesheet" href="/static/analytics.css?v=1">
+<script src="/static/analytics-dashboard.js?v=1" defer></script></head>
+<body><main>
+<header><div><p class="eyebrow">DOBONG · SERVICE INSIGHTS</p><h1>복지정보, 얼마나 연결됐을까요?</h1>
+<p class="subtitle">도봉구 영유아 복지정보자료집 · 관리자 이용 통계</p></div>
+<a class="back" href="/">챗봇으로 돌아가기 ↗</a></header>
+<section id="login-panel" class="panel login">
+<h2>관리자 확인</h2><p>Vercel에 등록한 ADMIN_SECRET_KEY를 입력하세요. Supabase 키가 아닙니다.</p>
+<form id="login-form"><label for="secret">관리자 키</label><input id="secret" type="password" autocomplete="off" required>
+<button type="submit">통계 열기</button></form>
+<p class="muted">키는 이 탭의 메모리에서만 사용합니다. URL·브라우저 저장소에 저장하지 않습니다.</p>
+</section>
+<p id="status" role="status" aria-live="polite"></p>
+<div id="report" hidden>
+<section class="toolbar panel" aria-label="조회 기간">
+<label>시작일<input id="start" type="date" required></label><span>—</span>
+<label>종료일<input id="end" type="date" required></label>
+<button id="refresh">조회</button><button id="csv" class="secondary">CSV 내려받기</button>
+<button id="print" class="secondary">보고서 인쇄</button><button id="logout" class="quiet">잠금</button>
+</section>
+<div class="report-heading"><h2 id="period-title">이용 현황</h2><span id="updated" class="muted"></span></div>
+<p id="health" class="health"></p>
+<section class="kpis" aria-label="주요 지표" id="kpis"></section>
+<div class="charts">
+<section class="panel wide"><div class="panel-head"><div><p class="eyebrow">01 · USAGE</p><h2>질문이 이어진 흐름</h2></div><span class="muted">한국 시간 기준 · 일별 질문 수 · 기록 없는 날은 선을 연결하지 않음</span></div>
+<div id="trend" class="chart"></div></section>
+<section class="panel"><p class="eyebrow">02 · TOPICS</p><h2>어떤 분야를 찾았나요?</h2>
+<p class="muted">안내 자료·기존 의도 분석을 활용한 추정 분류</p><div id="categories" class="chart"></div></section>
+<section class="panel"><p class="eyebrow">03 · LANGUAGES</p><h2>어떤 언어로 이용했나요?</h2>
+<p class="muted">선택 언어이며, 이용자의 국적이 아닙니다.</p><div id="languages" class="chart"></div></section>
+<section class="panel"><p class="eyebrow">04 · OUTCOMES</p><h2>안내 결과를 확인해요</h2>
+<p class="muted">자료를 찾은 것과 문제를 해결한 것은 다릅니다.</p><div id="outcomes" class="chart"></div></section>
+<section class="panel"><p class="eyebrow">05 · RESPONSE TIME</p><h2>답변을 기다린 시간</h2>
+<p class="muted">성공 응답의 서버 처리시간 · 화면 표시까지의 시간은 아님</p><div class="legend"><span>● 캐시 답변</span><span>● 새 검색</span></div><div id="latency" class="chart"></div></section>
+<section class="panel"><p class="eyebrow">06 · SOURCES</p><h2>어디에서 들어왔나요?</h2>
+<p class="muted">미리 지정한 유입 링크 기준 · 미상 포함</p><div id="sources" class="chart"></div></section>
+<section class="panel"><p class="eyebrow">07 · INPUT</p><h2>어떻게 질문했나요?</h2>
+<div id="inputs" class="chart"></div></section>
+</div>
+<section class="panel definitions"><h2>수치를 읽기 전에</h2>
+<ul><li>새 질문은 같은 내용을 다시 입력해도 1건입니다. 같은 요청의 재전송은 중복 집계하지 않습니다.</li>
+<li>더 보기·인사·초기화 등은 질문 수에서 제외합니다. 유효성 검증 실패·HTTP 요청 제한·서버에 도착하지 않은 요청은 수집 범위 밖입니다.</li>
+<li>원문 연결률 = 원문을 누른 답변 수 ÷ 자료를 찾은 질문 수. 신청 완료·지원 수혜·정확도·만족도가 아닙니다.</li>
+<li>기록 없는 날짜는 0건으로 단정하지 않고 결측으로 표시합니다. 이용이 없었는지 수집이 중단됐는지는 별도 확인이 필요합니다.</li>
+<li>접수 후 미완료는 작업 실패 또는 통계 완료 기록 실패일 수 있습니다. 100% 수집·성공으로 해석하지 마세요.</li>
+<li>통계 저장 실패 수는 현재 서버 인스턴스의 참고값이며 전체 누락률이 아닙니다. 프런트엔드 클릭은 브라우저 종료·통신 실패로 누락될 수 있습니다.</li>
+<li>임시 세션은 30분 비활동 후 새로 시작합니다. 일별 세션 합계는 실제 사람 수나 기간 전체의 고유 세션 수가 아닙니다.</li>
+<li>통계 원문 기록은 90일, 일별 집계는 730일 보관합니다. 상세 기간 밖의 재분석은 제한됩니다.</li></ul>
+<details><summary>일별 집계표 확인</summary><div id="daily-table" class="table-wrap"></div></details>
+</section>
+</div><footer>개인별 질문 원문을 표시하지 않는 집계 보고서 · 이메일 문의와 통계는 별도로 관리됩니다.</footer>
+</main></body></html>

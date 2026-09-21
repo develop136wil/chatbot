@@ -83,7 +83,8 @@ window.CHAT_UI_TEXT = {
       "copied": "이메일 주소를 복사했어요.",
       "copy_failed": "위 이메일 주소를 길게 누르거나 선택해 복사해 주세요.",
       "note": "주소를 누르면 메일 앱이 열려요. 대화 내용은 자동 첨부되지 않아요. 주민등록번호 등 민감한 정보는 보내지 마세요."
-    }
+    },
+    "analytics_notice": "서비스 개선을 위해 분야·언어·이용 결과 등의 통계를 수집할 수 있어요. 통계에는 질문 원문을 저장하지 않아요."
   },
   "en": {
     "title": "Dobong Child Welfare Guide",
@@ -168,7 +169,8 @@ window.CHAT_UI_TEXT = {
       "copied": "Email address copied.",
       "copy_failed": "Select or long-press the email address above to copy it.",
       "note": "Tap the address to open your email app. Chat history is not attached automatically. Please do not send sensitive personal information."
-    }
+    },
+    "analytics_notice": "We may collect topic, language and usage outcomes to improve this service. These statistics do not store your question text."
   },
   "vi": {
     "title": "Cẩm nang phúc lợi trẻ em Dobong",
@@ -253,7 +255,8 @@ window.CHAT_UI_TEXT = {
       "copied": "Đã sao chép địa chỉ email.",
       "copy_failed": "Chọn hoặc nhấn giữ địa chỉ email ở trên để sao chép.",
       "note": "Nhấn vào địa chỉ để mở ứng dụng email. Lịch sử trò chuyện không được tự động đính kèm. Vui lòng không gửi thông tin cá nhân nhạy cảm."
-    }
+    },
+    "analytics_notice": "Chúng tôi có thể thu thập thống kê về chủ đề, ngôn ngữ và kết quả sử dụng để cải thiện dịch vụ. Thống kê này không lưu nội dung câu hỏi."
   },
   "zh": {
     "title": "道峰区婴幼儿福利指南",
@@ -338,6 +341,7 @@ window.CHAT_UI_TEXT = {
       "copied": "已复制邮箱地址。",
       "copy_failed": "请选择或长按上方邮箱地址进行复制。",
       "note": "点击地址可打开邮件应用。聊天记录不会自动附加。请勿发送敏感个人信息。"
-    }
+    },
+    "analytics_notice": "我们可能收集主题、语言及使用结果等统计数据以改进服务。这些统计数据不保存您的问题原文。"
   }
 };

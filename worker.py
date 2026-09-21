@@ -1,5 +1,6 @@
 from observability import timed_async, traced_job
 import os
+import analytics
 import json
 import time
 import traceback
@@ -135,6 +136,8 @@ async def process_job_async(job_data: Dict[str, Any]) -> Tuple[str, List[str], i
         # [Step 5] 최종 결과 조립
         display_count = min(len(reranked_results), 2)
         display_results = reranked_results[:display_count]
+        if job_data.get("_analytics"):
+            job_data["_analytics"]["category"] = analytics.category_from_results(display_results)
         # 화면 현지화가 원본 카테고리명을 바꾸기 전에 캐시 무효화 범위를 고정합니다.
         cache_scopes = build_response_cache_scopes(reranked_results, ai_category)
         
@@ -222,6 +225,8 @@ async def handle_job(redis_client, queue_item, semaphore):
             "total_found": total_found 
         }
         
+        if job_data.get("_analytics") and total_found:
+            final_result["analytics_token"] = analytics.click_token(job_data["_analytics"]["id"])
         # 결과 저장
         await redis_client.setex(
             f"{JOB_RESULT_KEY_PREFIX}{job_id}",
@@ -229,6 +234,7 @@ async def handle_job(redis_client, queue_item, semaphore):
             json.dumps(final_result, ensure_ascii=False).encode("utf-8"),
         )
         
+        await analytics.finish(job_data.get("_analytics"), final_result)
         logger.info("작업 결과 저장 완료 (job_id=%s)", job_id)
         
     except Exception as e:
@@ -242,6 +248,7 @@ async def handle_job(redis_client, queue_item, semaphore):
                          else "search_unavailable" if isinstance(e, SearchUnavailable) else "answer_unavailable"),
                 "retryable": not isinstance(e, FreeTierQuotaExceeded)
             }
+            await analytics.finish(job_data.get("_analytics"), error_result)
             try:
                 await redis_client.setex(
                     f"{JOB_RESULT_KEY_PREFIX}{job_id}",

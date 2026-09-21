@@ -2,6 +2,7 @@
 import os
 import json
 import uuid
+import analytics
 import logging
 import asyncio
 import time
@@ -171,6 +172,9 @@ SHOW_MORE_EXACT_TERMS = {
 
 # --- 요청 모델 ---
 class ChatRequest(BaseModel):
+    analytics_id: Optional[uuid.UUID] = None
+    entry_source: Literal["direct", "website", "qr", "partner", "unknown"] = "unknown"
+    input_method: Literal["typed", "suggestion", "clarification", "unknown"] = "unknown"
     action: Literal["ask", "more"] = "ask"
     question: str = Field(min_length=1, max_length=MAX_QUESTION_LENGTH)
     language: str = Field(default="ko", pattern="^(ko|en|vi|zh)$")
@@ -199,7 +203,7 @@ def reserve_free_tier_request(session: dict) -> None:
 
 def remember_last_question(session: dict, question: str) -> None:
     """Clear conversation state without erasing the reserved daily allowance."""
-    usage = {key: session[key] for key in ("free_tier_usage_date", "free_tier_usage_count")
+    usage = {key: session[key] for key in ("free_tier_usage_date", "free_tier_usage_count", "analytics_session", "analytics_seen")
              if key in session}
     session.clear()
     session.update(usage)
@@ -449,10 +453,35 @@ def clear_all_caches(request: Request, secret: Optional[str] = Query(None)):
 
 # [main.py] chat_with_bot 함수 전체 교체
 
+analytics.install(app, check_rate_limit)
+
 @app.post("/chat")
 async def chat_with_bot(chat_request: ChatRequest, request: Request):
-    # 1. 도배 방지 (비동기 호출)
+    # Invalid schemas and rate-limited HTTP requests are excluded from usage statistics.
     await check_rate_limit(request, limit=10, window=60, scope="chat")
+    if not chat_request.question.strip():
+        raise HTTPException(422, detail="질문을 입력해 주세요.")
+    state = await analytics.begin(chat_request, request)
+    try:
+        response = await _chat_with_bot(chat_request, request)
+    except Exception:
+        await analytics.finish(state, {"status": "error"})
+        raise
+    if state:
+        # Old cached responses may not have category metadata; classify displayed badges only.
+        if state["category"] == "미분류":
+            import html as html_module
+            labels = re.findall(r'class="card-header-badge"[^>]*>([^<]*)<', response.get("answer", ""))
+            mapping = {label: name for ui in LOCALIZED_UI.values() for name, label in ui.get("cats", {}).items()}
+            categories = {analytics.category(mapping.get(html_module.unescape(x), html_module.unescape(x))) for x in labels}
+            categories.discard("미분류")
+            state["category"] = next(iter(categories)) if len(categories)==1 else "복합" if categories else "미분류"
+        click = await analytics.finish(state, response)
+        if click:
+            response = dict(response, analytics_token=click)
+    return response
+
+async def _chat_with_bot(chat_request: ChatRequest, request: Request):
 
     session = request.session
     question = chat_request.question.strip()
@@ -479,14 +508,20 @@ async def chat_with_bot(chat_request: ChatRequest, request: Request):
     # 2. 정확한 '더 보기'는 즉시 처리합니다. (LLM 호출·대기 불필요)
     if chat_request.action == "more" or input_no_spaces in SHOW_MORE_EXACT_TERMS:
         logger.info("더 보기 빠른 경로 처리")
+        analytics.note(request, kind="more")
         return await build_show_more_response(chat_request, language)
 
     # 정확 일치 캐시는 의도 분석·임베딩·LLM 호출보다 먼저 확인합니다.
     if is_response_cache_read_eligible(chat_request, question, language):
+        analytics.note(request, cache_eligible=True)
         cached_response = await get_response_cache_async(question, language)
         if cached_response:
             logger.info("♻️ [Response Cache] Hit")
+            analytics.note(request, cache_hit=True)
             cached_response = dict(cached_response)
+            if any(cached_response.get("answer") == ui_text.get(key) for key in
+                   ("reset","exit","out_of_scope","small_talk","thanks","safety_block")):
+                analytics.note(request, kind="other")
             if cached_response.get("answer") == ui_text["reset"]:
                 cached_response["action"] = "reset"
             cached_response["job_id"] = str(uuid.uuid4())
@@ -517,6 +552,10 @@ async def chat_with_bot(chat_request: ChatRequest, request: Request):
         logger.warning("[Intent Guard] ignored AI show_more for new question (request_id=%s)",
                        current_request_id())
         extracted_info = dict(extracted_info, intent=None)
+
+    if extracted_info.get("intent") in {"reset","exit","out_of_scope","small_talk","safety_block"}:
+        analytics.note(request, kind="other")
+    analytics.note(request, category=analytics.category(extracted_info.get("category")))
 
     # 4. 의도별 분기 (Small talk 등)
     if extracted_info.get("intent") == "safety_block":
@@ -573,6 +612,7 @@ async def chat_with_bot(chat_request: ChatRequest, request: Request):
     job_data = {
         "job_id": job_id,
         "trace_id": current_request_id(),
+        "_analytics": getattr(request.state, "analytics", None),
         "question": question, 
         "language": language,
         "chat_history": chat_history,
