@@ -266,7 +266,7 @@ test('라이트 모드만 선언하고 다크 시스템 테마 분기를 제거�
     assert.match(html,/<meta name="color-scheme" content="only light">/);
     assert.ok(html.indexOf('name="color-scheme"') < html.indexOf('rel="stylesheet"'));
     for (const source of [css,html,js]) assert.doesNotMatch(source,/prefers-color-scheme\s*:\s*dark/i);
-    assert.match(html,/style\.css\?v=2026\.09\.21-welcome-support/);
+    assert.match(html,/style\.css\?v=2026\.09\.21-welcome-final/);
 });
 
 test('라이트 고정 후에도 동작 줄이기와 사용자 고대비 설정을 방해하지 않는다', () => {
@@ -796,7 +796,10 @@ test('상단 국기 영역은 텍스트 레일과 구분되고 시작 화면은 
     assert.match(css,/\.chat-box\s*\{[^}]*padding-right: 60px/);
     assert.match(css,/#splash-screen\s*\{[^}]*pointer-events: none/);
     const c=setup();
-    for(const value of Object.values(c.window.CHAT_UI_TEXT)) assert.equal((value.welcome.match(/<span>/g)||[]).length,3);
+    for(const value of Object.values(c.window.CHAT_UI_TEXT)) {
+        assert.ok(value.welcome_title && value.welcome && value.privacy_notice && value.analytics_label);
+        assert.doesNotMatch(value.welcome,/<[^>]+>/);
+    }
 });
 
 
@@ -942,9 +945,9 @@ for (const lang of ['ko','en','vi','zh']) {
         assert.equal(mail.searchParams.get('subject'),c.window.CHAT_UI_TEXT[lang].contact.subject);
         assert.doesNotMatch(mail.href,/PRIVATE/);
         assert.equal(content.children[1].type,'button');
-        assert.equal(content.children[0].textContent,c.window.CHAT_UI_TEXT[lang].contact.open);
-        assert.equal(content.children[2].className,'contact-address');
-        assert.equal(content.children.length,4);
+        assert.equal(content.children[0].textContent,'chanyoung@devleop136.com');
+        assert.equal(content.children[2].className,'contact-status');
+        assert.equal(content.children.length,3);
     });
     test(lang+' 주소 복사는 실제 성공 확인 후 표시하고 네트워크 요청을 안 한다',async()=>{
         const c=setup(),box=element();let copied='',requests=0;
@@ -955,7 +958,7 @@ for (const lang of ['ko','en','vi','zh']) {
         await button.onclick();
         assert.equal(copied,'chanyoung@devleop136.com');
         assert.equal(requests,0);
-        assert.equal(content.children[3].textContent,c.window.CHAT_UI_TEXT[lang].contact.copied);
+        assert.equal(content.children[2].textContent,c.window.CHAT_UI_TEXT[lang].contact.copied);
         assert.equal(button.disabled,false);
     });
     test(lang+' 복사 권한이 없으면 수동 복사 안내와 주소를 유지한다',async()=>{
@@ -964,8 +967,8 @@ for (const lang of ['ko','en','vi','zh']) {
             c.addContactActions(box,lang);
             const content=box.children[0].children[1];
             await content.children[1].onclick();
-            assert.equal(content.children[3].textContent,c.window.CHAT_UI_TEXT[lang].contact.copy_failed);
-            assert.equal(content.children[2].textContent,'chanyoung@devleop136.com');
+            assert.equal(content.children[2].textContent,c.window.CHAT_UI_TEXT[lang].contact.copy_failed);
+            assert.equal(content.children[0].textContent,'chanyoung@devleop136.com');
             assert.equal(content.children[1].disabled,false);
         }
     });
@@ -992,16 +995,19 @@ test('첫 안내에는 문의 메뉴 없이 다국어 안내와 통계 고지를
     const c=setup();loadHome(c);
     for (const lang of ['en','vi','zh','ko']) {
         c.changeLanguage(lang);
-        assert.equal(c.document.getElementById('welcome-msg').innerHTML,c.window.CHAT_UI_TEXT[lang].welcome);
+        assert.equal(c.document.getElementById('welcome-msg').textContent,c.window.CHAT_UI_TEXT[lang].welcome);
         assert.equal(c.document.getElementById('analytics-notice').textContent,c.window.CHAT_UI_TEXT[lang].analytics_notice);
+        assert.equal(c.document.getElementById('welcome-title').textContent,c.window.CHAT_UI_TEXT[lang].welcome_title);
+        assert.equal(c.document.getElementById('privacy-notice').textContent,c.window.CHAT_UI_TEXT[lang].privacy_notice);
+        assert.equal(c.document.getElementById('analytics-label').textContent,c.window.CHAT_UI_TEXT[lang].analytics_label);
     }
 });
-test('결과 더 보기는 읽기 쉬운 회색 버튼이며 문의 앞에만 옅은 구분선을 둔다',()=>{
+test('결과 더 보기는 회색 버튼이며 문의는 답변 바깥 보조 메뉴이다',()=>{
     const css=fs.readFileSync('static/style.css','utf8');
     const more=css.match(/\.show-more-btn\s*\{([^}]+)\}/)[1];
     assert.ok(more.includes('color: #344054; background: #EAECF0'));
-    assert.match(css,/\.contact-actions\s*\{[^}]*border-top: 1px solid #DDE2E8/);
-    assert.match(css,/#welcome-msg > span \+ span\s*\{ margin-top: 6px/);
+    assert.match(css,/\.contact-actions\s*\{[^}]*grid-column: 2/);
+    assert.match(css,/#welcome-title\s*\{[^}]*font-size: 22px/);
 });
 test('새 프런트엔드는 질문·답변을 피드백 API로 전송하는 코드를 포함하지 않는다',()=>{
     const source=fs.readFileSync('static/script.js','utf8');
@@ -1119,4 +1125,74 @@ test('빈 질문과 길이 제한 초과는 추천 질문을 자동으로 접지
     c.document.getElementById('user-input').value='x'.repeat(50000);
     await c.handleFormSubmit();
     assert.equal(collapsed,0);
+});
+
+
+test('완료/오류 문의는 답변 라이브 영역 밖 같은 행에 한 번만 붙인다',async()=>{
+    for(const response of [{status:'complete',answer:'답변'},{status:'error',message:'오류'}]) {
+        const c=setup(),box=element(),row=element();c.box=box;c.response=response;
+        box.closest=selector=>selector==='.message-row.assistant'?row:null;
+        row.querySelector=()=>row.children.find(el=>el.className==='contact-actions');
+        await vm.runInContext("renderChatResponse(response,box,'질문',0)",c);
+        c.addContactActions(box);
+        assert.equal(box.children.length,0);
+        assert.equal(row.children.length,1);
+        assert.equal(row.children[0].className,'contact-actions');
+    }
+});
+test('시작 안내에는 말풍선이 없고 입력창의 개인정보 안내를 접근성 설명으로 연결한다',()=>{
+    const html=fs.readFileSync('static/index.html','utf8');
+    const section=html.match(/<section id="welcome-panel"[\s\S]*?<\/section>/)[0];
+    assert.doesNotMatch(section,/message-row|class="message /);
+    assert.match(section,/class="analytics-disclosure"/);
+    assert.doesNotMatch(section,/class="analytics-disclosure" open/);
+    assert.match(html,/aria-describedby="privacy-notice"/);
+});
+
+test('한국어 시작 설명만 쉼표 뒤에서 줄바꿈하고 HTML로 삽입하지 않는다',()=>{
+    const c=setup();loadHome(c);c.changeLanguage('ko');
+    assert.equal(c.document.getElementById('welcome-msg').textContent,'아동수당부터 발달검사 등,\n도봉구 영유아 지원 정보를 안내합니다.');
+    const css=fs.readFileSync('static/style.css','utf8');
+    assert.match(css,/#welcome-msg\s*\{[^}]*white-space: pre-line/);
+});
+
+test('첫 안내 캐릭터 중복 제거와 입력창 고지 크기를 보존한다',()=>{
+    const html=fs.readFileSync('static/index.html','utf8');
+    const welcome=html.match(/<section id="welcome-panel"[\s\S]*?<\/section>/)[0];
+    assert.doesNotMatch(welcome,/<img|<svg/);
+    assert.match(html,/header-icon\.png/);
+    assert.match(fs.readFileSync('static/script.js','utf8'),/bot-icon\.png/);
+    const css=fs.readFileSync('static/style.css','utf8');
+    assert.match(css,/\.input-notice\s*\{[^}]*font-size: 10px/);
+});
+
+test('한국어 첫 제목은 의미 단위 두 줄이며 설명의 줄 간격은 조밀하다',()=>{
+    const c=setup();loadHome(c);c.changeLanguage('ko');
+    assert.equal(c.document.getElementById('welcome-title').textContent,'우리 아이에게\n필요한 지원을 찾아보세요');
+    const css=fs.readFileSync('static/style.css','utf8');
+    assert.match(css,/#welcome-title\s*\{[^}]*white-space: pre-line/);
+    assert.match(css,/#welcome-msg\s*\{[^}]*line-height: 1.5;/);
+});
+
+test('상단 브랜드는 작은 크기로 유지하고 고정 높이로 자르지 않는다',()=>{
+    const css=fs.readFileSync('static/style.css','utf8');
+    assert.match(css,/\.chat-topbar \.chat-header h2\s*\{[^}]*font-size: 16px/);
+    assert.match(css,/\.chat-topbar \.header-icon\s*\{[^}]*width: 24px; height: 24px/);
+    const header=css.match(/\.chat-topbar \.chat-header\s*\{([^}]+)\}/)[1];
+    assert.match(header,/min-height: 49px/);
+    assert.doesNotMatch(header,/(?:^|;)\s*height:|overflow: hidden/);
+});
+
+test('정보 수집 안내 명칭과 Pretendard 제목 굵기를 보존한다',()=>{
+    const c=setup();loadHome(c);
+    const expected={ko:'정보 수집 안내',en:'Data collection notice',vi:'Thông báo thu thập thông tin',zh:'信息收集说明'};
+    for(const [lang,label] of Object.entries(expected)){
+        c.changeLanguage(lang);
+        assert.equal(c.document.getElementById('analytics-label').textContent,label);
+    }
+    const css=fs.readFileSync('static/style.css','utf8');
+    const title=css.match(/#welcome-title\s*\{([^}]+)\}/)[1];
+    assert.match(title,/font-weight: 800/);
+    assert.match(title,/font-family: 'Pretendard', 'SF Pro', sans-serif/);
+    assert.doesNotMatch(title,/-webkit-text-stroke/);
 });

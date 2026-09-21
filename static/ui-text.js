@@ -2,7 +2,7 @@
 window.CHAT_UI_TEXT = {
   "ko": {
     "title": "도봉구 영유아 복지정보자료집",
-    "welcome": "<span>도봉구 영유아 복지정보를 찾아드려요.</span><span>어떤 지원이 궁금하신가요?</span><span>이름·연락처 등 개인정보는 입력하지 마세요.</span>",
+    "welcome": "아동수당부터 발달검사 등,\n도봉구 영유아 지원 정보를 안내합니다.",
     "placeholder": "예: 24개월 아이가 받을 수 있는 지원",
     "toggle_open": "추천 질문",
     "toggle_close": "접기",
@@ -75,18 +75,21 @@ window.CHAT_UI_TEXT = {
     ],
     "tip_label": "아이와 함께하는 일상 팁",
     "contact": {
-      "label": "문의 · 불편 신고",
+      "label": "문의하기",
       "subject": "복지정보 챗봇 문의",
       "open": "이메일로 문의",
       "copy": "주소 복사",
       "copied": "이메일 주소를 복사했어요.",
       "copy_failed": "이메일 주소를 길게 누르거나 선택해 복사해 주세요."
     },
-    "analytics_notice": "서비스 개선을 위해 분야·언어·이용 결과 등의 통계를 수집할 수 있어요. 통계에는 질문 원문을 저장하지 않아요."
+    "analytics_notice": "서비스 개선을 위해 분야·언어·이용 결과 등의 통계를 수집할 수 있어요. 통계에는 질문 원문을 저장하지 않아요.",
+    "welcome_title": "우리 아이에게\n필요한 지원을 찾아보세요",
+    "privacy_notice": "이름·연락처 등 개인정보는 입력하지 마세요.",
+    "analytics_label": "정보 수집 안내"
   },
   "en": {
     "title": "Dobong Child Welfare Guide",
-    "welcome": "<span>Find welfare support for young children and families in Dobong-gu.</span><span>What support would you like to know about?</span><span>Please do not enter names, contact details or other personal information.</span>",
+    "welcome": "Explore child allowances, developmental checks and other support in Dobong-gu.",
     "placeholder": "E.g. support for a 24-month-old child",
     "toggle_open": "Suggested Questions",
     "toggle_close": "Collapse",
@@ -159,18 +162,21 @@ window.CHAT_UI_TEXT = {
     ],
     "tip_label": "Everyday parenting tip",
     "contact": {
-      "label": "Contact · Report a problem",
+      "label": "Contact",
       "subject": "Welfare chatbot inquiry",
       "open": "Email us",
       "copy": "Copy address",
       "copied": "Email address copied.",
       "copy_failed": "Select or long-press the email address to copy it."
     },
-    "analytics_notice": "We may collect topic, language and usage outcomes to improve this service. These statistics do not store your question text."
+    "analytics_notice": "We may collect topic, language and usage outcomes to improve this service. These statistics do not store your question text.",
+    "welcome_title": "Find support for your child",
+    "privacy_notice": "Please do not enter names, contact details or other personal information.",
+    "analytics_label": "Data collection notice"
   },
   "vi": {
     "title": "Cẩm nang phúc lợi trẻ em Dobong",
-    "welcome": "<span>Tìm thông tin hỗ trợ cho trẻ nhỏ và gia đình tại quận Dobong.</span><span>Bạn muốn tìm hiểu hỗ trợ nào?</span><span>Vui lòng không nhập tên, thông tin liên hệ hoặc thông tin cá nhân khác.</span>",
+    "welcome": "Tìm hiểu trợ cấp trẻ em, kiểm tra phát triển và các hỗ trợ khác tại Dobong-gu.",
     "placeholder": "Ví dụ: Hỗ trợ cho trẻ 24 tháng tuổi",
     "toggle_open": "Câu hỏi gợi ý",
     "toggle_close": "Thu gọn",
@@ -243,18 +249,21 @@ window.CHAT_UI_TEXT = {
     ],
     "tip_label": "Gợi ý hằng ngày cùng trẻ",
     "contact": {
-      "label": "Liên hệ · Báo sự cố",
+      "label": "Liên hệ",
       "subject": "Liên hệ về chatbot phúc lợi",
       "open": "Liên hệ qua email",
       "copy": "Sao chép địa chỉ",
       "copied": "Đã sao chép địa chỉ email.",
       "copy_failed": "Chọn hoặc nhấn giữ địa chỉ email để sao chép."
     },
-    "analytics_notice": "Chúng tôi có thể thu thập thống kê về chủ đề, ngôn ngữ và kết quả sử dụng để cải thiện dịch vụ. Thống kê này không lưu nội dung câu hỏi."
+    "analytics_notice": "Chúng tôi có thể thu thập thống kê về chủ đề, ngôn ngữ và kết quả sử dụng để cải thiện dịch vụ. Thống kê này không lưu nội dung câu hỏi.",
+    "welcome_title": "Tìm hỗ trợ dành cho con bạn",
+    "privacy_notice": "Vui lòng không nhập tên, thông tin liên hệ hoặc thông tin cá nhân khác.",
+    "analytics_label": "Thông báo thu thập thông tin"
   },
   "zh": {
     "title": "道峰区婴幼儿福利指南",
-    "welcome": "<span>为您查找道峰区婴幼儿及家庭的福利信息。</span><span>您想了解哪些支持项目？</span><span>请勿输入姓名、联系方式等个人信息。</span>",
+    "welcome": "了解道峰区儿童津贴、发育检查等婴幼儿支持信息。",
     "placeholder": "例如：24个月孩子可以获得哪些支持？",
     "toggle_open": "推荐提问",
     "toggle_close": "收起",
@@ -327,13 +336,16 @@ window.CHAT_UI_TEXT = {
     ],
     "tip_label": "日常亲子小贴士",
     "contact": {
-      "label": "联系我们 · 问题反馈",
+      "label": "联系我们",
       "subject": "福利信息聊天机器人咨询",
       "open": "邮件咨询",
       "copy": "复制地址",
       "copied": "已复制邮箱地址。",
       "copy_failed": "请选择或长按邮箱地址进行复制。"
     },
-    "analytics_notice": "我们可能收集主题、语言及使用结果等统计数据以改进服务。这些统计数据不保存您的问题原文。"
+    "analytics_notice": "我们可能收集主题、语言及使用结果等统计数据以改进服务。这些统计数据不保存您的问题原文。",
+    "welcome_title": "查找适合孩子的支持项目",
+    "privacy_notice": "请勿输入姓名、联系方式等个人信息。",
+    "analytics_label": "信息收集说明"
   }
 };

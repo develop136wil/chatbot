@@ -5,6 +5,8 @@ const fs=require('node:fs'),path=require('node:path'),os=require('node:os');
 const assert=require('node:assert/strict');
 const {chromium}=require('playwright');
 const auditOnly=process.argv.includes('--audit-only');
+// Optional read-only font verification: only the existing pinned Pretendard CDN is allowed.
+const fontNetwork=process.argv.includes('--font-network');
 const checks=[],errors=[];
 function check(name,ok,detail){checks.push({name,pass:!!ok,...(detail===undefined?{}:{detail})});}
 function contrast(a,b){
@@ -21,7 +23,8 @@ function contrast(a,b){
  page.on('pageerror',e=>errors.push(e.message));
  await page.route('**/*',async route=>{
   const url=new URL(route.request().url());
-  // No CDN or user traffic: only local assets and synthetic DOM content.
+  // No user traffic. Opt-in font mode allows only the already configured font CDN.
+  if(fontNetwork&&route.request().method()==='GET'&&url.hostname==='cdn.jsdelivr.net'&&url.pathname.startsWith('/gh/orioncactus/pretendard@v1.3.8/')){await route.continue();return;}
   if(url.hostname!=='chatbot-ui.test'){await route.fulfill({contentType:'text/javascript',body:''});return;}
   if(url.pathname==='/chat'){
    await new Promise(resolve=>{finishChat=resolve;});
@@ -35,9 +38,29 @@ function contrast(a,b){
   await route.fulfill({body:fs.readFileSync(file),contentType:({'.html':'text/html','.js':'text/javascript','.css':'text/css','.svg':'image/svg+xml','.png':'image/png','.ttf':'font/ttf','.json':'application/json'})[path.extname(file)]||'application/octet-stream'});
  });
  await page.goto('http://chatbot-ui.test/');await page.evaluate(()=>document.fonts.ready);
+
+ if(fontNetwork){
+  const cdp=await page.context().newCDPSession(page);
+  await cdp.send('DOM.enable');await cdp.send('CSS.enable');
+  const {root}=await cdp.send('DOM.getDocument');
+  const {nodeId}=await cdp.send('DOM.querySelector',{nodeId:root.nodeId,selector:'#welcome-title'});
+  const {fonts}=await cdp.send('CSS.getPlatformFontsForNode',{nodeId});
+  check('실제 첫 제목 Pretendard ExtraBold 웹폰트 사용',fonts.some(f=>f.isCustomFont&&/Pretendard/i.test(f.familyName)&&/ExtraBold/i.test(f.postScriptName)&&f.glyphCount>0),fonts);
+  await cdp.detach();
+ }
  check('첫 안내 문의 없음',await page.locator('.contact-actions').count()===0);
  check('첫 안내의 기관 확인 고지 제거',await page.locator('#time-notice').count()===0);
- check('통계 고지는 말풍선 밖 작은 글씨',await page.locator('#analytics-notice').evaluate(el=>!el.closest('.message')&&getComputedStyle(el).fontSize==='11px'));
+ check('통계 고지는 기본 접힘·말풍선 밖 작은 글씨',await page.locator('#analytics-notice').evaluate(el=>!el.closest('.message')&&!el.closest('details').open&&getComputedStyle(el).fontSize==='11px'));
+ check('시작 화면은 말풍선이 아님',await page.locator('#welcome-panel .message').count()===0);
+ check('첫 안내 장식 제거·상단 캐릭터 유지',await page.locator('#welcome-panel img, #welcome-panel svg').count()===0&&await page.locator('img[src="/static/header-icon.png"]').count()===1);
+ check('입력창 아래 주의 문구 10px·대비 유지',await page.locator('#privacy-notice').evaluate(el=>getComputedStyle(el).fontSize==='10px'&&getComputedStyle(el).color==='rgb(102, 112, 133)'));
+
+ check('시작 설명은 쉼표 뒤 지정 줄바꿈',await page.locator('#welcome-msg').evaluate(el=>el.textContent.includes(',\n')&&getComputedStyle(el).whiteSpace==='pre-line'));
+
+ check('한국어 첫 제목 지정 두 줄',await page.locator('#welcome-title').evaluate(el=>el.textContent==='우리 아이에게\n필요한 지원을 찾아보세요'&&getComputedStyle(el).whiteSpace==='pre-line'&&Math.abs(el.getBoundingClientRect().height-2*parseFloat(getComputedStyle(el).lineHeight))<1));
+ check('첫 설명 12px·줄 높이 18px',await page.locator('#welcome-msg').evaluate(el=>getComputedStyle(el).fontSize==='12px'&&getComputedStyle(el).lineHeight==='18px'));
+ check('첫 제목 굵기·조밀한 행간',await page.locator('#welcome-title').evaluate(el=>getComputedStyle(el).fontWeight==='800'&&getComputedStyle(el).webkitTextStrokeWidth==='0px'&&getComputedStyle(el).fontFamily.startsWith('Pretendard')&&getComputedStyle(el).lineHeight==='27.5px'));
+ check('정보 수집 안내 명칭',await page.locator('#analytics-label').textContent()==='정보 수집 안내');
  check('브랜드 제목',await page.locator('#header-title').textContent()==='도봉구 영유아 복지정보자료집');
  const fontDisplays=await page.evaluate(()=>[...document.fonts].filter(f=>['SF Pro','ONE Mobile POP'].includes(f.family.replace(/["']/g,''))).map(f=>f.display));
  check('기존 로컬 폰트 swap',fontDisplays.length>=2&&fontDisplays.every(v=>v==='swap'),fontDisplays);
@@ -45,14 +68,39 @@ function contrast(a,b){
  for(const [width,height] of [[320,812],[390,844],[768,1024],[1280,900],[812,375]]){
   await page.setViewportSize({width,height});
   for(const lang of ['ko','en','vi','zh']){
-   await page.evaluate(l=>changeLanguage(l),lang);
+   await page.evaluate(async l=>{
+    changeLanguage(l);
+    // Each case measures the initial screen, not scroll carried over from an opened disclosure.
+    document.activeElement?.blur();
+    await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+    document.getElementById('chat-box').scrollTo({top:0,behavior:'instant'});
+   },lang);
    const state=await page.evaluate(()=>{
     const welcome=document.getElementById('welcome-msg'),header=document.getElementById('header-title');
     return {page:document.documentElement.scrollWidth<=innerWidth,
      welcome:welcome.scrollWidth<=welcome.clientWidth+1,header:header.scrollWidth<=header.clientWidth+1,
-     spans:welcome.children.length,flags:document.querySelectorAll('.language-flag').length};
+     titleSize:parseFloat(getComputedStyle(document.getElementById('welcome-title')).fontSize),flags:document.querySelectorAll('.language-flag').length};
    });
-   check('첫 화면 reflow '+width+'x'+height+' '+lang,state.page&&state.welcome&&state.header&&state.spans===3&&state.flags===4,state);
+   check('첫 화면 reflow '+width+'x'+height+' '+lang,state.page&&state.welcome&&state.header&&state.titleSize===22&&state.flags===4,state);
+
+   check('첫 안내와 국기 시작 높이 정렬 '+width+' '+lang,await page.evaluate(()=>Math.abs(document.getElementById('welcome-title').getBoundingClientRect().top-document.querySelector('.lang-btn').getBoundingClientRect().top)<=8));
+   const brand=await page.evaluate(()=>{
+    const bar=document.querySelector('.chat-topbar'),name=document.getElementById('header-title'),icon=document.querySelector('.header-icon');
+    const b=bar.getBoundingClientRect(),n=name.getBoundingClientRect(),i=icon.getBoundingClientRect(),style=getComputedStyle(bar);
+    return {height:b.height,font:parseFloat(getComputedStyle(name).fontSize),icon:i.width,
+     contained:n.top>=b.top&&n.bottom<=b.bottom&&n.left>=b.left&&n.right<=b.right,
+     glass:style.backdropFilter.includes('blur('),visible:style.visibility==='visible'&&style.opacity==='1'};
+   });
+   check('작은 상단 브랜드·글라스 보존 '+width+' '+lang,brand.height>=50&&brand.font===(width<=390?15:16)&&brand.icon===24&&brand.contained&&brand.glass&&brand.visible,brand);
+   await page.locator('.analytics-disclosure summary').click();
+   check('통계 안내/개인정보 reflow '+width+' '+lang,await page.evaluate(()=>[document.getElementById('analytics-notice'),document.getElementById('privacy-notice')].every(el=>el.scrollWidth<=el.clientWidth+1)));
+   await page.locator('.analytics-disclosure summary').click();
+   check('입력창/추천 질문 영역 분리 '+width+' '+lang,await page.evaluate(()=>{
+    const footer=document.querySelector('.chat-input-box').getBoundingClientRect();
+    const tray=document.getElementById('suggestion-container').getBoundingClientRect();
+    const input=document.getElementById('user-input').getBoundingClientRect();
+    return tray.bottom<=footer.top+1&&input.top>=footer.top&&input.bottom<=footer.bottom&&input.right<=footer.right;
+   }));
   }
  }
  await page.setViewportSize({width:390,height:844});
@@ -74,7 +122,7 @@ function contrast(a,b){
   check(lang+' 답변 후에도 접힌 상태 유지',await page.locator('#suggestion-container').evaluate(el=>el.inert));
  }
  await page.evaluate(()=>{
-  document.querySelectorAll('.message-row').forEach((el,i)=>{if(i>0)el.remove();});
+  document.querySelectorAll('.message-row').forEach(el=>el.remove());
   changeLanguage('ko');
  });
  await page.locator('#suggestion-toggle-btn').click();
@@ -112,12 +160,34 @@ function contrast(a,b){
  await page.evaluate(()=>{stopUiTips();document.querySelector('.loading-copy').remove();});
  await page.locator('.show-more-btn').scrollIntoViewIfNeeded();
  check('결과 더 보기 명칭',await page.locator('.show-more-btn').textContent()==='결과 더 보기');
- check('문의 구분선',await page.locator('.contact-actions').evaluate(el=>getComputedStyle(el).borderTopWidth)==='1px');
+ check('문의는 답변 바깥 같은 행에 표시',await page.locator('.contact-actions').evaluate(el=>!el.closest('.message')&&el.parentElement.classList.contains('message-row')));
+ check('문의는 답변 아래 배치',await page.locator('.contact-actions').evaluate(el=>el.getBoundingClientRect().top>=el.parentElement.querySelector('.message').getBoundingClientRect().bottom));
  check('버튼 최소 web 터치 크기',await page.locator('.show-more-btn').evaluate(el=>{const r=el.getBoundingClientRect();return r.width>=24&&r.height>=24;}));
  await page.screenshot({path:path.join(out,'answer-mobile.png')});
  await page.locator('.contact-actions summary').click();
+ for(const width of [320,390,600]){
+  await page.setViewportSize({width,height:844});
+  for(const lang of ['ko','en','vi','zh']){
+   await page.evaluate(l=>{
+    const row=window.uiTestBox.closest('.message-row');
+    row.querySelector('.contact-actions').remove();
+    addContactActions(window.uiTestBox,l);
+    row.querySelector('.contact-actions').open=true;
+   },lang);
+   check('문의 메뉴 reflow '+width+' '+lang,await page.locator('.contact-actions').evaluate(el=>{
+    const a=el.querySelector('a'),b=el.querySelector('button');
+    return el.scrollWidth<=el.clientWidth+1&&a.getBoundingClientRect().height>=24&&b.getBoundingClientRect().height>=24&&!el.closest('[aria-live]');
+   }));
+  }
+ }
+ await page.setViewportSize({width:390,height:844});
+ await page.evaluate(()=>{
+  uiTestBox.closest('.message-row').querySelector('.contact-actions').remove();
+  addContactActions(uiTestBox,'ko');
+  uiTestBox.closest('.message-row').querySelector('.contact-actions').open=true;
+ });
  check('문의 링크는 기본 파란색이 아닌 기존 본문 톤',await page.locator('.contact-email').evaluate(el=>getComputedStyle(el).color)==='rgb(52, 64, 84)');
- check('긴 문의 안내 대신 이메일 주소만 표시',await page.locator('.contact-content p').textContent()==='chanyoung@devleop136.com');
+ check('주소 링크 한 개와 복사 버튼만 표시',await page.locator('.contact-email').textContent()==='chanyoung@devleop136.com'&&await page.locator('.contact-content p').count()===0);
  await page.evaluate(()=>{collapseSuggestions();document.getElementById('chat-box').scrollTop=document.getElementById('chat-box').scrollHeight;});
  await page.screenshot({path:path.join(out,'contact-mobile.png')});
  await page.locator('#suggestion-toggle-btn').click();
@@ -137,10 +207,10 @@ function contrast(a,b){
  check('키보드 포커스가 고정 영역에 가리지 않음',focusAfter.top>=focusAfter.header&&focusAfter.bottom<=focusAfter.bottomLimit,{before:hiddenBefore,after:focusAfter});
  // Text-only magnification, not a claim of Safari/device pinch-zoom testing.
  await page.evaluate(()=>{
-  document.querySelectorAll('#header-title,#welcome-msg,.service-notice,.card-title,.card-body p,.show-more-btn,.contact-actions summary,.contact-content a,.contact-copy').forEach(el=>el.style.fontSize=parseFloat(getComputedStyle(el).fontSize)*2+'px');
+  document.querySelectorAll('#header-title,#welcome-title,#welcome-msg,.input-notice,.analytics-disclosure,.service-notice,.card-title,.card-body p,.show-more-btn,.contact-actions summary,.contact-content a,.contact-copy').forEach(el=>el.style.fontSize=parseFloat(getComputedStyle(el).fontSize)*2+'px');
  });
  await page.locator('.contact-copy').scrollIntoViewIfNeeded();
- check('200% 텍스트에서 본문 가로 넘침 없음',await page.evaluate(()=>[...document.querySelectorAll('#welcome-msg,.result-card,.contact-actions')].every(el=>el.scrollWidth<=el.clientWidth+1)));
+ check('200% 텍스트에서 본문 가로 넘침 없음',await page.evaluate(()=>[...document.querySelectorAll('#welcome-title,#welcome-msg,.input-notice,.result-card,.contact-actions')].every(el=>el.scrollWidth<=el.clientWidth+1)));
  await page.screenshot({path:path.join(out,'text-200-mobile.png')});
  await page.setViewportSize({width:1280,height:900});await page.screenshot({path:path.join(out,'text-200-desktop.png')});
  check('브라우저 JS 예외 없음',errors.length===0,errors);

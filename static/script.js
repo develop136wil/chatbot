@@ -512,7 +512,9 @@ function clearButtons() {
 // Email is composed by the user's mail app. Never attach chat history or send it here.
 const CONTACT_EMAIL = 'chanyoung@devleop136.com';
 function addContactActions(container, language = window.currentLang || 'ko') {
-    if (container.querySelector('.contact-actions')) return;
+    // Keep optional support out of the answer's content and live announcement.
+    const host = container.closest?.('.message-row.assistant') || container;
+    if (host.querySelector('.contact-actions')) return;
     const copy = (UI_TEXT[language] || UI_TEXT.ko).contact;
     const details = document.createElement('details');
     details.className = 'contact-actions';
@@ -524,7 +526,7 @@ function addContactActions(container, language = window.currentLang || 'ko') {
     const email = document.createElement('a');
     email.href = 'mailto:' + CONTACT_EMAIL + '?subject=' + encodeURIComponent(copy.subject);
     email.className = 'contact-email';
-    email.textContent = copy.open;
+    email.textContent = CONTACT_EMAIL;
     email.setAttribute('aria-label', copy.open + ': ' + CONTACT_EMAIL);
     content.appendChild(email);
     const button = document.createElement('button');
@@ -547,13 +549,9 @@ function addContactActions(container, language = window.currentLang || 'ko') {
         }
     };
     content.appendChild(button);
-    const address = document.createElement('p');
-    address.className = 'contact-address';
-    address.textContent = CONTACT_EMAIL;
-    content.appendChild(address);
     content.appendChild(status);
     details.appendChild(content);
-    container.appendChild(details);
+    host.appendChild(details);
 }
 
 // Network events must update controls without changing the active request state.
