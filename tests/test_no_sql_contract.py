@@ -311,6 +311,17 @@ class UXFailureTests(unittest.IsolatedAsyncioTestCase):
         db.table.return_value.select.return_value.execute.return_value = SimpleNamespace(count=155)
         return db
 
+    async def test_null_category_strings_skip_useless_filtered_rpc(self):
+        for category in (None, "null", " NULL ", "None", "", "undefined"):
+            with self.subTest(category=category):
+                db = self.db(data=[{"id": "p1"}])
+                with patch.object(utils, "supabase_async", db), patch.object(utils, "get_gemini_embedding_async", AsyncMock(return_value=[0.1])):
+                    result = await utils.search_supabase_async("지원", {"category": category}, keywords=["지원"])
+                self.assertEqual(result, [{"id": "p1"}])
+                db.rpc.assert_called_once()
+                self.assertIsNone(db.rpc.call_args.args[1]["filter_category"])
+                db.table.assert_not_called()
+
     async def test_zero_rpc_with_visible_index_stays_not_found_and_logs_safely(self):
         db = self.db()
         with patch.object(utils, "supabase_async", db), patch.object(utils, "get_gemini_embedding_async", AsyncMock(return_value=[0.1])):

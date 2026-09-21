@@ -281,7 +281,7 @@ test('라이트 모드만 선언하고 다크 시스템 테마 분기를 제거�
     assert.match(html,/<meta name="color-scheme" content="only light">/);
     assert.ok(html.indexOf('name="color-scheme"') < html.indexOf('rel="stylesheet"'));
     for (const source of [css,html,js]) assert.doesNotMatch(source,/prefers-color-scheme\s*:\s*dark/i);
-    assert.match(html,/style\.css\?v=2026\.09\.21-restore/);
+    assert.match(html,/style\.css\?v=2026\.09\.21-loading/);
 });
 
 test('라이트 고정 후에도 동작 줄이기와 사용자 고대비 설정을 방해하지 않는다', () => {
@@ -941,4 +941,19 @@ test('상단 국기 영역은 텍스트 레일과 구분되고 시작 화면은 
     assert.match(css,/#splash-screen\s*\{[^}]*pointer-events: none/);
     const c=setup();
     for(const value of Object.values(c.window.CHAT_UI_TEXT)) assert.ok(value.welcome.includes('<br><br>'));
+});
+
+
+test('로딩 팁은 원본 3줄 스켈레톤과 14px 진행 문구·12px 팁을 유지한다',()=>{
+    const js=fs.readFileSync('static/script.js','utf8');
+    const loading=js.split("const loading = addMessageToBox")[1].split("const stopTips")[0];
+    assert.equal((loading.match(/class="skeleton-box"/g)||[]).length,3);
+    assert.ok(loading.includes('width:85%'));
+    assert.ok(loading.includes('class="loading-copy"'));
+    const css=fs.readFileSync('static/style.css','utf8');
+    const action=css.match(/\.message\.assistant \.loading-copy \.action-text\s*\{([^}]+)\}/)[1];
+    const tip=css.match(/\.message\.assistant \.loading-copy \.tip-text\s*\{([^}]+)\}/)[1];
+    for(const rule of ['font-size: 14px','font-weight: 600','color: #333','margin: 0 0 8px']) assert.ok(action.includes(rule));
+    for(const rule of ['font-size: 12px','font-weight: 400','color: #888','margin: 0','line-height: 1.6']) assert.ok(tip.includes(rule));
+    assert.doesNotMatch(css,/\.tip-text\s*\{[^}]*margin-top:\s*12px/);
 });

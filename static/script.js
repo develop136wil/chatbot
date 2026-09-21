@@ -308,7 +308,7 @@ async function fetchChatResponse(requestBody, resumeJobId = null) {
     const controller = new AbortController();
     activeRequestController = controller;
     const langData = UI_TEXT[lang] || UI_TEXT.ko;
-    const loading = addMessageToBox('assistant', '<div class="skeleton-container"><div class="skeleton-box" style="width:90%"></div><div class="skeleton-box" style="width:70%"></div><p class="action-text"></p><p class="tip-text"></p></div>');
+    const loading = addMessageToBox('assistant', '<div class="skeleton-container"><div class="skeleton-box" style="width:90%"></div><div class="skeleton-box" style="width:70%"></div><div class="skeleton-box" style="width:85%"></div><div class="loading-copy"><p class="action-text"></p><p class="tip-text"></p></div></div>');
     const stopTips = startLoadingTips(loading, lang);
     const text = loading.querySelector('.action-text');
     if (text) text.textContent = langData.processing;

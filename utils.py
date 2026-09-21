@@ -2326,6 +2326,12 @@ async def search_supabase_async(question: str, extracted_info: dict, keywords: l
     
     final_query_text = " ".join(keywords)
     ai_category = extracted_info.get("category")
+    # Models sometimes emit the string "null" instead of JSON null.
+    # Treat only missing/sentinel values as unfiltered; keep real categories intact.
+    if not isinstance(ai_category, str) or ai_category.strip().casefold() in {"", "null", "none", "undefined"}:
+        ai_category = None
+    else:
+        ai_category = ai_category.strip()
     
     # 디버깅 출력
     print(f"🔍 [Search] 키워드: {keywords} / 카테고리: {ai_category}")

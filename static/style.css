@@ -1485,7 +1485,15 @@ body {
 .message.user p { white-space: pre-wrap; overflow-wrap: anywhere; }
 #welcome-msg { line-height: 1.75; word-break: keep-all; }
 .message.assistant p + p { margin-top: .65em; }
-.tip-text { margin-top: 12px !important; font-size: 13px; color: var(--text-secondary); line-height: 1.7; white-space: pre-line; }
+/* Original loading typography (before c8b1468), scoped against paragraph rules. */
+.loading-copy { margin-top: 12px; text-align: left; }
+.message.assistant .loading-copy .action-text {
+    font-size: 14px; font-weight: 600; color: #333; margin: 0 0 8px;
+}
+.message.assistant .loading-copy .tip-text {
+    font-size: 12px; font-weight: 400; color: #888; margin: 0;
+    line-height: 1.6; white-space: pre-line;
+}
 #splash-screen { pointer-events: none; animation: dismiss-splash 0s 3s forwards; }
 @keyframes dismiss-splash { to { visibility: hidden; opacity: 0; } }
 .splash-title { max-width: 280px; padding: 0 16px; word-break: keep-all; }
