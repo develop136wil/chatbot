@@ -688,99 +688,45 @@ body {
     /* 흑백 처리 */
 }
 
-/* --- [수정] 피드백 컨테이너 (중앙 정렬 확실하게) --- */
-.feedback-container {
-    margin-top: 30px;
-    /* 여백 확보 */
-    padding-top: 20px;
-    border-top: 1px dashed #E4E7EC;
-    display: flex;
-    flex-direction: column;
-    /* 세로 정렬 */
-    align-items: center;
-    /* 가로 중앙 */
-    justify-content: center;
-    gap: 15px;
-    width: 100%;
-    /* 전체 너비 사용 */
-}
-
-.feedback-container p {
-    /* [수정] 크기 축소: 14px -> 12px */
+/* Compact, opt-in contact disclosure; no rating panel or extra footer frame. */
+.contact-actions {
+    margin-top: 8px;
+    color: #475467;
     font-size: 12px;
-
-    /* [수정] 굵기 얇게: 600(Bold) -> 400(Normal) */
-    font-weight: 400;
-
-    /* [수정] 색상 변경: 은은한 회색 (#98A2B3) */
-    color: #98A2B3;
-
-    margin: 0;
-    margin-bottom: 4px;
-    /* 버튼과의 간격 살짝 둠 */
-    text-align: center;
+    line-height: 1.6;
 }
-
-/* 피드백 버튼 그룹 */
-.feedback-btn-group {
-    display: flex;
-    gap: 20px;
-    /* 버튼 사이 간격 넓힘 */
-}
-
-/* --- [수정] 피드백 버튼 스타일 (a태그 -> button태그 변경) --- */
-.feedback-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-
-    /* 기본 버튼 스타일 제거 */
-    background-color: #FFFFFF;
-    border: 1px solid #E4E7EC;
-    outline: none;
-
-    font-size: 18px;
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
-
+.contact-actions > summary {
+    display: list-item;
+    width: fit-content;
+    max-width: 100%;
+    padding: 6px 2px;
     cursor: pointer;
-    opacity: 0.7;
-    transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
-
-    /* 폰트 상속 */
-    font-family: inherit;
 }
-
-/* 호버 효과 */
-.feedback-btn:hover {
-    opacity: 1;
-    border-color: var(--accent-color);
-    background-color: #FFF4C9;
-    transform: scale(1.15) rotate(5deg);
-    /* 살짝 회전하며 커짐 */
-    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05);
+.contact-content {
+    padding: 4px 0;
+    overflow-wrap: anywhere;
 }
-
-/* 클릭 효과 */
-.feedback-btn:active {
-    transform: scale(0.95);
+.contact-content > a {
+    color: #344054;
+    text-decoration: underline;
+    text-underline-offset: 3px;
 }
-
-/* 전송 중 및 전송 완료 메시지 */
-.feedback-sending,
-.feedback-success {
-    font-size: 13px;
-    color: var(--text-secondary);
-    font-weight: 500;
-    margin: 0;
-    animation: fadeIn 0.5s ease;
+.contact-copy {
+    margin-left: 8px;
+    padding: 6px 8px;
+    min-height: 32px;
+    border: 1px solid #D0D5DD;
+    border-radius: 8px;
+    background: transparent;
+    color: #475467;
+    font: inherit;
+    cursor: pointer;
 }
-
-.feedback-success {
-    color: #039855;
-    /* 성공 시 초록색 계열 */
-}
+.contact-content > p { margin: 6px 0 0; font-size: 12px; line-height: 1.6; }
+.contact-actions summary:focus-visible, .contact-content a:focus-visible,
+.contact-copy:focus-visible { outline: 2px solid #667085; outline-offset: 3px; }
+.contact-status { display: block; }
+.contact-status:empty { display: none; }
 
 @keyframes fadeIn {
     from {
@@ -970,107 +916,6 @@ body {
     transform: translate(-50%, 20px);
     /* 숨겨질 때도 중앙 정렬(-50%) 유지하며 아래로 */
     pointer-events: none;
-}
-
-/* --- [신규] 피드백 상세 입력창 스타일 --- */
-.feedback-input-wrapper {
-    display: flex;
-    align-items: center;
-    /* 세로 중앙 정렬 */
-    gap: 6px;
-    /* 간격 조금 좁힘 (8px -> 6px) */
-    width: 100%;
-    margin-top: 10px;
-    animation: fadeIn 0.3s ease-out;
-
-    /* [핵심] 내용물이 넘쳐도 밖으로 튀어나가지 않게 함 */
-    box-sizing: border-box;
-}
-
-/* 입력창 */
-.feedback-input {
-    /* [핵심] flex: 1과 min-width: 0이 만나야 칸이 좁아질 때 입력창도 같이 줄어듭니다 */
-    flex: 1;
-    min-width: 0;
-
-    padding: 8px 12px;
-    /* 패딩을 살짝 줄임 */
-    border: 1px solid #E4E7EC;
-    border-radius: 20px;
-    font-size: 13px;
-    /* 폰트 크기 살짝 줄임 (모바일 최적화) */
-    outline: none;
-    background-color: #FFFFFF;
-    transition: border-color 0.2s;
-}
-
-.feedback-input:focus {
-    border-color: var(--accent-color);
-    /* 포커스 시 강조색 */
-    background-color: #FFFDF5;
-}
-
-.feedback-send-btn {
-    padding: 0 14px;
-    /* 버튼 좌우 여백 줄임 (18px -> 14px) */
-    height: 36px;
-    /* 높이 고정 (입력창과 맞춤) */
-
-    background-color: var(--accent-color);
-    color: #FFFFFF;
-    border: none;
-    border-radius: 20px;
-
-    font-size: 13px;
-    /* 버튼 글자 크기도 맞춤 */
-    font-weight: 700;
-    cursor: pointer;
-    white-space: nowrap;
-    /* 글자 줄바꿈 절대 금지 */
-    transition: background-color 0.2s, transform 0.1s;
-    flex-shrink: 0;
-    /* 버튼은 절대 찌그러지지 않게 고정 */
-}
-
-.feedback-send-btn:hover {
-    background-color: #E39B10;
-    /* 호버 시 약간 진하게 */
-}
-
-.feedback-send-btn:active {
-    transform: scale(0.95);
-    /* 클릭 시 눌리는 효과 */
-}
-
-/* --- [신규] 싫어요 사유(Reason) 태그 스타일 --- */
-.reason-container {
-    display: flex;
-    gap: 6px;
-    flex-wrap: wrap;
-    margin-top: 8px;
-    animation: fadeIn 0.3s;
-}
-
-.reason-chip {
-    padding: 6px 12px;
-    font-size: 12px;
-    background-color: #FFFFFF;
-    border: 1px solid #E4E7EC;
-    border-radius: 16px;
-    cursor: pointer;
-    color: #475467;
-    transition: all 0.2s;
-}
-
-.reason-chip:hover {
-    background-color: #F9FAFB;
-}
-
-.reason-chip.selected {
-    background-color: #FFF4C9;
-    border-color: #FDB022;
-    color: #101828;
-    font-weight: 600;
 }
 
 /* 사용자 메시지 스타일 (여백 수정 버전) */

@@ -20,7 +20,6 @@ const micBtn = document.getElementById('mic-btn');
 
 const API_URL_CHAT = '/chat';
 const API_URL_RESULT = '/get_result/';
-const API_URL_FEEDBACK = '/feedback';
 
 let activeRequestController = null;
 let activeRequestSequence = 0;
@@ -240,6 +239,7 @@ async function renderChatResponse(data, element, question, sequence) {
     if (sequence !== activeRequestSequence) return;
     if (data.status === 'error') {
         element.textContent = data.message || getRequestMessages().error;
+        addContactActions(element);
         return;
     }
     if (!['complete', 'clarify'].includes(data.status)) throw new Error('Invalid response');
@@ -275,9 +275,7 @@ async function renderChatResponse(data, element, question, sequence) {
         };
         element.appendChild(more);
     }
-    if (data.status === 'complete' && data.job_id) {
-        addFeedbackButtons(element, data.job_id, question, data.answer);
-    }
+    if (data.status === 'complete') addContactActions(element);
 }
 
 function startLoadingTips(element, language) {
@@ -464,169 +462,49 @@ function clearButtons() {
     if (existingContainer) existingContainer.remove();
 }
 
-// [★수정] 피드백 버튼 추가 함수 (다국어 지원)
-function addFeedbackButtons(messageElement, jobId, question, answer) {
-    const lang = window.currentLang || 'ko';
-    const textData = UI_TEXT[lang].feedback; // 해당 언어의 피드백 텍스트 가져오기
-
-    const feedbackContainer = document.createElement('div');
-    feedbackContainer.className = 'feedback-container';
-
-    const feedbackMsg = document.createElement('p');
-    feedbackMsg.textContent = textData.question; // "답변이 도움이 되었나요?" (번역됨)
-    feedbackContainer.appendChild(feedbackMsg);
-
-    const btnGroup = document.createElement('div');
-    btnGroup.className = 'feedback-btn-group';
-
-    const goodBtn = document.createElement('button');
-    goodBtn.className = 'feedback-btn';
-    goodBtn.textContent = '👍';
-    goodBtn.onclick = () => submitFeedback(jobId, question, answer, '👍', feedbackContainer, "");
-    btnGroup.appendChild(goodBtn);
-
-    const badBtn = document.createElement('button');
-    badBtn.className = 'feedback-btn';
-    badBtn.textContent = '👎';
-    badBtn.onclick = () => showFeedbackInput(feedbackContainer, jobId, question, answer, '👎');
-    btnGroup.appendChild(badBtn);
-
-    feedbackContainer.appendChild(btnGroup);
-    messageElement.appendChild(feedbackContainer);
-}
-
-// [★수정] 피드백 입력창 (다국어 지원)
-function showFeedbackInput(container, jobId, question, answer, feedbackType) {
-    const lang = window.currentLang || 'ko';
-    const textData = UI_TEXT[lang].feedback;
-
-    container.innerHTML = '';
-    const reasonContainer = document.createElement('div');
-    reasonContainer.className = 'reason-container';
-
-    // 이유 태그도 번역된 걸로 표시
-    const reasons = textData.reasons;
-
-    reasons.forEach(reasonText => {
-        const chip = document.createElement('button');
-        chip.textContent = reasonText;
-        chip.className = 'reason-chip';
-
-        chip.onclick = () => {
-            Array.from(reasonContainer.children).forEach(c => c.classList.remove('selected'));
-            chip.classList.add('selected');
-            if (!container.querySelector('.feedback-input-wrapper')) {
-                showCommentInput(container, jobId, question, answer, feedbackType, reasonText);
-            } else {
-                const existingInput = container.querySelector('.feedback-input-wrapper');
-                const draft = existingInput?.querySelector('input')?.value || '';
-                if (existingInput) existingInput.remove();
-                showCommentInput(container, jobId, question, answer, feedbackType, reasonText, draft);
-            }
-        };
-        reasonContainer.appendChild(chip);
-    });
-    container.appendChild(reasonContainer);
-}
-
-// [★수정] 코멘트 입력창 (다국어 지원)
-function showCommentInput(container, jobId, question, answer, feedbackType, selectedReason, draft = "") {
-    const lang = window.currentLang || 'ko';
-    const textData = UI_TEXT[lang].feedback;
-
-    const inputWrapper = document.createElement('div');
-    inputWrapper.className = 'feedback-input-wrapper';
-
-    const input = document.createElement('input');
-    input.type = "text";
-    input.className = 'feedback-input';
-    input.placeholder = textData.input_placeholder; // "자세한 상황을..." (번역됨)
-    input.maxLength = 1000;
-    input.value = draft;
-
-    const sendBtn = document.createElement('button');
-    sendBtn.textContent = textData.send; // "전송" (번역됨)
-    sendBtn.className = 'feedback-send-btn';
-
-    sendBtn.onclick = () => {
-        const historyStr = JSON.stringify(chatHistory.slice(-4));
-        submitFeedback(jobId, question, answer, feedbackType, container, input.value.trim(), selectedReason, historyStr);
-    };
-
-    inputWrapper.appendChild(input);
-    inputWrapper.appendChild(sendBtn);
-    container.appendChild(inputWrapper);
-
-    setTimeout(() => input.focus(), 100);
-}
-
-// Keep the form nodes (and their draft values) until storage is confirmed.
-const feedbackRequests = new WeakMap();
-const FEEDBACK_TIMEOUT_MS = 15000;
-
-async function submitFeedback(jobId, question, answer, feedbackType, containerElement, comment, reason = "", historyStr = "") {
-    let state = feedbackRequests.get(containerElement);
-    if (state?.busy || state?.saved) return;
-    const lang = window.currentLang || 'ko';
-    const copy = UI_TEXT[lang] || UI_TEXT.ko;
-    const textData = copy.feedback;
-    if (!state) {
-        const status = document.createElement('p');
-        status.className = 'feedback-status';
-        status.setAttribute('role', 'status');
-        status.setAttribute('aria-live', 'polite');
-        state = {busy: false, saved: false, retryAt: 0, status};
-        feedbackRequests.set(containerElement, state);
-    }
-    // Reattach after the user reopens the reason form following a failed vote.
-    containerElement.appendChild(state.status);
-    if (navigator.onLine === false) {
-        state.status.textContent = copy.offline;
-        return;
-    }
-    if (state.retryAt > Date.now()) {
-        state.status.textContent = copy.retry_wait + ' (' + Math.ceil((state.retryAt - Date.now()) / 1000) + 's)';
-        return;
-    }
-    state.busy = true;
-    state.status.textContent = textData.sending;
-    const controls = Array.from(containerElement.querySelectorAll('button, input'));
-    const disabledBefore = controls.map(control => Boolean(control.disabled));
-    controls.forEach(control => { control.disabled = true; });
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), FEEDBACK_TIMEOUT_MS);
-    try {
-        const response = await fetch('/feedback', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            signal: controller.signal,
-            body: JSON.stringify({
-                job_id: jobId, question: question,
-                answer: String(answer).slice(0, 12000), feedback: feedbackType,
-                comment: comment, reason: reason,
-                chat_history: String(historyStr).slice(0, 20000)
-            })
-        });
-        if (!response.ok) {
-            if (response.status === 429) {
-                state.retryAt = Date.now() + retryDelay(response.headers?.get('Retry-After'));
-            }
-            const error = new Error('Feedback HTTP ' + response.status);
-            error.rateLimited = response.status === 429;
-            throw error;
+// Email is composed by the user's mail app. Never attach chat history or send it here.
+const CONTACT_EMAIL = 'chanyoung@devleop136.com';
+function addContactActions(container, language = window.currentLang || 'ko') {
+    if (container.querySelector('.contact-actions')) return;
+    const copy = (UI_TEXT[language] || UI_TEXT.ko).contact;
+    const details = document.createElement('details');
+    details.className = 'contact-actions';
+    const summary = document.createElement('summary');
+    summary.textContent = copy.label;
+    details.appendChild(summary);
+    const content = document.createElement('div');
+    content.className = 'contact-content';
+    const email = document.createElement('a');
+    email.href = 'mailto:' + CONTACT_EMAIL + '?subject=' + encodeURIComponent(copy.subject);
+    email.textContent = CONTACT_EMAIL;
+    email.setAttribute('aria-label', copy.open + ': ' + CONTACT_EMAIL);
+    content.appendChild(email);
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'contact-copy';
+    button.textContent = copy.copy;
+    const status = document.createElement('span');
+    status.className = 'contact-status';
+    status.setAttribute('role', 'status');
+    button.onclick = async () => {
+        button.disabled = true;
+        try {
+            if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable');
+            await navigator.clipboard.writeText(CONTACT_EMAIL);
+            status.textContent = copy.copied;
+        } catch (_) {
+            status.textContent = copy.copy_failed;
+        } finally {
+            button.disabled = false;
         }
-        const result = await response.json();
-        if (result.status !== 'success') throw new Error('Feedback not saved');
-        state.saved = true;
-        const thanksText = feedbackType === '👍' ? textData.thanks_good : textData.thanks_bad;
-        containerElement.innerHTML = '<p class="feedback-success">' + thanksText + '</p>';
-    } catch (error) {
-        state.status.textContent = error.rateLimited ? copy.rate_limit : textData.send_failed;
-    } finally {
-        clearTimeout(timer);
-        state.busy = false;
-        if (!state.saved) controls.forEach((control, index) => { control.disabled = disabledBefore[index]; });
-    }
+    };
+    content.appendChild(button);
+    const note = document.createElement('p');
+    note.textContent = copy.note;
+    content.appendChild(note);
+    content.appendChild(status);
+    details.appendChild(content);
+    container.appendChild(details);
 }
 
 // Network events must update controls without changing the active request state.
@@ -899,7 +777,10 @@ function retryDelay(value) {
 
 function showRequestError(element, data, requestBody, question, sequence, delay = 0, resumeJobId = null) {
     element.textContent = data.message || getRequestMessages().error;
-    if (data.retryable === false || !requestBody) return;
+    if (data.retryable === false || !requestBody) {
+        addContactActions(element);
+        return;
+    }
     const retry = document.createElement('button');
     retry.className = 'retry-btn';
     const lang = requestBody.language || 'ko';
@@ -921,6 +802,7 @@ function showRequestError(element, data, requestBody, question, sequence, delay 
         await fetchChatResponse(requestBody, resumeJobId);
     };
     element.appendChild(retry);
+    addContactActions(element);
 }
 
 

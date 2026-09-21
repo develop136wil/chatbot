@@ -36,23 +36,6 @@ test('전체 스크립트는 visualViewport 없는 환경에서도 로드된다'
     const c=setup();
     assert.equal(c.window.isChatBusy(),false);
 });
-test('4개 언어의 피드백 필드가 완비되어 있다',()=>{
-    const c=setup();
-    assert.equal(vm.runInContext("Object.values(UI_TEXT).every(v => v.feedback.reasons.length && v.feedback.send && v.feedback.sending && v.feedback.thanks_good && v.feedback.thanks_bad)",c),true);
-});
-test('피드백 HTTP 실패를 성공 메시지로 표시하지 않는다',async()=>{
-    const c=setup(); c.box=element();
-    c.fetch=async()=>({ok:false,status:503});
-    await vm.runInContext("submitFeedback('id','질문','답변','👍',box,'')",c);
-    assert.match(c.box.children.find(child=>child.className==='feedback-status').textContent,/오류/);
-    assert.doesNotMatch(c.box.innerHTML,/feedback-success/);
-});
-test('피드백 저장 확인 후에만 성공 표시한다',async()=>{
-    const c=setup(); c.box=element();
-    c.fetch=async()=>({ok:true,json:async()=>({status:'success'})});
-    await vm.runInContext("submitFeedback('id','질문','답변','👍',box,'')",c);
-    assert.match(c.box.innerHTML,/feedback-success/);
-});
 test('초기화 응답은 실제 내역·문서 ID·커서를 모두 지운다',async()=>{
     const c=setup(); c.box=element();
     vm.runInContext("chatHistory=[{role:'user',content:'old'}]; currentResultIds=['old']; currentShownCount=2; pendingContext='old';",c);
@@ -60,13 +43,13 @@ test('초기화 응답은 실제 내역·문서 ID·커서를 모두 지운다',
     assert.equal(vm.runInContext("chatHistory.length+currentResultIds.length+currentShownCount",c),0);
     assert.equal(vm.runInContext("pendingContext",c),null);
 });
-test('응답 공통 경로가 버튼 번역·더 보기·피드백을 처리한다',async()=>{
+test('응답 공통 경로가 버튼 번역·더 보기·이메일 문의를 처리한다',async()=>{
     const c=setup(); c.box=element(); c.localized=0;
     vm.runInContext("translateCardButtons=()=>{localized++};",c);
     await vm.runInContext("renderChatResponse({status:'complete',answer:'answer',last_result_ids:['a','b','c'],shown_count:2,job_id:'fresh-id'},box,'질문',0)",c);
     assert.equal(c.localized,1);
     assert.equal(c.box.children[0].className,'show-more-btn');
-    assert.equal(c.box.children[1].className,'feedback-container');
+    assert.equal(c.box.children[1].className,'contact-actions');
 });
 test('이전 요청의 늦은 응답이 새 화면을 덮지 않는다',async()=>{
     const c=setup(); c.box=element();
@@ -188,7 +171,8 @@ test('서버의 일일 제한에는 재시도 버튼을 표시하지 않는다',
     c.fetch=async()=>({ok:true,json:async()=>({status:'error',message:'limit',retryable:false})});
     vm.runInContext('addMessageToBox=()=>box;',c);
     await c.fetchChatResponse({question:'q',language:'en'});
-    assert.equal(c.box.children.length,0);
+    assert.equal(c.box.children.filter(child=>child.className==='retry-btn').length,0);
+    assert.equal(c.box.children[0].className,'contact-actions');
     assert.equal(c.box.textContent,'limit');
 });
 test('HTTP 429 안내와 Retry-After 대기 시간을 지킨다', async () => {
@@ -282,7 +266,7 @@ test('라이트 모드만 선언하고 다크 시스템 테마 분기를 제거�
     assert.match(html,/<meta name="color-scheme" content="only light">/);
     assert.ok(html.indexOf('name="color-scheme"') < html.indexOf('rel="stylesheet"'));
     for (const source of [css,html,js]) assert.doesNotMatch(source,/prefers-color-scheme\s*:\s*dark/i);
-    assert.match(html,/style\.css\?v=2026\.09\.21-tidy/);
+    assert.match(html,/style\.css\?v=2026\.09\.21-contact/);
 });
 
 test('라이트 고정 후에도 동작 줄이기와 사용자 고대비 설정을 방해하지 않는다', () => {
@@ -648,7 +632,8 @@ test('작업의 무료 한도 오류는 재시도 버튼을 만들지 않는다'
     const c=pollingContext();
     c.fetch=async(url)=>response(url==='/chat' ? {job_id:'quota'} : {status:'error',message:'quota',retryable:false});
     await c.fetchChatResponse({question:'지원'});
-    assert.equal(c.boxes[0].children.length,0);
+    assert.equal(c.boxes[0].children.filter(child=>child.className==='retry-btn').length,0);
+        assert.equal(c.boxes[0].children[0].className,'contact-actions');
     assert.equal(c.window.isChatBusy(),false);
 });
 
@@ -661,7 +646,8 @@ test('404 또는 410 결과 조회는 자동 재전송 없이 안내한다',asyn
         };
         await c.fetchChatResponse({question:'지원'});
         assert.equal(c.boxes[0].textContent,c.window.CHAT_UI_TEXT.ko.result_unavailable);
-        assert.equal(c.boxes[0].children.length,0);
+        assert.equal(c.boxes[0].children.filter(child=>child.className==='retry-btn').length,0);
+        assert.equal(c.boxes[0].children[0].className,'contact-actions');
         assert.equal(posts,1);
     }
 });
@@ -743,137 +729,6 @@ test('재조회 중 오프라인이면 GET도 새 POST도 보내지 않는다',a
     await c.boxes[0].children[0].onclick();
     assert.equal(count,2);
     assert.equal(c.window.isChatBusy(),false);
-});
-
-function feedbackContext(lang='ko') {
-    const c=setup();c.window.currentLang=lang;
-    const box=element(), input=element(), button=element(), locked=element();
-    input.value='보존할 의견'; locked.disabled=true;
-    box.appendChild(input);box.appendChild(button);box.appendChild(locked);
-    box.querySelectorAll=()=>[input,button,locked];
-    const submit=()=>c.submitFeedback('job','question','answer','👎',box,input.value,'reason','history');
-    const status=()=>box.children.find(child=>child.className==='feedback-status');
-    return {c,box,input,button,locked,submit,status};
-}
-
-test('피드백 오류 후 입력 노드·작성 내용·기존 잠금 상태를 보존한다',async()=>{
-    const {c,box,input,button,locked,submit,status}=feedbackContext();
-    c.fetch=async()=>({ok:false,status:503});
-    await submit();
-    assert.equal(box.children[0],input);
-    assert.equal(input.value,'보존할 의견');
-    assert.equal(input.disabled,false);
-    assert.equal(button.disabled,false);
-    assert.equal(locked.disabled,true);
-    assert.equal(status().textContent,c.window.CHAT_UI_TEXT.ko.feedback.send_failed);
-    assert.equal(box.innerHTML,'');
-});
-
-test('전송 중 피드백 중복 클릭은 요청을 추가하지 않는다',async()=>{
-    const {c,input,button,submit}=feedbackContext();
-    let finish,count=0;
-    c.fetch=()=>{count++;return new Promise(resolve=>{finish=resolve;});};
-    const pending=submit();
-    assert.equal(input.disabled,true);assert.equal(button.disabled,true);
-    await submit();
-    assert.equal(count,1);
-    finish(response({status:'success'}));await pending;
-});
-
-test('저장 성공 후 오래된 피드백 버튼을 호출해도 다시 전송하지 않는다',async()=>{
-    const {c,submit,box}=feedbackContext();let count=0;
-    c.fetch=async()=>{count++;return response({status:'success'});};
-    await submit();await submit();
-    assert.equal(count,1);assert.match(box.innerHTML,/feedback-success/);
-});
-
-test('피드백 실패 후 수동 재전송은 작성 내용·사유·문맥을 유지한다',async()=>{
-    const {c,submit,box}=feedbackContext();const payloads=[];
-    c.fetch=async(url,options)=>{
-        payloads.push(JSON.parse(options.body));
-        return payloads.length===1 ? {ok:false,status:503} : response({status:'success'});
-    };
-    await submit();await submit();
-    assert.equal(payloads.length,2);
-    assert.deepEqual(payloads[0],payloads[1]);
-    assert.equal(payloads[1].comment,'보존할 의견');
-    assert.equal(payloads[1].reason,'reason');
-    assert.match(box.innerHTML,/feedback-success/);
-});
-
-test('오프라인 피드백은 전송하지 않고 초안을 유지한다',async()=>{
-    const {c,submit,input,status}=feedbackContext();let count=0;
-    c.navigator.onLine=false;c.fetch=async()=>{count++;};
-    await submit();
-    assert.equal(count,0);assert.equal(input.value,'보존할 의견');
-    assert.equal(status().textContent,c.window.CHAT_UI_TEXT.ko.offline);
-});
-
-test('피드백 시간 초과는 잠금을 해제하고 초안을 유지한다',async()=>{
-    const {c,submit,input,button,status}=feedbackContext();
-    let timeout,cleared=false;
-    c.setTimeout=(fn,ms)=>{assert.equal(ms,15000);timeout=fn;return 77;};
-    c.clearTimeout=id=>{if(id===77)cleared=true;};
-    c.fetch=(url,options)=>new Promise((resolve,reject)=>{
-        options.signal.addEventListener('abort',()=>reject(new DOMException('timeout','AbortError')));
-    });
-    const pending=submit();timeout();await pending;
-    assert.equal(cleared,true);assert.equal(button.disabled,false);
-    assert.equal(input.value,'보존할 의견');
-    assert.equal(status().textContent,c.window.CHAT_UI_TEXT.ko.feedback.send_failed);
-});
-
-test('피드백 429의 Retry-After 동안 재전송을 차단한다',async()=>{
-    const {c,submit}=feedbackContext();let count=0,now=1000;
-    c.Date={now:()=>now,parse:Date.parse};
-    c.fetch=async()=>{count++;return {ok:false,status:429,headers:{get:()=> '3'}};};
-    await submit();await submit();assert.equal(count,1);
-    now=4001;await submit();assert.equal(count,2);
-});
-
-test('피드백 잘못된 JSON·실패 응답을 성공으로 표시하지 않는다',async()=>{
-    for(const result of [response({status:'error'}),{ok:true,json:async()=>{throw new SyntaxError('bad');}}]){
-        const {c,submit,box,button}=feedbackContext();
-        c.fetch=async()=>result;
-        await submit();
-        assert.doesNotMatch(box.innerHTML,/feedback-success/);
-        assert.equal(button.disabled,false);
-    }
-});
-
-test('피드백 실패 문구는 요청 시작 시 선택한 언어로 표시된다',async()=>{
-    for(const lang of ['ko','en','vi','zh']){
-        const {c,submit,status}=feedbackContext(lang);
-        c.fetch=async()=>{c.window.currentLang='ko';return {ok:false,status:503};};
-        await submit();
-        assert.equal(status().textContent,c.window.CHAT_UI_TEXT[lang].feedback.send_failed);
-    }
-});
-
-test('피드백 사유 변경은 작성 중인 의견을 새 입력창으로 옮긴다',()=>{
-    const {c,box}=feedbackContext();
-    const old=element(), input=element();input.value='이미 작성한 의견';
-    old.querySelector=()=>input;
-    let removed=false;old.remove=()=>{removed=true;};
-    box.querySelector=()=>old;
-    const drafts=[];
-    c.showCommentInput=(...args)=>drafts.push(args.at(-1));
-    c.showFeedbackInput(box,'job','q','a','👎');
-    const reasons=box.children.find(child=>child.className==='reason-container');
-    reasons.children[1].onclick();
-    assert.equal(removed,true);assert.deepEqual(drafts,['이미 작성한 의견']);
-});
-
-test('피드백 입력 화면을 다시 열어도 상태 안내와 429 대기는 유지한다',async()=>{
-    const {c,box,submit,status}=feedbackContext();let count=0;
-    c.fetch=async()=>{count++;return {ok:false,status:429,headers:{get:()=> '60'}};};
-    await submit();
-    const originalStatus=status();
-    box.children=[]; // Simulate the DOM nodes removed by reopening the reason form.
-    await submit();
-    assert.equal(count,1);
-    assert.equal(status(),originalStatus);
-    assert.match(status().textContent,/다시 시도/);
 });
 
 test('시작 화면·제목·설치 앱의 한국어 이름이 일치한다',()=>{
@@ -1068,4 +923,75 @@ test('캐시 답변도 표시 정리를 거치고 더 보기는 중앙에 배치
     const css=fs.readFileSync('static/style.css','utf8');
     const rule=css.match(/\.show-more-btn\s*\{([^}]+)\}/)[1];
     assert.match(rule,/margin: 12px auto 0/);assert.match(rule,/display: flex/);
+});
+
+
+for (const lang of ['ko','en','vi','zh']) {
+    test(lang+' 이메일 문의는 주소·제목만 전달하고 대화를 포함하지 않는다',()=>{
+        const c=setup(),box=element();
+        c.window.currentLang=lang;
+        vm.runInContext("chatHistory=[{role:'user',content:'PRIVATE_HISTORY'}]; currentQuestion='PRIVATE_QUESTION';",c);
+        c.addContactActions(box);
+        const details=box.children[0],summary=details.children[0],content=details.children[1];
+        const mail=new URL(content.children[0].href);
+        assert.equal(details.className,'contact-actions');
+        assert.equal(summary.textContent,c.window.CHAT_UI_TEXT[lang].contact.label);
+        assert.equal(mail.protocol,'mailto:');
+        assert.equal(mail.pathname,'chanyoung@devleop136.com');
+        assert.deepEqual([...mail.searchParams.keys()],['subject']);
+        assert.equal(mail.searchParams.get('subject'),c.window.CHAT_UI_TEXT[lang].contact.subject);
+        assert.doesNotMatch(mail.href,/PRIVATE/);
+        assert.equal(content.children[1].type,'button');
+    });
+    test(lang+' 주소 복사는 실제 성공 확인 후 표시하고 네트워크 요청을 안 한다',async()=>{
+        const c=setup(),box=element();let copied='',requests=0;
+        c.fetch=async()=>{requests++;throw new Error('No request expected');};
+        c.navigator.clipboard={writeText:async value=>{copied=value;}};
+        c.addContactActions(box,lang);
+        const content=box.children[0].children[1],button=content.children[1];
+        await button.onclick();
+        assert.equal(copied,'chanyoung@devleop136.com');
+        assert.equal(requests,0);
+        assert.equal(content.children[3].textContent,c.window.CHAT_UI_TEXT[lang].contact.copied);
+        assert.equal(button.disabled,false);
+    });
+    test(lang+' 복사 권한이 없으면 수동 복사 안내와 주소를 유지한다',async()=>{
+        for (const clipboard of [undefined,{writeText:async()=>{throw new Error('denied');}}]) {
+            const c=setup(),box=element();c.navigator.clipboard=clipboard;
+            c.addContactActions(box,lang);
+            const content=box.children[0].children[1];
+            await content.children[1].onclick();
+            assert.equal(content.children[3].textContent,c.window.CHAT_UI_TEXT[lang].contact.copy_failed);
+            assert.equal(content.children[0].textContent,'chanyoung@devleop136.com');
+            assert.equal(content.children[1].disabled,false);
+        }
+    });
+}
+test('같은 메시지에 이메일 메뉴를 중복 추가하지 않는다',()=>{
+    const c=setup(),box=element();
+    box.querySelector=()=>box.children.find(child=>child.className==='contact-actions');
+    c.addContactActions(box);c.addContactActions(box);
+    assert.equal(box.children.length,1);
+});
+test('캐시 답변처럼 job_id가 없어도 이메일 문의가 표시된다',async()=>{
+    const c=setup(),box=element();c.box=box;
+    await vm.runInContext("renderChatResponse({status:'complete',answer:'cached'},box,'q',0)",c);
+    assert.equal(box.children[0].className,'contact-actions');
+});
+test('재시도 불가 오류에도 이메일 문의가 남는다',()=>{
+    const c=setup(),box=element();
+    c.showRequestError(box,{retryable:false,message:'error'},null,'q',0);
+    assert.equal(box.children[0].className,'contact-actions');
+});
+test('첫 화면의 문의 메뉴도 언어 선택에 맞춰 갱신한다',()=>{
+    const c=setup();loadHome(c);
+    for (const lang of ['en','vi','zh','ko']) {
+        const host=c.document.getElementById('welcome-contact');host.children=[];
+        c.changeLanguage(lang);
+        assert.equal(host.children[0].children[0].textContent,c.window.CHAT_UI_TEXT[lang].contact.label);
+    }
+});
+test('새 프런트엔드는 질문·답변을 피드백 API로 전송하는 코드를 포함하지 않는다',()=>{
+    const source=fs.readFileSync('static/script.js','utf8');
+    assert.doesNotMatch(source,/submitFeedback|addFeedbackButtons|API_URL_FEEDBACK|fetch\(['"]\/feedback/);
 });

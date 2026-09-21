@@ -64,20 +64,6 @@ window.CHAT_UI_TEXT = {
     "input_label": "복지정보 질문",
     "mic_label": "음성으로 질문",
     "send_label": "질문 보내기",
-    "feedback": {
-      "question": "답변이 도움이 되었나요?",
-      "reasons": [
-        "정보가 맞지 않음",
-        "설명이 부족함",
-        "기타"
-      ],
-      "input_placeholder": "상세 의견을 입력해 주세요",
-      "send": "전송",
-      "sending": "저장 중...",
-      "send_failed": "오류로 저장 여부를 확인하지 못했어요. 작성 내용은 유지했어요. 다시 전송할 수 있지만, 이미 저장됐다면 중복될 수 있어요.",
-      "thanks_good": "의견 감사합니다.",
-      "thanks_bad": "개선에 참고하겠습니다."
-    },
     "tips": [
       "그림책을 보며 아이가 가리키는 그림에 함께 관심을 가져보세요.",
       "아이의 말을 끝까지 듣고 대답할 시간을 주세요.",
@@ -88,7 +74,16 @@ window.CHAT_UI_TEXT = {
       "다른 아이와 비교하기보다 아이가 새롭게 해낸 일을 이야기해 주세요.",
       "부모에게도 쉬는 시간이 필요해요. 가능한 도움을 주변에 요청해 보세요."
     ],
-    "tip_label": "아이와 함께하는 일상 팁"
+    "tip_label": "아이와 함께하는 일상 팁",
+    "contact": {
+      "label": "문의 · 불편 신고",
+      "subject": "복지정보 챗봇 문의",
+      "open": "메일 앱 열기",
+      "copy": "주소 복사",
+      "copied": "이메일 주소를 복사했어요.",
+      "copy_failed": "위 이메일 주소를 길게 누르거나 선택해 복사해 주세요.",
+      "note": "주소를 누르면 메일 앱이 열려요. 대화 내용은 자동 첨부되지 않아요. 주민등록번호 등 민감한 정보는 보내지 마세요."
+    }
   },
   "en": {
     "title": "Dobong Child Welfare Guide",
@@ -154,20 +149,6 @@ window.CHAT_UI_TEXT = {
     "input_label": "Welfare question",
     "mic_label": "Ask by voice",
     "send_label": "Send question",
-    "feedback": {
-      "question": "Was this helpful?",
-      "reasons": [
-        "Incorrect information",
-        "Not enough detail",
-        "Other"
-      ],
-      "input_placeholder": "Tell us more",
-      "send": "Send",
-      "sending": "Saving...",
-      "send_failed": "We could not confirm saving. Your draft is kept. You can send again, but this may create a duplicate if it was already saved.",
-      "thanks_good": "Thank you for your feedback.",
-      "thanks_bad": "Thank you. We will review it."
-    },
     "tips": [
       "While reading a picture book, notice the pictures your child points to.",
       "Listen to the end of your child's words and give them time to respond.",
@@ -178,7 +159,16 @@ window.CHAT_UI_TEXT = {
       "Notice what your child has newly learned, rather than comparing them with others.",
       "Parents need breaks too. Ask people around you for help when possible."
     ],
-    "tip_label": "Everyday parenting tip"
+    "tip_label": "Everyday parenting tip",
+    "contact": {
+      "label": "Contact · Report a problem",
+      "subject": "Welfare chatbot inquiry",
+      "open": "Open email app",
+      "copy": "Copy address",
+      "copied": "Email address copied.",
+      "copy_failed": "Select or long-press the email address above to copy it.",
+      "note": "Tap the address to open your email app. Chat history is not attached automatically. Please do not send sensitive personal information."
+    }
   },
   "vi": {
     "title": "Cẩm nang phúc lợi trẻ em Dobong",
@@ -244,20 +234,6 @@ window.CHAT_UI_TEXT = {
     "input_label": "Câu hỏi về phúc lợi",
     "mic_label": "Hỏi bằng giọng nói",
     "send_label": "Gửi câu hỏi",
-    "feedback": {
-      "question": "Câu trả lời có hữu ích không?",
-      "reasons": [
-        "Thông tin sai",
-        "Thiếu chi tiết",
-        "Khác"
-      ],
-      "input_placeholder": "Nhập ý kiến chi tiết",
-      "send": "Gửi",
-      "sending": "Đang lưu...",
-      "send_failed": "Không thể xác nhận việc lưu. Nội dung vẫn được giữ lại. Bạn có thể gửi lại, nhưng có thể bị trùng nếu đã được lưu.",
-      "thanks_good": "Cảm ơn phản hồi của bạn.",
-      "thanks_bad": "Chúng tôi sẽ xem xét ý kiến của bạn."
-    },
     "tips": [
       "Khi xem sách tranh, hãy cùng chú ý đến hình mà trẻ chỉ vào.",
       "Lắng nghe trẻ nói hết và cho trẻ thời gian trả lời.",
@@ -268,7 +244,16 @@ window.CHAT_UI_TEXT = {
       "Hãy ghi nhận điều trẻ mới làm được thay vì so sánh với trẻ khác.",
       "Cha mẹ cũng cần nghỉ ngơi. Hãy nhờ người xung quanh giúp khi có thể."
     ],
-    "tip_label": "Gợi ý hằng ngày cùng trẻ"
+    "tip_label": "Gợi ý hằng ngày cùng trẻ",
+    "contact": {
+      "label": "Liên hệ · Báo sự cố",
+      "subject": "Liên hệ về chatbot phúc lợi",
+      "open": "Mở ứng dụng email",
+      "copy": "Sao chép địa chỉ",
+      "copied": "Đã sao chép địa chỉ email.",
+      "copy_failed": "Chọn hoặc nhấn giữ địa chỉ email ở trên để sao chép.",
+      "note": "Nhấn vào địa chỉ để mở ứng dụng email. Lịch sử trò chuyện không được tự động đính kèm. Vui lòng không gửi thông tin cá nhân nhạy cảm."
+    }
   },
   "zh": {
     "title": "道峰区婴幼儿福利指南",
@@ -334,20 +319,6 @@ window.CHAT_UI_TEXT = {
     "input_label": "福利信息问题",
     "mic_label": "语音提问",
     "send_label": "发送问题",
-    "feedback": {
-      "question": "回答对您有帮助吗？",
-      "reasons": [
-        "信息不准确",
-        "说明不足",
-        "其他"
-      ],
-      "input_placeholder": "请输入详细意见",
-      "send": "发送",
-      "sending": "正在保存...",
-      "send_failed": "无法确认是否保存，已保留填写内容。您可以再次发送，但若已保存，可能产生重复记录。",
-      "thanks_good": "感谢您的反馈。",
-      "thanks_bad": "我们会参考您的意见改进。"
-    },
     "tips": [
       "一起看绘本时，关注孩子指着的图画。",
       "听孩子把话说完，并给孩子回应的时间。",
@@ -358,6 +329,15 @@ window.CHAT_UI_TEXT = {
       "关注孩子新学会的事情，不必与其他孩子比较。",
       "父母也需要休息，可以向身边的人寻求帮助。"
     ],
-    "tip_label": "日常亲子小贴士"
+    "tip_label": "日常亲子小贴士",
+    "contact": {
+      "label": "联系我们 · 问题反馈",
+      "subject": "福利信息聊天机器人咨询",
+      "open": "打开邮件应用",
+      "copy": "复制地址",
+      "copied": "已复制邮箱地址。",
+      "copy_failed": "请选择或长按上方邮箱地址进行复制。",
+      "note": "点击地址可打开邮件应用。聊天记录不会自动附加。请勿发送敏感个人信息。"
+    }
   }
 };

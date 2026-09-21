@@ -12,12 +12,12 @@
     <link rel="preload" href="/static/ONE Mobile POP.ttf" as="font" type="font/ttf" crossorigin>
     <link rel="preload" href="/static/SF-Pro.ttf" as="font" type="font/ttf" crossorigin>
 
-    <link rel="stylesheet" href="/static/style.css?v=2026.09.21-tidy">
+    <link rel="stylesheet" href="/static/style.css?v=2026.09.21-contact">
 
     <script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
-    <script src="/static/ui-text.js?v=2026.09.21-tidy"></script>
-    <script src="/static/script.js?v=2026.09.21-tidy" defer></script>
+    <script src="/static/ui-text.js?v=2026.09.21-contact"></script>
+    <script src="/static/script.js?v=2026.09.21-contact" defer></script>
 
     <script>
         window.currentLang = 'ko'; 
@@ -79,6 +79,7 @@
                     <div style="text-align: right; margin-top: 8px;">
                         <span id="time-notice" class="service-notice">관련 정보를 안내하며, 최종 지원 여부는 담당 기관에서 확인해 주세요.</span>
                     </div>
+                    <div id="welcome-contact"></div>
                 </div>
             </div>
         </div>
@@ -122,6 +123,11 @@
             document.title = data.title;
             if (welcomeEl) welcomeEl.innerHTML = data.welcome;
             if (timeEl) timeEl.innerText = data.time;
+            const contact = document.getElementById('welcome-contact');
+            if (contact && typeof addContactActions === 'function') {
+                contact.innerHTML = '';
+                addContactActions(contact, lang);
+            }
             if (inputEl) { inputEl.placeholder = data.placeholder; inputEl.setAttribute('aria-label', data.input_label); }
             if (typeof syncInputAvailability === 'function') syncInputAvailability();
             document.getElementById('mic-btn')?.setAttribute('aria-label', data.mic_label);

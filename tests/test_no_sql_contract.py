@@ -169,7 +169,7 @@ class RouteTests(unittest.TestCase):
         with patch.object(main, "notion", None):
             result = self.client.post("/feedback", json={"question": "질문", "answer": "답변",
                                       "job_id": "test-id", "feedback": "👍"})
-        self.assertEqual(result.status_code, 503)
+        self.assertEqual(result.status_code, 410)
         self.assertEqual(self.rate_limit.await_args.kwargs, {"limit": 5, "window": 300, "scope": "feedback"})
 
     def test_question_limit_accepts_unicode_codepoints_at_boundary(self):
@@ -253,24 +253,21 @@ class RouteTests(unittest.TestCase):
         self.assertRegex(result.headers["x-request-id"], r"^[0-9a-f]{32}$")
         self.assertNotIn("secret failure", result.text)
 
-    def test_feedback_omits_empty_reason_and_handles_null_history(self):
+    def test_retired_feedback_never_writes_to_notion(self):
         pages = Mock()
         with patch.object(main, "notion", SimpleNamespace(pages=pages)):
             result = self.client.post("/feedback", json={"question": "질문", "answer": "답변",
                 "job_id": "test-id", "feedback": "👍", "chat_history": None, "comment": None})
-        self.assertEqual(result.json()["status"], "success")
-        props = pages.create.call_args.kwargs["properties"]
-        self.assertNotIn("사유", props)
-        self.assertEqual(props["대화내역"]["rich_text"][0]["text"]["content"], "")
+        self.assertEqual(result.status_code, 410)
+        self.assertIn("email", result.json()["detail"])
+        pages.create.assert_not_called()
 
-    def test_feedback_failure_is_not_success(self):
-        pages = Mock()
-        pages.create.side_effect = RuntimeError("do not expose")
-        with patch.object(main, "notion", SimpleNamespace(pages=pages)):
+    def test_retired_feedback_does_not_require_notion(self):
+        with patch.object(main, "notion", None):
             result = self.client.post("/feedback", json={"question": "질문", "answer": "답변",
                 "job_id": "test-id", "feedback": "👎"})
-        self.assertEqual(result.status_code, 503)
-        self.assertNotIn("do not expose", result.text)
+        self.assertEqual(result.status_code, 410)
+        self.assertNotIn("success", result.text)
 
 class WorkerContractTests(unittest.IsolatedAsyncioTestCase):
     async def test_worker_keeps_tuple_and_existing_calls_with_trace(self):

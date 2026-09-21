@@ -643,10 +643,9 @@ def get_job_result(job_id: str):
         logger.error("작업 결과 조회 오류: %s", type(e).__name__)
         raise HTTPException(status_code=500, detail="작업 결과를 조회할 수 없습니다.")
 
-# --- 피드백 DB ---
-FEEDBACK_DB_ID = os.getenv("NOTION_FEEDBACK_DB_ID", "2c18ade5021080448ab8d304b4777fe5")
+# --- Retired feedback endpoint: old browser tabs must not write to Notion. ---
 
-# [수정] FeedbackRequest 모델 확장
+# Keep validation and rate limiting for stale browser clients.
 class FeedbackRequest(BaseModel):
     job_id: str = Field(min_length=1, max_length=128)
     question: str = Field(min_length=1, max_length=4000)
@@ -659,22 +658,4 @@ class FeedbackRequest(BaseModel):
 @app.post("/feedback")
 async def handle_feedback(feedback_data: FeedbackRequest, request: Request):
     await check_rate_limit(request, limit=5, window=300, scope="feedback")
-    if not notion:
-        raise HTTPException(status_code=503,detail="Notion unavailable")
-    props = {
-        "질문":{"title":[{"text":{"content":feedback_data.question[:2000]}}]},
-        "답변":{"rich_text":[{"text":{"content":feedback_data.answer[:2000]}}]},
-        "평가":{"select":{"name":feedback_data.feedback}},
-        "대화내역":{"rich_text":[{"text":{"content":(feedback_data.chat_history or "")[:2000]}}]},
-        "상세의견":{"rich_text":[{"text":{"content":(feedback_data.comment or "")[:2000]}}]},
-        "작업ID":{"rich_text":[{"text":{"content":feedback_data.job_id}}]},
-    }
-    if feedback_data.reason:
-        props["사유"]={"select":{"name":feedback_data.reason}}
-    try:
-        await asyncio.wait_for(asyncio.to_thread(notion.pages.create,
-            parent={"database_id":FEEDBACK_DB_ID}, properties=props),10)
-        return {"status":"success"}
-    except Exception as error:
-        logger.error("피드백 저장 실패: %s",type(error).__name__)
-        raise HTTPException(status_code=503,detail="저장 실패") from error
+    raise HTTPException(status_code=410, detail="Feedback moved to email. Refresh the page and use Contact.")
