@@ -282,7 +282,7 @@ test('라이트 모드만 선언하고 다크 시스템 테마 분기를 제거�
     assert.match(html,/<meta name="color-scheme" content="only light">/);
     assert.ok(html.indexOf('name="color-scheme"') < html.indexOf('rel="stylesheet"'));
     for (const source of [css,html,js]) assert.doesNotMatch(source,/prefers-color-scheme\s*:\s*dark/i);
-    assert.match(html,/style\.css\?v=2026\.09\.21-compact/);
+    assert.match(html,/style\.css\?v=2026\.09\.21-tidy/);
 });
 
 test('라이트 고정 후에도 동작 줄이기와 사용자 고대비 설정을 방해하지 않는다', () => {
@@ -963,7 +963,7 @@ test('로딩 팁은 원본 3줄 스켈레톤과 14px 진행 문구·12px 팁을 
 test('더 보기는 작은 보조 버튼 크기와 명시적인 button 타입을 유지한다',async()=>{
     const css=fs.readFileSync('static/style.css','utf8');
     const rule=css.match(/\.show-more-btn\s*\{([^}]+)\}/)[1];
-    for(const token of ['font-size: 13px','min-height: 32px','padding: 5px 12px','width: auto','max-width: 100%']) assert.ok(rule.includes(token));
+    for(const token of ['font-size: 13px','min-height: 32px','padding: 5px 12px','width: fit-content','max-width: 100%']) assert.ok(rule.includes(token));
     const c=setup(),box=element();
     await c.renderChatResponse({status:'complete',answer:'ok',last_result_ids:['1','2','3'],total_found:3},box,'질문',0);
     assert.equal(box.children[0].type,'button');
@@ -1001,4 +1001,71 @@ test('일반 문장·링크·마지막 빈 소제목은 소제목으로 바꾸�
     rows.push({textContent:'운영 목적:',nextElementSibling:null,classList:{add:()=>changed++}});
     c.decorateCardSubheadings({querySelectorAll:()=>rows});
     assert.equal(changed,0);
+});
+
+
+function presentationBox({notes=[],items=[],paragraphs=[]}={}) {
+    return {querySelectorAll:selector=>({
+        '.result-card .source-note':notes, '.card-body li':items, ':scope > p':paragraphs
+    }[selector] || [])};
+}
+function removable(text) {
+    return {textContent:text,removed:false,remove(){this.removed=true}};
+}
+
+test('자료 수정 날짜만 화면에서 제거하고 번역 경고와 본문 날짜는 유지한다',()=>{
+    const c=setup();
+    const notes=['자료 수정','Document updated','Cập nhật tài liệu','资料更新']
+      .map(label=>removable(label+': 2026-03-05 · 안내'));
+    const warning=removable('번역이 준비되지 않은 부분은 한국어 원문으로 표시해요.');
+    const date=removable('신청 기간: 2026-03-05부터');
+    const box=presentationBox({notes:[...notes,warning,date]});
+    c.tidyResultPresentation(box);
+    assert.ok(notes.every(note=>note.removed));
+    assert.equal(warning.removed,false);assert.equal(date.removed,false);
+});
+
+test('목록 앞 쉼표만 정리하고 금액·소수·문장 안 쉼표·HTML 요소는 보존한다',()=>{
+    const c=setup();
+    const cases=[
+        [', 정확한 진단을 위한 대면 검사 실시','정확한 진단을 위한 대면 검사 실시'],
+        [' ， Additional assessment','Additional assessment'],
+        [', Kiểm tra trực tiếp','Kiểm tra trực tiếp'],
+        ['， 进行检查','进行检查'],
+        ['100,000원','100,000원'],['0,5','0,5'],[',5',',5'],[', 100원',', 100원'],
+        ['일반, 장애/발달지연','일반, 장애/발달지연']
+    ];
+    const items=cases.map(([text])=>({firstChild:{nodeType:3,nodeValue:text}}));
+    const nested={firstChild:{nodeType:1,nodeValue:null}};
+    c.tidyResultPresentation(presentationBox({items:[...items,nested]}));
+    cases.forEach(([,expected],i)=>assert.equal(items[i].firstChild.nodeValue,expected));
+    assert.equal(nested.firstChild.nodeValue,null);
+});
+
+test('더 보기 반복 안내와 해당 구분선만 없애고 원문 안내·마지막 결과 안내는 보존한다',()=>{
+    const c=setup();
+    for(const text of [
+        '아래 ‘더 보기’에서 다음 결과를 확인할 수 있어요.',
+        'Use ‘Show more’ below to see the next results.',
+        'Chọn ‘Xem thêm’ bên dưới để xem các kết quả tiếp theo.',
+        '点击下方“更多”查看后续结果。'
+    ]){
+        const note=removable(text),hr=removable('');hr.tagName='HR';note.previousElementSibling=hr;
+        const source=removable('지원 대상·신청 방법은 자료 원문과 담당 기관에서 확인해 주세요.');
+        const end=removable('모든 결과를 확인했습니다.');
+        c.tidyResultPresentation(presentationBox({paragraphs:[note,source,end]}));
+        assert.equal(note.removed,true);assert.equal(hr.removed,true);
+        assert.equal(source.removed,false);assert.equal(end.removed,false);
+    }
+});
+
+test('캐시 답변도 표시 정리를 거치고 더 보기는 중앙에 배치한다',async()=>{
+    const c=setup(),box=element();let called=0;
+    c.tidyResultPresentation=()=>called++;
+    await c.renderChatResponse({status:'complete',answer:'cached',last_result_ids:['1','2','3'],total_found:3},box,'질문',0);
+    assert.equal(called,1);
+    assert.equal(box.children[0].className,'show-more-btn');
+    const css=fs.readFileSync('static/style.css','utf8');
+    const rule=css.match(/\.show-more-btn\s*\{([^}]+)\}/)[1];
+    assert.match(rule,/margin: 12px auto 0/);assert.match(rule,/display: flex/);
 });

@@ -1416,9 +1416,9 @@ body {
 }
 
 .show-more-btn {
-    display: inline-flex; align-items: center; justify-content: center;
-    margin-top: 8px; padding: 5px 12px; min-height: 32px;
-    max-width: 100%; width: auto;
+    display: flex; align-items: center; justify-content: center;
+    margin: 12px auto 0; padding: 5px 12px; min-height: 32px;
+    max-width: 100%; width: fit-content;
     border: 1px solid #E2D6AE; border-radius: 16px;
     color: #594B2B; background: #FFF9E7;
     font-family: inherit; font-size: 13px; font-weight: 500; line-height: 1.4;

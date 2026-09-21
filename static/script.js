@@ -762,6 +762,33 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 });
 
+function tidyResultPresentation(container) {
+    // Presentation only. Keep timestamps in the source/cache for freshness checks.
+    const dateNote = /^(?:자료 수정|Document updated|Cập nhật tài liệu|资料更新)\s*[:：]\s*\d{4}-\d{2}-\d{2}\s*·/u;
+    container.querySelectorAll('.result-card .source-note').forEach(note => {
+        if (dateNote.test(note.textContent.trim())) note.remove();
+    });
+    // Remove only a stray leading comma before text, never numeric/grouping commas.
+    container.querySelectorAll('.card-body li').forEach(item => {
+        const first = item.firstChild;
+        if (first?.nodeType === 3) {
+            first.nodeValue = first.nodeValue.replace(/^\s*[,，]\s+(?=\p{L})/u, '');
+        }
+    });
+    const redundantMoreHints = new Set([
+        '아래 ‘더 보기’에서 다음 결과를 확인할 수 있어요.',
+        'Use ‘Show more’ below to see the next results.',
+        'Chọn ‘Xem thêm’ bên dưới để xem các kết quả tiếp theo.',
+        '点击下方“更多”查看后续结果。'
+    ]);
+    container.querySelectorAll(':scope > p').forEach(note => {
+        if (!redundantMoreHints.has(note.textContent.trim())) return;
+        const divider = note.previousElementSibling;
+        if (divider?.tagName === 'HR') divider.remove();
+        note.remove();
+    });
+}
+
 function decorateCardSubheadings(container) {
     // Display-only: applies to cached answers too, without rewriting source content.
     const heading = /^(?:운영\s*목적|기본\s*검사\s*\(무료\)|Purpose|Basic\s+(?:check|assessment)\s*\(free\)|Mục đích|Kiểm tra cơ bản\s*\(miễn phí\)|服务目的|基本检查\s*[（(]免费[）)])\s*[:：]\s*$/iu;
@@ -773,6 +800,7 @@ function decorateCardSubheadings(container) {
 }
 
 function translateCardButtons(container) {
+    tidyResultPresentation(container);
     decorateCardSubheadings(container);
     const copy = getRequestMessages();
     container.querySelectorAll('.detail-link').forEach(el => { el.innerText = copy.detail; });
