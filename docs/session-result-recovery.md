@@ -57,3 +57,8 @@ KO/EN/VI/ZH에서 일반 재전송과 구분되는 '결과 다시 확인' 문구
 
     python -m unittest discover -s tests -p "test_*.py" -q
     node --test --test-reporter=tap tests/frontend.test.cjs
+
+## 후속 변경
+
+이 문서의 구형 Redis 답변 캐시 한도 검증 경로는 후속 작업에서 제거되었다.
+[피드백 복구·구형 캐시 정리](feedback-cache-cleanup.md)를 참고하세요.

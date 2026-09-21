@@ -44,7 +44,7 @@ test('피드백 HTTP 실패를 성공 메시지로 표시하지 않는다',async
     const c=setup(); c.box=element();
     c.fetch=async()=>({ok:false,status:503});
     await vm.runInContext("submitFeedback('id','질문','답변','👍',box,'')",c);
-    assert.match(c.box.textContent,/오류/);
+    assert.match(c.box.children.find(child=>child.className==='feedback-status').textContent,/오류/);
     assert.doesNotMatch(c.box.innerHTML,/feedback-success/);
 });
 test('피드백 저장 확인 후에만 성공 표시한다',async()=>{
@@ -742,4 +742,135 @@ test('재조회 중 오프라인이면 GET도 새 POST도 보내지 않는다',a
     await c.boxes[0].children[0].onclick();
     assert.equal(count,2);
     assert.equal(c.window.isChatBusy(),false);
+});
+
+function feedbackContext(lang='ko') {
+    const c=setup();c.window.currentLang=lang;
+    const box=element(), input=element(), button=element(), locked=element();
+    input.value='보존할 의견'; locked.disabled=true;
+    box.appendChild(input);box.appendChild(button);box.appendChild(locked);
+    box.querySelectorAll=()=>[input,button,locked];
+    const submit=()=>c.submitFeedback('job','question','answer','👎',box,input.value,'reason','history');
+    const status=()=>box.children.find(child=>child.className==='feedback-status');
+    return {c,box,input,button,locked,submit,status};
+}
+
+test('피드백 오류 후 입력 노드·작성 내용·기존 잠금 상태를 보존한다',async()=>{
+    const {c,box,input,button,locked,submit,status}=feedbackContext();
+    c.fetch=async()=>({ok:false,status:503});
+    await submit();
+    assert.equal(box.children[0],input);
+    assert.equal(input.value,'보존할 의견');
+    assert.equal(input.disabled,false);
+    assert.equal(button.disabled,false);
+    assert.equal(locked.disabled,true);
+    assert.equal(status().textContent,c.window.CHAT_UI_TEXT.ko.feedback.send_failed);
+    assert.equal(box.innerHTML,'');
+});
+
+test('전송 중 피드백 중복 클릭은 요청을 추가하지 않는다',async()=>{
+    const {c,input,button,submit}=feedbackContext();
+    let finish,count=0;
+    c.fetch=()=>{count++;return new Promise(resolve=>{finish=resolve;});};
+    const pending=submit();
+    assert.equal(input.disabled,true);assert.equal(button.disabled,true);
+    await submit();
+    assert.equal(count,1);
+    finish(response({status:'success'}));await pending;
+});
+
+test('저장 성공 후 오래된 피드백 버튼을 호출해도 다시 전송하지 않는다',async()=>{
+    const {c,submit,box}=feedbackContext();let count=0;
+    c.fetch=async()=>{count++;return response({status:'success'});};
+    await submit();await submit();
+    assert.equal(count,1);assert.match(box.innerHTML,/feedback-success/);
+});
+
+test('피드백 실패 후 수동 재전송은 작성 내용·사유·문맥을 유지한다',async()=>{
+    const {c,submit,box}=feedbackContext();const payloads=[];
+    c.fetch=async(url,options)=>{
+        payloads.push(JSON.parse(options.body));
+        return payloads.length===1 ? {ok:false,status:503} : response({status:'success'});
+    };
+    await submit();await submit();
+    assert.equal(payloads.length,2);
+    assert.deepEqual(payloads[0],payloads[1]);
+    assert.equal(payloads[1].comment,'보존할 의견');
+    assert.equal(payloads[1].reason,'reason');
+    assert.match(box.innerHTML,/feedback-success/);
+});
+
+test('오프라인 피드백은 전송하지 않고 초안을 유지한다',async()=>{
+    const {c,submit,input,status}=feedbackContext();let count=0;
+    c.navigator.onLine=false;c.fetch=async()=>{count++;};
+    await submit();
+    assert.equal(count,0);assert.equal(input.value,'보존할 의견');
+    assert.equal(status().textContent,c.window.CHAT_UI_TEXT.ko.offline);
+});
+
+test('피드백 시간 초과는 잠금을 해제하고 초안을 유지한다',async()=>{
+    const {c,submit,input,button,status}=feedbackContext();
+    let timeout,cleared=false;
+    c.setTimeout=(fn,ms)=>{assert.equal(ms,15000);timeout=fn;return 77;};
+    c.clearTimeout=id=>{if(id===77)cleared=true;};
+    c.fetch=(url,options)=>new Promise((resolve,reject)=>{
+        options.signal.addEventListener('abort',()=>reject(new DOMException('timeout','AbortError')));
+    });
+    const pending=submit();timeout();await pending;
+    assert.equal(cleared,true);assert.equal(button.disabled,false);
+    assert.equal(input.value,'보존할 의견');
+    assert.equal(status().textContent,c.window.CHAT_UI_TEXT.ko.feedback.send_failed);
+});
+
+test('피드백 429의 Retry-After 동안 재전송을 차단한다',async()=>{
+    const {c,submit}=feedbackContext();let count=0,now=1000;
+    c.Date={now:()=>now,parse:Date.parse};
+    c.fetch=async()=>{count++;return {ok:false,status:429,headers:{get:()=> '3'}};};
+    await submit();await submit();assert.equal(count,1);
+    now=4001;await submit();assert.equal(count,2);
+});
+
+test('피드백 잘못된 JSON·실패 응답을 성공으로 표시하지 않는다',async()=>{
+    for(const result of [response({status:'error'}),{ok:true,json:async()=>{throw new SyntaxError('bad');}}]){
+        const {c,submit,box,button}=feedbackContext();
+        c.fetch=async()=>result;
+        await submit();
+        assert.doesNotMatch(box.innerHTML,/feedback-success/);
+        assert.equal(button.disabled,false);
+    }
+});
+
+test('피드백 실패 문구는 요청 시작 시 선택한 언어로 표시된다',async()=>{
+    for(const lang of ['ko','en','vi','zh']){
+        const {c,submit,status}=feedbackContext(lang);
+        c.fetch=async()=>{c.window.currentLang='ko';return {ok:false,status:503};};
+        await submit();
+        assert.equal(status().textContent,c.window.CHAT_UI_TEXT[lang].feedback.send_failed);
+    }
+});
+
+test('피드백 사유 변경은 작성 중인 의견을 새 입력창으로 옮긴다',()=>{
+    const {c,box}=feedbackContext();
+    const old=element(), input=element();input.value='이미 작성한 의견';
+    old.querySelector=()=>input;
+    let removed=false;old.remove=()=>{removed=true;};
+    box.querySelector=()=>old;
+    const drafts=[];
+    c.showCommentInput=(...args)=>drafts.push(args.at(-1));
+    c.showFeedbackInput(box,'job','q','a','👎');
+    const reasons=box.children.find(child=>child.className==='reason-container');
+    reasons.children[1].onclick();
+    assert.equal(removed,true);assert.deepEqual(drafts,['이미 작성한 의견']);
+});
+
+test('피드백 입력 화면을 다시 열어도 상태 안내와 429 대기는 유지한다',async()=>{
+    const {c,box,submit,status}=feedbackContext();let count=0;
+    c.fetch=async()=>{count++;return {ok:false,status:429,headers:{get:()=> '60'}};};
+    await submit();
+    const originalStatus=status();
+    box.children=[]; // Simulate the DOM nodes removed by reopening the reason form.
+    await submit();
+    assert.equal(count,1);
+    assert.equal(status(),originalStatus);
+    assert.match(status().textContent,/다시 시도/);
 });

@@ -96,15 +96,36 @@ class RouteTests(unittest.TestCase):
         redis.rpush.assert_awaited_once()
         self.intent.assert_awaited_once()
 
-    def test_legacy_redis_cache_does_not_reset_daily_limit_cookie(self):
-        self.quota_one()
-        redis = SimpleNamespace(hget=AsyncMock(return_value=b'{"status":"complete","answer":"cached"}'))
+    def test_legacy_redis_answer_is_never_used_for_any_language(self):
+        redis = SimpleNamespace(hget=AsyncMock(return_value=b'{"status":"complete","answer":"stale"}'),
+                                rpush=AsyncMock())
         with patch.dict(os.environ, {"VERCEL_ENV": "preview", "FORCE_SYNC_MODE": "false"}), patch.object(main, "redis_async_client", redis):
-            first = self.client.post("/chat", json={"question": "지원"}).json()
-            second = self.client.post("/chat", json={"question": "다른 지원"}).json()
-        self.assertEqual(first["answer"], "cached")
-        self.assertEqual(second["code"], "daily_limit")
-        self.intent.assert_awaited_once()
+            for lang in ("ko", "en", "vi", "zh"):
+                result = self.client.post("/chat", json={"question": "child support", "language": lang}).json()
+                self.assertIn("job_id", result)
+                self.assertNotIn("answer", result)
+        redis.hget.assert_not_awaited()
+        self.assertEqual(redis.rpush.await_count, 4)
+
+    def test_modern_response_cache_still_precedes_redis_queue_and_ai(self):
+        self.read.return_value = cached()
+        redis = SimpleNamespace(hget=AsyncMock(), rpush=AsyncMock())
+        with patch.dict(os.environ, {"VERCEL_ENV": "preview", "FORCE_SYNC_MODE": "false"}), patch.object(main, "redis_async_client", redis):
+            result = self.client.post("/chat", json={"question": "지원"}).json()
+        self.assertEqual(result["answer"], cached()["answer"])
+        self.intent.assert_not_awaited()
+        redis.hget.assert_not_awaited()
+        redis.rpush.assert_not_awaited()
+
+    def test_contextual_followup_never_reads_legacy_redis_answer(self):
+        redis = SimpleNamespace(hget=AsyncMock(return_value=b'{"answer":"wrong context"}'), rpush=AsyncMock())
+        with patch.dict(os.environ, {"VERCEL_ENV": "preview", "FORCE_SYNC_MODE": "false"}), patch.object(main, "redis_async_client", redis):
+            result = self.client.post("/chat", json={"question": "그 조건은?",
+                "chat_history": [{"role": "user", "content": "지원"}]}).json()
+        self.assertIn("job_id", result)
+        self.read.assert_not_awaited()
+        redis.hget.assert_not_awaited()
+        redis.rpush.assert_awaited_once()
 
     def test_direct_worker_still_preserves_daily_limit(self):
         self.quota_one()

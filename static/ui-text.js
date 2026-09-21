@@ -74,6 +74,7 @@ window.CHAT_UI_TEXT = {
       "input_placeholder": "상세 의견을 입력해 주세요",
       "send": "전송",
       "sending": "저장 중...",
+      "send_failed": "오류로 저장 여부를 확인하지 못했어요. 작성 내용은 유지했어요. 다시 전송할 수 있지만, 이미 저장됐다면 중복될 수 있어요.",
       "thanks_good": "의견 감사합니다.",
       "thanks_bad": "개선에 참고하겠습니다."
     }
@@ -152,6 +153,7 @@ window.CHAT_UI_TEXT = {
       "input_placeholder": "Tell us more",
       "send": "Send",
       "sending": "Saving...",
+      "send_failed": "We could not confirm saving. Your draft is kept. You can send again, but this may create a duplicate if it was already saved.",
       "thanks_good": "Thank you for your feedback.",
       "thanks_bad": "Thank you. We will review it."
     }
@@ -230,6 +232,7 @@ window.CHAT_UI_TEXT = {
       "input_placeholder": "Nhập ý kiến chi tiết",
       "send": "Gửi",
       "sending": "Đang lưu...",
+      "send_failed": "Không thể xác nhận việc lưu. Nội dung vẫn được giữ lại. Bạn có thể gửi lại, nhưng có thể bị trùng nếu đã được lưu.",
       "thanks_good": "Cảm ơn phản hồi của bạn.",
       "thanks_bad": "Chúng tôi sẽ xem xét ý kiến của bạn."
     }
@@ -308,6 +311,7 @@ window.CHAT_UI_TEXT = {
       "input_placeholder": "请输入详细意见",
       "send": "发送",
       "sending": "正在保存...",
+      "send_failed": "无法确认是否保存，已保留填写内容。您可以再次发送，但若已保存，可能产生重复记录。",
       "thanks_good": "感谢您的反馈。",
       "thanks_bad": "我们会参考您的意见改进。"
     }

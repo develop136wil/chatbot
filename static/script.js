@@ -492,8 +492,9 @@ function showFeedbackInput(container, jobId, question, answer, feedbackType) {
                 showCommentInput(container, jobId, question, answer, feedbackType, reasonText);
             } else {
                 const existingInput = container.querySelector('.feedback-input-wrapper');
+                const draft = existingInput?.querySelector('input')?.value || '';
                 if (existingInput) existingInput.remove();
-                showCommentInput(container, jobId, question, answer, feedbackType, reasonText);
+                showCommentInput(container, jobId, question, answer, feedbackType, reasonText, draft);
             }
         };
         reasonContainer.appendChild(chip);
@@ -502,7 +503,7 @@ function showFeedbackInput(container, jobId, question, answer, feedbackType) {
 }
 
 // [★수정] 코멘트 입력창 (다국어 지원)
-function showCommentInput(container, jobId, question, answer, feedbackType, selectedReason) {
+function showCommentInput(container, jobId, question, answer, feedbackType, selectedReason, draft = "") {
     const lang = window.currentLang || 'ko';
     const textData = UI_TEXT[lang].feedback;
 
@@ -514,6 +515,7 @@ function showCommentInput(container, jobId, question, answer, feedbackType, sele
     input.className = 'feedback-input';
     input.placeholder = textData.input_placeholder; // "자세한 상황을..." (번역됨)
     input.maxLength = 1000;
+    input.value = draft;
 
     const sendBtn = document.createElement('button');
     sendBtn.textContent = textData.send; // "전송" (번역됨)
@@ -531,35 +533,72 @@ function showCommentInput(container, jobId, question, answer, feedbackType, sele
     setTimeout(() => input.focus(), 100);
 }
 
-// [★수정] 전송 결과 메시지 (다국어 지원)
+// Keep the form nodes (and their draft values) until storage is confirmed.
+const feedbackRequests = new WeakMap();
+const FEEDBACK_TIMEOUT_MS = 15000;
+
 async function submitFeedback(jobId, question, answer, feedbackType, containerElement, comment, reason = "", historyStr = "") {
+    let state = feedbackRequests.get(containerElement);
+    if (state?.busy || state?.saved) return;
     const lang = window.currentLang || 'ko';
-    const textData = UI_TEXT[lang].feedback;
-
-    containerElement.innerHTML = `<p class="feedback-sending">${textData.sending}</p>`;
-
+    const copy = UI_TEXT[lang] || UI_TEXT.ko;
+    const textData = copy.feedback;
+    if (!state) {
+        const status = document.createElement('p');
+        status.className = 'feedback-status';
+        status.setAttribute('role', 'status');
+        status.setAttribute('aria-live', 'polite');
+        state = {busy: false, saved: false, retryAt: 0, status};
+        feedbackRequests.set(containerElement, state);
+    }
+    // Reattach after the user reopens the reason form following a failed vote.
+    containerElement.appendChild(state.status);
+    if (navigator.onLine === false) {
+        state.status.textContent = copy.offline;
+        return;
+    }
+    if (state.retryAt > Date.now()) {
+        state.status.textContent = copy.retry_wait + ' (' + Math.ceil((state.retryAt - Date.now()) / 1000) + 's)';
+        return;
+    }
+    state.busy = true;
+    state.status.textContent = textData.sending;
+    const controls = Array.from(containerElement.querySelectorAll('button, input'));
+    const disabledBefore = controls.map(control => Boolean(control.disabled));
+    controls.forEach(control => { control.disabled = true; });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), FEEDBACK_TIMEOUT_MS);
     try {
         const response = await fetch('/feedback', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
+            signal: controller.signal,
             body: JSON.stringify({
-                job_id: jobId,
-                question: question,
-                answer: String(answer).slice(0, 12000),
-                feedback: feedbackType,
-                comment: comment,
-                reason: reason,
+                job_id: jobId, question: question,
+                answer: String(answer).slice(0, 12000), feedback: feedbackType,
+                comment: comment, reason: reason,
                 chat_history: String(historyStr).slice(0, 20000)
             })
         });
-
-        if (!response.ok) throw new Error('Feedback HTTP '+response.status);
+        if (!response.ok) {
+            if (response.status === 429) {
+                state.retryAt = Date.now() + retryDelay(response.headers?.get('Retry-After'));
+            }
+            const error = new Error('Feedback HTTP ' + response.status);
+            error.rateLimited = response.status === 429;
+            throw error;
+        }
         const result = await response.json();
         if (result.status !== 'success') throw new Error('Feedback not saved');
+        state.saved = true;
         const thanksText = feedbackType === '👍' ? textData.thanks_good : textData.thanks_bad;
-        containerElement.innerHTML = `<p class="feedback-success">${thanksText}</p>`;
+        containerElement.innerHTML = '<p class="feedback-success">' + thanksText + '</p>';
     } catch (error) {
-        containerElement.textContent = getRequestMessages().error;
+        state.status.textContent = error.rateLimited ? copy.rate_limit : textData.send_failed;
+    } finally {
+        clearTimeout(timer);
+        state.busy = false;
+        if (!state.saved) controls.forEach((control, index) => { control.disabled = disabledBefore[index]; });
     }
 }
 

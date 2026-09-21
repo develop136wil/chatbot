@@ -561,15 +561,8 @@ async def chat_with_bot(chat_request: ChatRequest, request: Request):
             "last_result_ids": [], "total_found": 0
         })
 
-    # 5. 캐시 확인 (Redis Async)
-    if not is_redis_down:
-        try:
-            cached_data = await redis_async_client.hget(MAIN_ANSWER_CACHE_KEY, question)
-            if cached_data:
-                logger.info(f"✅ [API] Cache Hit!")
-                remember_last_question(session, question)
-                return json.loads(cached_data.decode('utf-8'))
-        except Exception: pass
+    # Only the language/version-aware Supabase answer cache is used.
+    # The legacy Redis hash does not validate language or document versions.
 
     # 6. 작업 처리 (비상 모드 포함)
     logger.info("[API] Job 생성 및 처리 시작.")
