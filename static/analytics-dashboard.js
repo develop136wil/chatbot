@@ -3,7 +3,7 @@ let adminKey = '', currentReport = null, reportSequence = 0;
 const $ = id => document.getElementById(id);
 const COLORS = ['#187d78','#d29a3d','#5784a0','#a37baf','#83a36a','#8e9699','#bb7b6b'];
 const COUNTS = ['questions','answered','empty','errors','limited','pending','clarify','source_clicks','more','other','retry_attempts','cache_hits','cache_eligible','sessions'];
-const LABELS = {ko:'한국어',en:'영어',vi:'베트남어',zh:'중국어',direct:'직접/출처 없음',website:'홈페이지',qr:'QR 안내',partner:'협력 기관',unknown:'미상',typed:'직접 입력',suggestion:'추천 질문',clarification:'추가 조건 선택'};
+const LABELS = {ko:'한국어',en:'영어',vi:'베트남어',zh:'중국어',ja:'일본어',direct:'직접/출처 없음',website:'홈페이지',qr:'QR 안내',partner:'협력 기관',unknown:'미상',typed:'직접 입력',suggestion:'추천 질문',clarification:'추가 조건 선택'};
 const BUCKETS = ['<1초','1–3초','3–5초','5–10초','10–20초','20–30초','30초 이상'];
 function node(tag, text, cls) {const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;}
 function svgNode(tag, attrs={}) {const n=document.createElementNS('http://www.w3.org/2000/svg',tag);for(const [k,v] of Object.entries(attrs))n.setAttribute(k,v);return n;}

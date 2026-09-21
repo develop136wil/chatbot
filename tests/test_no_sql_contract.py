@@ -40,7 +40,7 @@ def cached():
 
 class CacheContractTests(unittest.TestCase):
     def test_repeat_with_result_ids_remains_cache_eligible(self):
-        for lang in ("ko", "en", "vi", "zh"):
+        for lang in ("ko", "en", "vi", "zh", "ja"):
             req = main.ChatRequest(question="아동수당 지급", language=lang,
                 last_result_ids=["p1"], shown_count=1,
                 chat_history=[{"role": "user", "content": "아동수당 지급"},
@@ -57,7 +57,7 @@ class CacheContractTests(unittest.TestCase):
         self.assertFalse(main.is_response_cache_read_eligible(req, req.question, "ko"))
 
     def test_language_system_suffix_preserves_repeat_cache_key(self):
-        for lang, name in (("en", "English"), ("vi", "Vietnamese"), ("zh", "Chinese")):
+        for lang, name in (("en", "English"), ("vi", "Vietnamese"), ("zh", "Chinese"), ("ja", "Japanese")):
             text = "지원 (System: Please answer strictly in " + name + ".)"
             req = main.ChatRequest(question=text, language=lang,
                 last_result_ids=["p1"], shown_count=1,
@@ -66,8 +66,8 @@ class CacheContractTests(unittest.TestCase):
             self.assertTrue(main.is_response_cache_read_eligible(req, text, lang))
 
     def test_languages_still_have_distinct_cache_keys(self):
-        keys = {utils.build_response_cache_key("지원", lang) for lang in ("ko","en","vi","zh")}
-        self.assertEqual(len(keys), 4)
+        keys = {utils.build_response_cache_key("지원", lang) for lang in ("ko","en","vi","zh","ja")}
+        self.assertEqual(len(keys), 5)
 
 
 class RouteTests(unittest.TestCase):
@@ -100,12 +100,12 @@ class RouteTests(unittest.TestCase):
         redis = SimpleNamespace(hget=AsyncMock(return_value=b'{"status":"complete","answer":"stale"}'),
                                 rpush=AsyncMock())
         with patch.dict(os.environ, {"VERCEL_ENV": "preview", "FORCE_SYNC_MODE": "false"}), patch.object(main, "redis_async_client", redis):
-            for lang in ("ko", "en", "vi", "zh"):
+            for lang in ("ko", "en", "vi", "zh", "ja"):
                 result = self.client.post("/chat", json={"question": "child support", "language": lang}).json()
                 self.assertIn("job_id", result)
                 self.assertNotIn("answer", result)
         redis.hget.assert_not_awaited()
-        self.assertEqual(redis.rpush.await_count, 4)
+        self.assertEqual(redis.rpush.await_count, 5)
 
     def test_modern_response_cache_still_precedes_redis_queue_and_ai(self):
         self.read.return_value = cached()
@@ -202,7 +202,7 @@ class RouteTests(unittest.TestCase):
         self.save.assert_not_awaited()
 
     def test_more_without_ids_needs_no_ai_or_cache(self):
-        for lang in ("ko", "en", "vi", "zh"):
+        for lang in ("ko", "en", "vi", "zh", "ja"):
             result = self.client.post("/chat", json={"question": "next", "action": "more", "language": lang})
             self.assertEqual(result.json()["answer"], utils.LOCALIZED_UI[lang]["no_more"])
         self.intent.assert_not_awaited()
@@ -449,7 +449,7 @@ class UXFailureTests(unittest.IsolatedAsyncioTestCase):
         source=[{"metadata":{"title":"원문","pre_summary":"원문 요약","category":"돌봄/양육"}}]
         original=deepcopy(source)
         with patch.object(utils,"LIVE_TRANSLATION_ENABLED",False), patch.object(utils,"translate_content_simple_async",AsyncMock()) as translate:
-            for lang in ("en","vi","zh"):
+            for lang in ("en","vi","zh","ja"):
                 result=await utils.localize_result_pages_async(source,lang)
                 self.assertTrue(result[0]["metadata"]["_translation_missing"])
                 rendered=utils.format_search_results([result[0]["metadata"]],lang)
@@ -487,7 +487,7 @@ class UXContentTests(unittest.TestCase):
 
     def test_source_and_real_date_labels_in_all_languages(self):
         meta={"title":"자료","category":"분류","pre_summary":"대상: 아이","page_url":"https://example.test/source","last_edited_time":"2026-08-02T10:00:00Z"}
-        for lang in ("ko","en","vi","zh"):
+        for lang in ("ko","en","vi","zh","ja"):
             html=utils.format_search_results([meta],lang)
             self.assertIn(utils.LOCALIZED_UI[lang]["source_label"],html)
             self.assertIn("2026-08-02",html)
@@ -578,18 +578,18 @@ class DeploymentIntegrationTests(unittest.TestCase):
         self.intent.assert_not_awaited()
         self.read.assert_not_awaited()
 
-    def test_four_language_first_repeat_cache_and_more_without_extra_ai(self):
+    def test_five_language_first_repeat_cache_and_more_without_extra_ai(self):
         rows = []
         for i in range(3):
             meta = {"page_id": f"p{i}", "title": f"자료 {i}",
                     "category": "돌봄/양육", "pre_summary": "지원 내용: 테스트 안내",
                     "page_url": f"https://example.org/p{i}"}
-            for lang in ("en", "vi", "zh"):
+            for lang in ("en", "vi", "zh", "ja"):
                 meta[f"title_{lang}"] = f"{lang} document {i}"
                 meta[f"pre_summary_{lang}"] = f"{lang} prepared summary"
             rows.append({"metadata": meta})
 
-        for lang in ("ko", "en", "vi", "zh"):
+        for lang in ("ko", "en", "vi", "zh", "ja"):
             with self.subTest(language=lang), ExitStack() as patches:
                 self.client.cookies.clear()
                 self.intent.reset_mock()
@@ -650,3 +650,27 @@ class DeploymentIntegrationTests(unittest.TestCase):
         self.assertEqual(empty["answer"], utils.LOCALIZED_UI["ko"]["not_found"])
         self.assertEqual(empty["total_found"], 0)
         save.assert_not_awaited()
+
+class JapaneseLanguageTests(unittest.TestCase):
+    def test_japanese_code_suffix_and_kana_detection(self):
+        self.assertEqual(utils.resolve_language("ja"), "ja")
+        self.assertEqual(utils.resolve_language(None, "System: Please answer strictly in Japanese"), "ja")
+        self.assertEqual(utils.detect_language("児童手当について知りたい"), "ja")
+        self.assertEqual(set(utils.LOCALIZED_UI["ja"]), set(utils.LOCALIZED_UI["ko"]))
+
+    def test_japanese_fullwidth_colon_is_a_heading_not_content(self):
+        rendered = utils.format_search_results([{"title":"案内","pre_summary":"支援内容：毎月100,000ウォン\n対象：生後24か月の子ども"}], "ja")
+        self.assertIn("毎月100,000ウォン", rendered)
+        self.assertIn("card-list-header", rendered)
+        self.assertNotIn(">：", rendered)
+
+    def test_translation_prompt_requests_only_missing_japanese_and_preserves_korean_rules(self):
+        with patch.object(utils,"GROQ_SYNC_CLIENT",object()), patch.object(utils,"call_groq_sync_robust",
+                return_value='{"ja":{"title":"案内","content":"韓国の支援"}}') as call:
+            result=utils.translate_content_multilingual_sync("사업","월 100000원",languages=["ja"])
+        self.assertEqual(result["ja"]["title"],"案内")
+        prompt=call.call_args.args[0]
+        self.assertIn("Japanese",prompt)
+        self.assertNotIn('"en":',prompt)
+        self.assertIn("currency (KRW)",prompt)
+        self.assertIn("NOT programs of Japan",prompt)

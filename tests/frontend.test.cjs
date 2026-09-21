@@ -48,7 +48,7 @@ test('응답 공통 경로가 버튼 번역·더 보기·이메일 문의를 처
     vm.runInContext("translateCardButtons=()=>{localized++};",c);
     await vm.runInContext("renderChatResponse({status:'complete',answer:'answer',last_result_ids:['a','b','c'],shown_count:2,job_id:'fresh-id'},box,'질문',0)",c);
     assert.equal(c.localized,1);
-    assert.equal(c.box.children[0].className,'show-more-btn');
+    assert.equal(c.box.children[0].children[0].className,'show-more-btn');
     assert.equal(c.box.children[1].className,'contact-actions');
 });
 test('이전 요청의 늦은 응답이 새 화면을 덮지 않는다',async()=>{
@@ -98,11 +98,11 @@ test('레이아웃 갱신은 읽던 과거 답변의 스크롤 위치를 유지�
     assert.equal(c.document.documentElement.style['--chat-footer-height'],'140px');
     assert.equal(c.document.documentElement.style['--chat-bottom-padding'],'217px');
 });
-test('4개 언어의 더 보기 버튼이 각각 표시된다', async () => {
-    for (const [lang,label] of Object.entries({ko:'결과 더 보기',en:'More results',vi:'Xem thêm kết quả',zh:'查看更多结果'})) {
+test('5개 언어의 더 보기 버튼이 각각 표시된다', async () => {
+    for (const [lang,label] of Object.entries({ko:'결과 더 보기',en:'More results',vi:'Xem thêm kết quả',zh:'查看更多结果',ja:'結果をもっと見る'})) {
         const c=setup();c.window.currentLang=lang;c.box=element();
         await vm.runInContext("renderChatResponse({status:'complete',answer:'ok',last_result_ids:['a','b','c'],shown_count:2},box,'q',0)",c);
-        assert.equal(c.box.children[0].textContent,label);
+        assert.equal(c.box.children[0].children[0].textContent,label);
     }
 });
 test('전송 시 동일 질문 캐시와 더 보기에 필요한 이전 ID를 보존한다', async () => {
@@ -203,7 +203,7 @@ test('모든 언어에 동일한 정적 안내 키가 있다', () => {
     const c=setup();
     const dict=c.window.CHAT_UI_TEXT;
     const keys=Object.keys(dict.ko).sort();
-    for(const lang of ['en','vi','zh']) assert.deepEqual(Object.keys(dict[lang]).sort(),keys);
+    for(const lang of ['en','vi','zh','ja']) assert.deepEqual(Object.keys(dict[lang]).sort(),keys);
     for(const text of Object.values(dict)) {
         assert.ok(text.processing && text.slow && text.offline && text.retry && text.detail);
         assert.doesNotMatch(text.processing,/자격|요건|포장|15~30/);
@@ -266,7 +266,7 @@ test('라이트 모드만 선언하고 다크 시스템 테마 분기를 제거�
     assert.match(html,/<meta name="color-scheme" content="only light">/);
     assert.ok(html.indexOf('name="color-scheme"') < html.indexOf('rel="stylesheet"'));
     for (const source of [css,html,js]) assert.doesNotMatch(source,/prefers-color-scheme\s*:\s*dark/i);
-    assert.match(html,/style\.css\?v=2026\.09\.21-type-glass/);
+    assert.match(html,/style\.css\?v=2026\.09\.21-ja/);
 });
 
 test('라이트 고정 후에도 동작 줄이기와 사용자 고대비 설정을 방해하지 않는다', () => {
@@ -442,7 +442,7 @@ test('오프라인 더 보기 버튼은 입력을 덮거나 새 대화를 만들
     const c=offlineContext();c.box=element();
     await vm.runInContext("renderChatResponse({status:'complete',answer:'답변',last_result_ids:['a','b','c'],shown_count:2},box,'질문',0)",c);
     const before=vm.runInContext('chatHistory.length',c);
-    c.box.children[0].onclick();
+    c.box.children[0].children[0].onclick();
     assert.equal(c.window.sentCount,0);
     assert.equal(c.document.getElementById('user-input').value,'보존할 질문');
     assert.equal(vm.runInContext('chatHistory.length',c),before);
@@ -480,8 +480,8 @@ function lengthContext(lang='ko') {
     return c;
 }
 
-test('4개 언어에서 전송 한도 초과 시 입력·대화·문맥을 보존한다',async()=>{
-    for(const lang of ['ko','en','vi','zh']) {
+test('5개 언어에서 전송 한도 초과 시 입력·대화·문맥을 보존한다',async()=>{
+    for(const lang of ['ko','en','vi','zh','ja']) {
         const c=lengthContext(lang);
         const suffixLength=vm.runInContext("Array.from(buildServerQuestion('')).length",c);
         const value='가'.repeat(2001-suffixLength);
@@ -497,7 +497,7 @@ test('4개 언어에서 전송 한도 초과 시 입력·대화·문맥을 보�
 });
 
 test('언어 지시문 포함 정확히 2000자인 질문은 전송된다',async()=>{
-    for(const lang of ['ko','en','vi','zh']) {
+    for(const lang of ['ko','en','vi','zh','ja']) {
         const c=lengthContext(lang);
         const suffixLength=vm.runInContext("Array.from(buildServerQuestion('')).length",c);
         c.document.getElementById('user-input').value='가'.repeat(2000-suffixLength);
@@ -679,8 +679,8 @@ test('오래된 결과 재조회 버튼은 새 대화 시작 후 작동하지 �
     assert.equal(count,2);
 });
 
-test('결과 재조회 버튼은 4개 언어에서 구분해 표시한다',()=>{
-    for(const lang of ['ko','en','vi','zh']){
+test('결과 재조회 버튼은 5개 언어에서 구분해 표시한다',()=>{
+    for(const lang of ['ko','en','vi','zh','ja']){
         const c=pollingContext(), box=element();
         c.showRequestError(box,{message:'error'},{question:'q',language:lang},'q',0,0,'job');
         assert.equal(box.children[0].textContent,c.window.CHAT_UI_TEXT[lang].retry_result);
@@ -756,7 +756,7 @@ test('글라스 제목의 상위 영역이 불투명한 배경으로 효과를 �
 });
 
 test('육아 팁은 네 언어에서 무작위로 순환하고 바로 같은 팁을 반복하지 않는다',()=>{
-    for(const lang of ['ko','en','vi','zh']){
+    for(const lang of ['ko','en','vi','zh','ja']){
         const c=setup(),tip=element(),box=element();
         box.querySelector=()=>tip;
         let tick,cleared=false;
@@ -828,12 +828,12 @@ test('더 보기는 작은 보조 버튼 크기와 명시적인 button 타입을
     for(const token of ['font-size: 13px','min-height: 32px','padding: 5px 12px','width: fit-content','max-width: 100%']) assert.ok(rule.includes(token));
     const c=setup(),box=element();
     await c.renderChatResponse({status:'complete',answer:'ok',last_result_ids:['1','2','3'],total_found:3},box,'질문',0);
-    assert.equal(box.children[0].type,'button');
+    assert.equal(box.children[0].children[0].type,'button');
 });
 
 test('최신 답변 화살표는 모든 언어의 접근성 이름과 툴팁을 유지한다',()=>{
     const c=setup();loadHome(c);
-    for(const lang of ['ko','en','vi','zh']){
+    for(const lang of ['ko','en','vi','zh','ja']){
         c.changeLanguage(lang);
         const button=c.document.getElementById('scroll-bottom-btn');
         assert.equal(button.textContent,'↓');
@@ -926,14 +926,14 @@ test('캐시 답변도 표시 정리를 거치고 더 보기는 중앙에 배치
     c.tidyResultPresentation=()=>called++;
     await c.renderChatResponse({status:'complete',answer:'cached',last_result_ids:['1','2','3'],total_found:3},box,'질문',0);
     assert.equal(called,1);
-    assert.equal(box.children[0].className,'show-more-btn');
+    assert.equal(box.children[0].children[0].className,'show-more-btn');
     const css=fs.readFileSync('static/style.css','utf8');
     const rule=css.match(/\.show-more-btn\s*\{([^}]+)\}/)[1];
-    assert.match(rule,/margin: 12px auto 0/);assert.match(rule,/display: flex/);
+    assert.match(rule,/margin: 0 auto/);assert.match(rule,/display: flex/);
 });
 
 
-for (const lang of ['ko','en','vi','zh']) {
+for (const lang of ['ko','en','vi','zh','ja']) {
     test(lang+' 이메일 문의는 주소·제목만 전달하고 대화를 포함하지 않는다',()=>{
         const c=setup(),box=element();
         c.window.currentLang=lang;
@@ -997,7 +997,7 @@ test('첫 안내에는 문의 메뉴 없이 다국어 안내와 통계 고지를
     const html=fs.readFileSync('static/index.html','utf8');
     assert.doesNotMatch(html,/welcome-contact|addContactActions|time-notice/);
     const c=setup();loadHome(c);
-    for (const lang of ['en','vi','zh','ko']) {
+    for (const lang of ['en','vi','zh','ja','ko']) {
         c.changeLanguage(lang);
         assert.equal(c.document.getElementById('welcome-msg').textContent,c.window.CHAT_UI_TEXT[lang].welcome);
         assert.equal(c.document.getElementById('analytics-notice').textContent,c.window.CHAT_UI_TEXT[lang].analytics_notice);
@@ -1051,12 +1051,12 @@ test('원문 클릭 통계 오류는 화면 동작을 실패시키지 않는다'
 });
 
 
-test('4개 언어의 결과 더 보기 버튼은 새 검색 대신 more 요청으로 이전 결과를 이어간다',async()=>{
-    for(const lang of ['ko','en','vi','zh']){
+test('5개 언어의 결과 더 보기 버튼은 새 검색 대신 more 요청으로 이전 결과를 이어간다',async()=>{
+    for(const lang of ['ko','en','vi','zh','ja']){
         const c=setup();c.window.currentLang=lang;c.box=element();
         vm.runInContext("addMessageToBox=()=>({}); fetchChatResponse=async body=>{window.sent=body};",c);
         await vm.runInContext("renderChatResponse({status:'complete',answer:'ok',last_result_ids:['a','b','c'],shown_count:2},box,'q',0)",c);
-        c.box.children[0].onclick();
+        c.box.children[0].children[0].onclick();
         assert.equal(c.window.sent.action,'more');
         assert.deepEqual(Array.from(c.window.sent.last_result_ids),['a','b','c']);
         assert.equal(c.window.sent.shown_count,2);
@@ -1181,7 +1181,7 @@ test('한국어 첫 제목은 의미 단위 두 줄이며 설명의 줄 간격�
 test('상단 브랜드는 작은 크기로 유지하고 고정 높이로 자르지 않는다',()=>{
     const css=fs.readFileSync('static/style.css','utf8');
     assert.match(css,/\.chat-topbar \.chat-header h2\s*\{[^}]*font-size: 15px/);
-    assert.match(css,/\.chat-topbar \.header-icon\s*\{[^}]*width: 24px; height: 24px/);
+    assert.doesNotMatch(fs.readFileSync('static/index.html','utf8'),/class="header-icon"/);
     const header=css.match(/\.chat-topbar \.chat-header\s*\{([^}]+)\}/)[1];
     assert.match(header,/min-height: 50px/);
     assert.doesNotMatch(header,/(?:^|;)\s*height:|overflow: hidden/);
@@ -1189,7 +1189,7 @@ test('상단 브랜드는 작은 크기로 유지하고 고정 높이로 자르�
 
 test('정보 수집 안내 명칭과 Pretendard 제목 굵기를 보존한다',()=>{
     const c=setup();loadHome(c);
-    const expected={ko:'정보 수집 안내',en:'Data collection notice',vi:'Thông báo thu thập thông tin',zh:'信息收集说明'};
+    const expected={ko:'정보 수집 안내',en:'Data collection notice',vi:'Thông báo thu thập thông tin',zh:'信息收集说明',ja:'情報収集について'};
     for(const [lang,label] of Object.entries(expected)){
         c.changeLanguage(lang);
         assert.equal(c.document.getElementById('analytics-label').textContent,label);
@@ -1207,7 +1207,7 @@ test('장식 서체 로딩을 제거하고 추천 질문은 텍스트만 유지�
     assert.match(css,/\.splash-title\s*\{[^}]*font-family: 'Pretendard'/);
     assert.match(css,/body\s*\{[^}]*font-family: 'Pretendard', 'SF Pro', sans-serif/);
     const c=setup();
-    for(const lang of ['ko','en','vi','zh']){
+    for(const lang of ['ko','en','vi','zh','ja']){
         const chips=c.window.CHAT_UI_TEXT[lang].chips;
         assert.equal(chips.length,7);
         for(const chip of chips){
@@ -1231,7 +1231,7 @@ test('입력창 주변 표면은 투명하고 주의 문구는 2px 간격이다'
 test('접기 버튼의 강조를 줄이고 펼침 상태에 따라 세로 중앙을 맞춘다',()=>{
     const c=overlaySetup();
     c.syncInputOverlay();
-    assert.equal(c.document.documentElement.style['--suggestion-toggle-offset'],'20px');
+    assert.equal(c.document.documentElement.style['--suggestion-toggle-offset'],'16px');
     // This test isolates layout measurement; the shared stub has a no-op classList.
     c.document.querySelector('.suggestion-container').classList.contains=name=>name==='hidden';
     c.syncInputOverlay();
@@ -1256,4 +1256,15 @@ test('키보드로 일부만 보이는 추천 질문에 초점을 옮기면 가�
     target.matches=()=>true;target.getBoundingClientRect=()=>({left:-10,right:40});
     c.revealFocusedSuggestion({target});
     assert.equal(tray.scrollLeft,80);
+});
+
+
+test('베이지 입력 포커스는 전체 컨트롤을 감싸고 더 보기에는 구분선과 하단 여백이 있다',()=>{
+    const css=fs.readFileSync('static/style.css','utf8');
+    assert.match(css,/\.composer-controls:focus-within\s*\{[^}]*border-color: #A17B45/);
+    assert.match(css,/\.composer-controls #user-input:focus-visible\s*\{[^}]*outline: none !important/);
+    assert.match(css,/@media \(forced-colors: active\)/);
+    assert.match(css,/\.result-actions\s*\{[^}]*padding: 16px 0 12px/);
+    assert.match(css,/\.result-actions\s*\{[^}]*border-top: 1px solid #DDE2E8/);
+    assert.match(css,/\.suggestion-chip:hover\s*\{[^}]*background-color: #FAF3E7/);
 });

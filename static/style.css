@@ -783,8 +783,8 @@ body {
     }
 }
 .suggestion-chip:hover {
-    background-color: #F9FAFB;
-    border-color: #98A2B3;
+    background-color: #FAF3E7;
+    border-color: #D6BD93;
     color: #101828;
     transform: translateY(-2px);
 }
@@ -802,8 +802,8 @@ body {
     position: fixed; bottom: 82px; right: 16px; z-index: 95;
     width: auto; min-height: 36px; padding: 8px 12px; border-radius: 18px;
     font: inherit;
-    background-color: #F9FAFB;
-    border: 1px solid rgba(203, 213, 224, .8);
+    background-color: #F5F0E7;
+    border: 1px solid #D8C9B0;
     box-shadow: 0 2px 4px rgba(0, 0, 0, .03);
     cursor: pointer;
     display: flex; align-items: center; justify-content: center; gap: 6px;
@@ -811,7 +811,7 @@ body {
 }
 @supports ((backdrop-filter: blur(10px)) or (-webkit-backdrop-filter: blur(10px))) {
     #suggestion-toggle-btn {
-        background-color: rgba(255, 255, 255, .9);
+        background-color: rgba(245, 240, 231, .94);
         backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
     }
 }
@@ -841,7 +841,7 @@ body {
     background-repeat: no-repeat; background-position: center; background-size: contain;
     opacity: .6; transition: transform .2s ease;
 }
-#suggestion-toggle-btn:hover { background-color: #F9FAFB; border-color: #98A2B3; }
+#suggestion-toggle-btn:hover { background-color: #EDE3D3; border-color: #C9AF87; }
 
 /* 활성화(열림->닫힘 전환 시) 아이콘 회전 */
 #suggestion-toggle-btn.active .toggle-icon {
@@ -1193,11 +1193,11 @@ body {
     gap: 8px;
     width: calc(min(100%, 600px) - var(--suggestion-toggle-width, 100px) - 24px);
     left: max(0px, calc(50% - 300px)); transform: none;
-    padding: 10px 4px 10px 16px;
+    padding: 6px 4px 6px 16px;
     /* A separate viewport ends 8px before the toggle; chips never pass behind it. */
     -webkit-mask-image: none;
     mask-image: none;
-    margin-bottom: 8px;
+    margin-bottom: 4px;
     -webkit-overflow-scrolling: touch;
     /* Smooth scroll on iOS */
     scrollbar-width: none;
@@ -1249,9 +1249,13 @@ body {
     transform: translateY(0);
 }
 
+.result-actions {
+    margin-top: 16px; padding: 16px 0 12px;
+    border-top: 1px solid #DDE2E8;
+}
 .show-more-btn {
     display: flex; align-items: center; justify-content: center;
-    margin: 12px auto 0; padding: 5px 12px; min-height: 32px;
+    margin: 0 auto; padding: 5px 12px; min-height: 32px;
     max-width: 100%; width: fit-content;
     border: 1px solid #CBD2DC; border-radius: 16px;
     color: #344054; background: #EAECF0;
@@ -1407,7 +1411,7 @@ body {
 .analytics-disclosure > summary:focus-visible { outline: 2px solid #667085; outline-offset: 3px; }
 #analytics-notice { margin: 6px 0 0; max-width: 360px; text-wrap: pretty; }
 .chat-input-box {
-    flex-direction: column; align-items: stretch; gap: 2px;
+    flex-direction: column; align-items: stretch; gap: 2px; padding-top: 6px;
     background: transparent; border-top: 0;
     backdrop-filter: none; -webkit-backdrop-filter: none;
 }
@@ -1417,6 +1421,27 @@ body {
     border: 1px solid #E4E7EC; border-radius: 24px;
     background: rgba(255,255,255,.88);
 }
-.composer-controls:focus-within { border-color: #B8C0CC; }
+.composer-controls:focus-within {
+    border-color: #A17B45;
+    box-shadow: 0 0 0 3px rgba(190, 158, 109, .12), 0 0 12px rgba(190, 158, 109, .08);
+}
+/* The group ring includes the microphone; keyboard buttons retain their own marker. */
+.composer-controls #user-input:focus-visible { outline: none !important; }
+.composer-controls button:focus-visible { outline: 2px solid #A17B45 !important; outline-offset: 1px; }
+@media (forced-colors: active) {
+    .composer-controls:focus-within { outline: 2px solid Highlight; outline-offset: 2px; }
+    .composer-controls button:focus-visible { outline-color: Highlight !important; }
+}
 .composer-controls #user-input, .composer-controls #user-input:focus { background: transparent; }
 .input-notice { margin: 0; padding: 0 8px; font-size: 10px; line-height: 1.5; color: #667085; text-align: center; overflow-wrap: anywhere; }
+
+/* Five language controls stay reachable above the composer on short screens. */
+.chat-topbar .lang-btn { flex-shrink: 0; }
+@media (max-height: 480px) {
+    .chat-topbar .lang-floating-container {
+        max-height: calc(100dvh - var(--chat-top-height, 50px) - var(--chat-footer-height, 76px) - 80px);
+        overflow-y: auto;
+        padding: 4px;
+        margin: -4px;
+    }
+}

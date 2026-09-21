@@ -45,7 +45,8 @@ const SHOW_MORE_KEYWORDS = new Set([
     "다음", "더", "더 보기", "더 보여줘", "계속", "이어서", "다음거", "다음꺼", "다른거", "다른 거", "또",
     "next", "more", "continue", "show more",
     "tiếp", "tiếp theo", "thêm", "xem thêm", "nữa", "tiếp tục",
-    "更多", "继续", "下", "下一个", "还有吗"
+    "更多", "继续", "下", "下一个", "还有吗",
+    "次へ", "もっと見る", "続き", "ほかの結果"
 ]);
 
 // Statistics use an opaque per-request ID, never the question text or destination URL.
@@ -185,7 +186,7 @@ function canStartChatRequest() {
 // The API limit counts Unicode code points, including the existing language suffix.
 const MAX_QUESTION_LENGTH = 2000;
 function buildServerQuestion(question) {
-    const names = {en: 'English', vi: 'Vietnamese', zh: 'Chinese'};
+    const names = {en: 'English', vi: 'Vietnamese', zh: 'Chinese', ja: 'Japanese'};
     const name = names[window.currentLang];
     return question + (name ? ' \n\n(System: Please answer strictly in ' + name + '.)' : '');
 }
@@ -289,7 +290,7 @@ async function renderChatResponse(data, element, question, sequence) {
         currentTotalFound = 0;
         return;
     }
-    document.querySelectorAll('.show-more-btn').forEach(button => button.remove());
+    document.querySelectorAll('.result-actions, .show-more-btn').forEach(control => control.remove());
     updateChatHistory('assistant', data.answer);
     currentResultIds = data.last_result_ids || [];
     currentTotalFound = data.total_found || 0;
@@ -308,7 +309,10 @@ async function renderChatResponse(data, element, question, sequence) {
             userInput.value = labels[window.currentLang || 'ko'];
             handleFormSubmit();
         };
-        element.appendChild(more);
+        const actions = document.createElement('div');
+        actions.className = 'result-actions';
+        actions.appendChild(more);
+        element.appendChild(actions);
     }
     if (data.status === 'complete') addContactActions(element);
 }
@@ -585,7 +589,7 @@ if (canUseMic) {
         if (micBtn.classList.contains('listening')) {
             recognition.stop();
         } else {
-            recognition.lang = { ko: 'ko-KR', en: 'en-US', vi: 'vi-VN', zh: 'zh-CN' }[window.currentLang || 'ko'];
+            recognition.lang = { ko: 'ko-KR', en: 'en-US', vi: 'vi-VN', zh: 'zh-CN', ja: 'ja-JP' }[window.currentLang || 'ko'];
             recognition.start();
         }
     });
@@ -789,9 +793,9 @@ function syncInputOverlay() {
     const suggestionHeight = suggestionContainer.getBoundingClientRect().height;
     const metrics = overlayMetrics(footer.getBoundingClientRect().height,
         suggestionHeight, toggleRect.height, expanded);
-    // The tray has symmetric vertical padding and an 8px bottom margin.
+    // The tray has symmetric vertical padding and a 4px bottom margin.
     document.documentElement.style.setProperty('--suggestion-toggle-offset',
-        (expanded ? Math.max(0, 8 + (suggestionHeight - toggleRect.height) / 2) : 6) + 'px');
+        (expanded ? Math.max(0, 4 + (suggestionHeight - toggleRect.height) / 2) : 6) + 'px');
     document.documentElement.style.setProperty('--suggestion-toggle-width',
         Math.max(0, Math.ceil(toggleRect.width || 0)) + 'px');
     document.documentElement.style.setProperty('--chat-footer-height', metrics.footer + 'px');

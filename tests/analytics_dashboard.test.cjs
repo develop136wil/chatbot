@@ -23,3 +23,9 @@ test('관리자 키를 브라우저 저장소 또는 URL에 넣는 코드가 없
  assert.doesNotMatch(source,/localStorage|sessionStorage|secret=|password=/);
  assert.match(source,/'X-Admin-Secret':adminKey/);
 });
+
+test('일본어 이용 건수와 차트 이름을 유지한다',()=>{
+ const c=setup(),t=c.sumReport([{stats:{questions:2,languages:{ja:2}}}]);
+ assert.equal(t.languages.ja,2);
+ assert.equal(vm.runInContext('LABELS.ja',c),'일본어');
+});

@@ -14,6 +14,8 @@ class SQLTests(unittest.TestCase):
         cls.db.execute("do $$ begin create role anon; create role authenticated; create role service_role bypassrls; end $$;")
         sql=Path("supabase/20260921_analytics.sql").read_text(encoding="utf-8")
         cls.db.execute(sql);cls.db.execute(sql)  # reapplication must be safe
+        ja_sql=Path("supabase/20260921_japanese_language.sql").read_text(encoding="utf-8")
+        cls.db.execute(ja_sql);cls.db.execute(ja_sql)
         cls.db.execute("grant usage on schema public to anon,authenticated,service_role")
 
     @classmethod
@@ -33,6 +35,15 @@ class SQLTests(unittest.TestCase):
 
     def stats(self):
         return self.db.execute("select public.chatbot_analytics_report(current_date-1,current_date+1)").fetchone()[0]
+
+    def test_japanese_record_survives_migration_reapplication_and_is_reported(self):
+        self.db.execute("select public.chatbot_analytics_begin(%s,%s,%s,'question','ja','qr','typed')",
+            (self.id,self.attempt,"a"*64))
+        self.finish()
+        self.db.execute(Path("supabase/20260921_japanese_language.sql").read_text(encoding="utf-8"))
+        stats=self.stats()["days"][0]["stats"]
+        self.assertEqual(stats["languages"]["ja"],1)
+        self.assertEqual(stats["questions"],1)
 
     def test_terminal_duplicate_does_not_increase_questions(self):
         self.assertEqual(self.begin(),self.attempt);self.assertTrue(self.finish())

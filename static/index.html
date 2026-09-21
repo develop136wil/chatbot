@@ -11,12 +11,12 @@
 
     <link rel="preload" href="/static/SF-Pro.ttf" as="font" type="font/ttf" crossorigin>
 
-    <link rel="stylesheet" href="/static/style.css?v=2026.09.21-type-glass">
+    <link rel="stylesheet" href="/static/style.css?v=2026.09.21-ja">
 
     <script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
-    <script src="/static/ui-text.js?v=2026.09.21-type-glass"></script>
-    <script src="/static/script.js?v=2026.09.21-type-glass" defer></script>
+    <script src="/static/ui-text.js?v=2026.09.21-ja"></script>
+    <script src="/static/script.js?v=2026.09.21-ja" defer></script>
 
     <script>
         window.currentLang = 'ko'; 
@@ -54,7 +54,6 @@
         <div class="chat-topbar">
         <div class="chat-header">
             <h2>
-                <img src="/static/header-icon.png" alt="" aria-hidden="true" class="header-icon">
                 <span id="header-title">도봉구 영유아 복지정보자료집</span>
             </h2>
         </div>
@@ -64,6 +63,7 @@
             <button type="button" title="English" onclick="changeLanguage('en')" id="btn-en" class="lang-btn inactive" aria-label="English" aria-pressed="false"><img class="language-flag" src="/static/flags/us.svg" alt="" aria-hidden="true"></button>
             <button type="button" title="Tiếng Việt" onclick="changeLanguage('vi')" id="btn-vi" class="lang-btn inactive" aria-label="Tiếng Việt" aria-pressed="false"><img class="language-flag" src="/static/flags/vn.svg" alt="" aria-hidden="true"></button>
             <button type="button" title="中文" onclick="changeLanguage('zh')" id="btn-zh" class="lang-btn inactive" aria-label="中文（简体）" aria-pressed="false"><img class="language-flag" src="/static/flags/cn.svg" alt="" aria-hidden="true"></button>
+            <button type="button" title="日本語" onclick="changeLanguage('ja')" id="btn-ja" class="lang-btn inactive" aria-label="日本語" aria-pressed="false"><img class="language-flag" src="/static/flags/jp.svg" alt="" aria-hidden="true"></button>
         </div>
         <p id="language-note" class="language-note sr-only">선택한 언어는 다음 답변부터 적용돼요.</p>
         </div>
@@ -108,7 +108,7 @@
 
         function changeLanguage(lang) {
             if (window.isChatBusy && window.isChatBusy()) return;
-            if (!['ko', 'en', 'vi', 'zh'].includes(lang)) return;
+            if (!['ko', 'en', 'vi', 'zh', 'ja'].includes(lang)) return;
             window.currentLang = lang;
             try { localStorage.setItem('chatbot-language', lang); } catch (_) {}
             const data = translations[lang];
@@ -145,7 +145,7 @@
             if (selector) selector.setAttribute('aria-label', data.language_label);
             const note = document.getElementById('language-note');
             if (note) note.textContent = data.language_note;
-            document.documentElement.lang = ({ ko: 'ko', en: 'en', vi: 'vi', zh: 'zh-Hans' })[lang];
+            document.documentElement.lang = ({ ko: 'ko', en: 'en', vi: 'vi', zh: 'zh-Hans', ja: 'ja' })[lang];
             const languageLive = document.getElementById('language-live');
             if (languageLive) languageLive.textContent = data.title;
 
@@ -169,7 +169,7 @@
             }
 
             // 스타일 변경 (베이지색 테두리)
-            ['ko', 'en', 'vi', 'zh'].forEach(l => {
+            ['ko', 'en', 'vi', 'zh', 'ja'].forEach(l => {
                 const btn = document.getElementById('btn-' + l);
                 if (btn) {
                     if (l === lang) {
@@ -210,7 +210,7 @@
         window.onload = function () {
             let saved = 'ko';
             try { saved = localStorage.getItem('chatbot-language') || 'ko'; } catch (_) {}
-            changeLanguage(['ko', 'en', 'vi', 'zh'].includes(saved) ? saved : 'ko');
+            changeLanguage(['ko', 'en', 'vi', 'zh', 'ja'].includes(saved) ? saved : 'ko');
 
 
         };

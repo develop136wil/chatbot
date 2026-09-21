@@ -90,11 +90,15 @@ def finish_indexing(report):
     return report
 
 
+TRANSLATION_LANGUAGES = ("en", "zh", "vi", "ja")
+TRANSLATION_BACKFILL_LIMIT = max(1, int(os.getenv("INDEXER_TRANSLATION_BACKFILL_LIMIT", "20")))
+
+
 def has_complete_multilingual_metadata(metadata: Dict[str, Any]) -> bool:
-    """영어·중국어·베트남어 제목과 요약이 모두 있을 때만 번역 완료로 봅니다."""
+    """영어·중국어·베트남어·일본어 제목과 요약이 모두 있을 때만 번역 완료로 봅니다."""
     return all(
         isinstance(metadata.get(field), str) and metadata[field].strip()
-        for language in ("en", "zh", "vi")
+        for language in TRANSLATION_LANGUAGES
         for field in (f"title_{language}", f"pre_summary_{language}")
     )
 
@@ -227,6 +231,7 @@ def run_indexing():
     current_state = {}
     total_processed = 0
     total_skipped = 0
+    backfill_attempts = 0
     translation_pending_pages = []
     has_critical_error = False
     changed_categories = set()
@@ -317,6 +322,61 @@ def run_indexing():
                     and prev_state[page_id].get("category") == category_name
                 ):
                     total_skipped += 1
+                    continue
+
+                # Unchanged documents only need missing translations, not new summaries/embeddings.
+                old = prev_state.get(page_id, {})
+                old_meta = old.get("metadata", {})
+                if (old.get("last_edited_time") == last_edited
+                        and old.get("category") == category_name
+                        and isinstance(old_meta.get("title"), str) and old_meta["title"].strip()
+                        and isinstance(old_meta.get("pre_summary"), str) and old_meta["pre_summary"].strip()):
+                    if backfill_attempts >= TRANSLATION_BACKFILL_LIMIT:
+                        translation_pending_pages.append(page_id)
+                        continue
+                    backfill_attempts += 1
+                    missing = [lang for lang in TRANSLATION_LANGUAGES if not all(
+                        isinstance(old_meta.get(field), str) and old_meta[field].strip()
+                        for field in (f"title_{lang}", f"pre_summary_{lang}"))]
+                    try:
+                        translated = translate_content_multilingual_sync(
+                            old_meta["title"], old_meta["pre_summary"], languages=missing)
+                        if not isinstance(translated, dict):
+                            translated = {}
+                        metadata = dict(old_meta)
+                        changed = False
+                        for lang in missing:
+                            result = translated.get(lang)
+                            if not isinstance(result, dict):
+                                continue
+                            for source, destination in (("title", f"title_{lang}"), ("content", f"pre_summary_{lang}")):
+                                value = result.get(source)
+                                if (isinstance(value, str) and value.strip()
+                                        and not (isinstance(metadata.get(destination), str) and metadata[destination].strip())):
+                                    metadata[destination] = value.strip()
+                                    changed = True
+                        complete = has_complete_multilingual_metadata(metadata)
+                        if not complete:
+                            translation_pending_pages.append(page_id)
+                        if not changed:
+                            continue
+                        metadata["translations_complete"] = complete
+                        if RESPONSE_CACHE_ENABLED:
+                            prior = old_meta.get(CACHE_PENDING_FIELD, [])
+                            scopes = {category_name} | ({x for x in prior if isinstance(x, str) and x} if isinstance(prior, list) else set())
+                            metadata[CACHE_PENDING_FIELD] = sorted(scopes)
+                        changed_categories.add(category_name)
+                        result = supabase.table("site_pages").update({"metadata": metadata}).eq("page_id", page_id).execute()
+                        if not isinstance(result.data, list) or not result.data:
+                            raise RuntimeError("Translation update returned no row")
+                        total_processed += 1
+                        if RESPONSE_CACHE_ENABLED:
+                            pending_metadata[page_id] = metadata
+                        logger.info("[Indexer] 누락 번역 보완 (ID=%s, 언어=%s, 완료=%s)", page_id, ",".join(missing), complete)
+                    except Exception as error:
+                        report.failed_pages += 1
+                        has_critical_error = True
+                        logger.error("번역 보완 실패 (ID=%s, 유형=%s)", page_id, type(error).__name__)
                     continue
 
                 logger.info(f"⚡️ 처리 시작 (ID: {page_id})")
@@ -416,13 +476,16 @@ def run_indexing():
                         # [신규] 다국어 번역 (Phase 3)
                         transl_dict = translate_content_multilingual_sync(title, pre_summary)
                         
+                        if not isinstance(transl_dict, dict):
+                            transl_dict = {}
                         # 번역 결과 추출 (실패 시 빈값)
-                        en_data = transl_dict.get("en", {})
-                        zh_data = transl_dict.get("zh", {})
-                        vi_data = transl_dict.get("vi", {})
+                        en_data = transl_dict.get("en") if isinstance(transl_dict.get("en"), dict) else {}
+                        zh_data = transl_dict.get("zh") if isinstance(transl_dict.get("zh"), dict) else {}
+                        vi_data = transl_dict.get("vi") if isinstance(transl_dict.get("vi"), dict) else {}
+                        ja_data = transl_dict.get("ja") if isinstance(transl_dict.get("ja"), dict) else {}
                         translations_complete = all(
                             isinstance(data.get(field), str) and data[field].strip()
-                            for data in (en_data, zh_data, vi_data)
+                            for data in (en_data, zh_data, vi_data, ja_data)
                             for field in ("title", "content")
                         )
                         if not translations_complete:
@@ -458,6 +521,8 @@ def run_indexing():
                             "pre_summary_zh": zh_data.get("content", ""),
                             "title_vi": vi_data.get("title", ""),
                             "pre_summary_vi": vi_data.get("content", ""),
+                            "title_ja": ja_data.get("title", ""),
+                            "pre_summary_ja": ja_data.get("content", ""),
                             "translations_complete": translations_complete,
                         }
 

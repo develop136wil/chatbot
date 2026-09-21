@@ -19,7 +19,7 @@ def tearDownModule():
 
 def complete_meta(pid="p1", category="돌봄/양육", edited="old"):
     meta = {"page_id": pid, "category": category, "last_edited_time": edited}
-    for lang in ("en", "vi", "zh"):
+    for lang in ("en", "vi", "zh", "ja"):
         meta["title_" + lang] = "prepared title"
         meta["pre_summary_" + lang] = "prepared summary"
     return meta
@@ -100,6 +100,7 @@ class MemoryQuery:
                 raise RuntimeError("simulated marker cleanup failure")
             if self.pid in self.db.rows:
                 self.db.rows[self.pid].update(deepcopy(self.payload))
+                return SimpleNamespace(data=[deepcopy(self.db.rows[self.pid])])
         return SimpleNamespace(data=[])
 
 
@@ -123,7 +124,7 @@ class IndexerRecoveryTests(unittest.TestCase):
         self.stack.enter_context(patch.object(indexer, "_get_number", return_value=None))
         self.stack.enter_context(patch.object(indexer, "_get_multi_select", return_value=[]))
         self.summary = self.stack.enter_context(patch.object(indexer, "translate_content_simple", return_value="지원 내용: 테스트"))
-        translations = {lang: {"title": "title", "content": "summary"} for lang in ("en", "zh", "vi")}
+        translations = {lang: {"title": "title", "content": "summary"} for lang in ("en", "zh", "vi", "ja")}
         self.translate = self.stack.enter_context(patch.object(indexer, "translate_content_multilingual_sync", return_value=translations))
         self.embedding = self.stack.enter_context(patch.object(indexer, "get_gemini_embedding", return_value=[0.1]))
         self.bump = self.stack.enter_context(patch.object(indexer, "bump_response_cache_scope_versions", return_value=True))
@@ -306,3 +307,86 @@ class IndexerRecoveryTests(unittest.TestCase):
         self.assertEqual(self.incomplete().failed_categories, 2)
         self.assertEqual(self.post.call_count, 4)
         self.assertIn("removed", self.db.rows)
+
+    def japanese_missing(self, pid="p1"):
+        self.add_old(pid, edited="new")
+        row = self.db.rows[pid]
+        row.update(content="unchanged source", embedding=[0.2, 0.3])
+        row["metadata"].update(title="한국 사업", pre_summary="한국 지원 요약")
+        row["metadata"].pop("title_ja")
+        row["metadata"].pop("pre_summary_ja")
+
+    def test_japanese_backfill_reuses_original_embedding_and_other_translations(self):
+        self.japanese_missing()
+        before = deepcopy(self.db.rows["p1"])
+        report = indexer.run_indexing()
+        self.assertTrue(report.complete)
+        self.assertEqual(report.updated, 1)
+        self.translate.assert_called_once_with("한국 사업", "한국 지원 요약", languages=["ja"])
+        self.embedding.assert_not_called()
+        self.summary.assert_not_called()
+        after = self.db.rows["p1"]
+        for key in ("content", "embedding"):
+            self.assertEqual(after[key], before[key])
+        self.assertEqual(after["metadata"]["title_en"], before["metadata"]["title_en"])
+        self.assertTrue(indexer.has_complete_multilingual_metadata(after["metadata"]))
+        self.bump.assert_called_once()
+        self.translate.reset_mock()
+        self.assertEqual(indexer.run_indexing().skipped, 1)
+        self.translate.assert_not_called()
+
+    def test_japanese_partial_translation_is_pending_then_resumes(self):
+        self.japanese_missing()
+        self.translate.return_value = {"ja": {"title": "日本語の題名", "content": ""}}
+        self.assertEqual(self.incomplete().translations_pending, 1)
+        self.translate.return_value = {"ja": {"title": "replacement", "content": "日本語の案内"}}
+        self.assertTrue(indexer.run_indexing().complete)
+        self.assertEqual(self.db.rows["p1"]["metadata"]["title_ja"], "日本語の題名")
+        self.embedding.assert_not_called()
+
+    def test_japanese_backfill_budget_defers_instead_of_silently_skipping(self):
+        self.pages["a"].append(page("p2"))
+        self.japanese_missing("p1")
+        self.japanese_missing("p2")
+        with patch.object(indexer, "TRANSLATION_BACKFILL_LIMIT", 1):
+            report = self.incomplete()
+            self.assertEqual((report.updated, report.translations_pending), (1, 1))
+            self.assertEqual(self.translate.call_count, 1)
+            report = indexer.run_indexing()
+            self.assertTrue(report.complete)
+            self.assertEqual((report.updated, report.skipped), (1, 1))
+        self.embedding.assert_not_called()
+
+    def test_invalid_japanese_translation_never_marks_complete(self):
+        for invalid in (None, [], {"ja": "wrong"}, {"ja": {"title": [], "content": 12}}):
+            with self.subTest(invalid=invalid):
+                self.japanese_missing()
+                self.translate.return_value = invalid
+                report = self.incomplete()
+                self.assertEqual((report.updated, report.translations_pending), (0, 1))
+                self.assertNotIn("title_ja", self.db.rows["p1"]["metadata"])
+        self.embedding.assert_not_called()
+
+    def test_japanese_update_without_returned_row_is_failure_and_can_retry(self):
+        self.japanese_missing()
+        execute=MemoryQuery.execute
+        def no_write(query):
+            if query.action=="update":
+                return SimpleNamespace(data=[])
+            return execute(query)
+        with patch.object(MemoryQuery,"execute",no_write):
+            report=self.incomplete()
+        self.assertEqual((report.updated,report.failed_pages),(0,1))
+        self.assertNotIn("title_ja",self.db.rows["p1"]["metadata"])
+        self.assertTrue(indexer.run_indexing().complete)
+
+    def test_japanese_cache_refresh_failure_recovers_without_retranslation(self):
+        self.japanese_missing()
+        self.bump.return_value=False
+        self.assertTrue(self.incomplete().cache_refresh_failed)
+        self.assertIn(indexer.CACHE_PENDING_FIELD,self.db.rows["p1"]["metadata"])
+        self.translate.reset_mock()
+        self.bump.return_value=True
+        self.assertTrue(indexer.run_indexing().complete)
+        self.translate.assert_not_called()
+        self.assertNotIn(indexer.CACHE_PENDING_FIELD,self.db.rows["p1"]["metadata"])

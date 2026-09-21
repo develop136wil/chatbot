@@ -156,7 +156,7 @@ if FREE_TIER_ONLY and len(KEY_POOL) > 1:
 # 랜덤이 아니므로, 1번->2번->3번... 순서가 보장되어 429 에러를 최소화합니다.
 KEY_CYCLE = itertools.cycle(KEY_POOL) if KEY_POOL else None
 
-SUPPORTED_LANGUAGE_CODES = {"ko", "en", "vi", "zh"}
+SUPPORTED_LANGUAGE_CODES = {"ko", "en", "vi", "zh", "ja"}
 
 # 결과 카드와 서버 안내 문구에서 공통으로 사용하는 다국어 표현입니다.
 LOCALIZED_UI = {
@@ -280,6 +280,38 @@ LOCALIZED_UI = {
         "date_note": "可能与政策生效日期不同。",
         "translation_notice": "尚未翻译的部分以韩语原文显示。",
         "eligibility_notice": "请在资料原文中查看并向负责机构确认申请条件和方法。"
+    },
+    "ja": {
+        "header_found": "🔎 <b>関連する情報が見つかりました！</b>",
+        "footer_more": "<p>下の「結果をもっと見る」から続きを確認できます。</p>",
+        "more_header": "🔎 <b>追加の情報（{start}〜{end}件目）</b>",
+        "all_results": "✅ <b>すべての結果を表示しました。</b>",
+        "no_more": "表示できる結果はこれ以上ありません。",
+        "not_found": "一致する情報が見つかりませんでした。サービス名やお子さんの月齢を変えて検索してみてください。",
+        "system_error": "一時的なエラーで情報を読み込めませんでした。しばらくしてからお試しください。",
+        "free_tier_quota": "AIサービスのリクエスト制限により処理できません。再開時刻は未確認です。しばらくしてからご利用ください。",
+        "free_tier_daily_limit": "このブラウザーの本日の無料質問数に達しました。明日またご利用ください。",
+        "safety_block": "攻撃的な表現はお控えください。福祉情報についてご質問ください。",
+        "exit": "承知しました。またいつでもご利用ください。",
+        "reset": "会話をリセットしました。何をお知りになりたいですか？",
+        "out_of_scope": "乳幼児の福祉情報についてのみご案内できます。",
+        "small_talk": "こんにちは。韓国・道峰区の乳幼児福祉チャットボットです。何をお手伝いできますか？",
+        "thanks": "お役に立ててうれしいです！",
+        "clarify": "どの分野の福祉情報をお探しですか？",
+        "cats": {
+            "의료/재활": "医療・リハビリ",
+            "교육/보육": "教育・保育",
+            "가족 지원": "家族支援",
+            "돌봄/양육": "育児・養育",
+            "생활 지원": "生活支援",
+            "기타": "その他"
+        },
+        "results_changed": "以前の検索結果を読み込めません。元の質問でもう一度検索してください。",
+        "source_label": "原文を見る",
+        "updated_label": "資料更新",
+        "date_note": "制度の施行日とは異なる場合があります。",
+        "translation_notice": "翻訳が未準備の部分は韓国語の原文で表示しています。",
+        "eligibility_notice": "対象条件や申請方法は原文と担当機関でご確認ください。"
     }
 }
 
@@ -292,6 +324,8 @@ def resolve_language(language: str | None = None, question: str = "") -> str:
         return "en"
     if "strictly in Vietnamese" in question:
         return "vi"
+    if "strictly in Japanese" in question:
+        return "ja"
     if "strictly in Chinese" in question:
         return "zh"
     return "ko"
@@ -354,11 +388,14 @@ def detect_language(text: str) -> str:
     텍스트의 언어를 자동으로 감지합니다.
     
     Returns:
-        str: 'ko', 'en', 'vi', 'zh' 중 하나
+        str: 'ko', 'en', 'vi', 'zh', 'ja' 중 하나
     """
     if not text:
         return 'ko'
     
+    # Kana distinguishes Japanese from shared CJK ideographs; kanji-only text is ambiguous.
+    if re.search(r'[\u3040-\u30ff\uff66-\uff9f]', text):
+        return 'ja'
     # 문자 유형별 카운트
     korean = sum(1 for c in text if '\uac00' <= c <= '\ud7a3' or '\u1100' <= c <= '\u11ff')
     chinese = sum(1 for c in text if '\u4e00' <= c <= '\u9fff')
@@ -1212,14 +1249,22 @@ def call_groq_sync_robust(
         print(f"⚠️ Groq Sync Error: {e}")
         return None
 
-def translate_content_multilingual_sync(title: str, content: str) -> dict:
+def translate_content_multilingual_sync(title: str, content: str, languages=None) -> dict:
     """
-    [Phase 3] 다국어 번역 (영어/중국어/베트남어) - JSON 반환
+    [Phase 3] 요청 언어만 번역 (영어/중국어/베트남어/일본어) - JSON 반환
     Groq 우선 사용 -> Gemini 폴백
     """
+    names = {"en": "English", "zh": "Chinese (Simplified)", "vi": "Vietnamese", "ja": "Japanese"}
+    requested = [lang for lang in (languages if languages is not None else names) if lang in names]
+    if not requested:
+        return {}
+    output_schema = json.dumps({lang: {"title": "...", "content": "..."} for lang in requested})
     prompt = f"""
     You are a professional translator for a welfare chatbot.
-    Translate the following Korean title and content into English, Chinese (Simplified), and Vietnamese.
+    Translate the following Korean title and content into {", ".join(names[lang] for lang in requested)}.
+    These are South Korean welfare programs, NOT programs of Japan or another country.
+    Preserve Korean official program names in parentheses where needed. Never replace them with foreign schemes.
+    Preserve every amount, currency (KRW), age, eligibility restriction, date and contact detail. Do not infer missing facts.
 
     [Source]
     Title: {title}
@@ -1227,11 +1272,7 @@ def translate_content_multilingual_sync(title: str, content: str) -> dict:
 
     [Output Format]
     Return ONLY a JSON object with this exact structure:
-    {{
-      "en": {{ "title": "...", "content": "..." }},
-      "zh": {{ "title": "...", "content": "..." }},
-      "vi": {{ "title": "...", "content": "..." }}
-    }}
+    {output_schema}
     """
     
     # 1. Groq 시도
@@ -1279,7 +1320,7 @@ def translate_content_multilingual_sync(title: str, content: str) -> dict:
 def _fallback_question_info(question: str) -> dict:
     """AI 의도 분석 실패 시 검색 자체는 중단하지 않는 보수적 대체값입니다."""
     clean_question = re.sub(r'\s*\(System[\s\S]*?\)', '', question, flags=re.IGNORECASE).strip()
-    keywords = [token for token in re.findall(r'[가-힣A-Za-z0-9]+', clean_question) if len(token) > 1]
+    keywords = [token for token in re.findall(r'[가-힣A-Za-z0-9\u3040-\u30ff\u3400-\u9fff]+', clean_question) if len(token) > 1]
     return {
         "age": None,
         "category": None,
@@ -1421,6 +1462,8 @@ def generate_answer_from_context(context: str, original_question: str, chat_hist
         target_lang = "Vietnamese"
     elif "strictly in Chinese" in original_question:
         target_lang = "Chinese"
+    elif "strictly in Japanese" in original_question:
+        target_lang = "Japanese"
     
     # [중요] 캐시 키 버전을 v24로 변경 (80자 제한 추가)
     context_hash = hashlib.md5((context + target_lang).encode('utf-8')).hexdigest()
@@ -1618,7 +1661,7 @@ def expand_search_query(question: str) -> list:
     # [프롬프트 공통 정의]
     expansion_prompt = f"""
     당신은 한국어 DB 검색을 위한 '다국어 통역기'입니다.
-    사용자의 질문(영어/중국어/베트남어)을 분석하여, 반드시 **'한국어 핵심 키워드'**로 변환하세요.
+    사용자의 질문(영어/중국어/베트남어/일본어)을 분석하여, 반드시 **'한국어 핵심 키워드'**로 변환하세요.
     
     [사용자 질문]
     "{clean_question}"
@@ -1795,7 +1838,7 @@ def clean_summary_text(text: str, language: str = "ko") -> str:
     
     [v2] 이모지/심볼 완전 제거 추가
     """
-    if not text: return "요약 정보가 없습니다."
+    if not text: return "要約情報はまだありません。" if language == "ja" else "요약 정보가 없습니다."
     
     # ============================================
     # [FIX] 이모지만 제거 (포맷팅 문자 보존)
@@ -1810,6 +1853,11 @@ def clean_summary_text(text: str, language: str = "ko") -> str:
     # 3. 손가락/제스처 이모지
     text = re.sub(r'[\U0001F400-\U0001F4FF]', '', text)
     # ============================================
+
+    # Japanese headings vary; never discard translated eligibility/amounts by
+    # applying the Korean section whitelist or four-line truncation.
+    if language == "ja":
+        return text.strip() or "要約情報はまだありません。"
 
     lines = text.split('\n')
     
@@ -1880,6 +1928,7 @@ def clean_summary_text(text: str, language: str = "ko") -> str:
         "en": "No summary information is available.",
         "vi": "Không có thông tin tóm tắt.",
         "zh": "暂无摘要信息。",
+        "ja": "要約情報はまだありません。",
     }
     return empty_messages.get(language, empty_messages["ko"])
 
@@ -1934,6 +1983,9 @@ def format_search_results(pages_metadata: list, language: str = "ko") -> str:
         "Thời gian đăng ký", "Kỳ đăng ký",
         "Lưu ý", "Chú ý", "Ghi chú", "Tham khảo",
         
+        # Japanese
+        "支援内容", "サービス内容", "支援金額・規模", "支援金額", "対象条件", "対象",
+        "自己負担", "費用", "申請方法", "申請期間", "注意事項", "参考",
         # ============ Chinese (中文) ============
         "支持内容", "服务内容", "服务详情", "包含内容",
         "支持金额/规模", "金额/规模", "支持金额", "金额", "规模",
@@ -1947,7 +1999,7 @@ def format_search_results(pages_metadata: list, language: str = "ko") -> str:
     sorted_keywords = sorted(HEADER_KEYWORDS, key=len, reverse=True)
     subheader_keywords_pattern = '|'.join(re.escape(k) for k in sorted_keywords)
     subheader_pattern = re.compile(
-        rf'^[\s•*\-]*({subheader_keywords_pattern})[\s:]*(.*)$', re.IGNORECASE
+        rf'^[\s•*\-]*({subheader_keywords_pattern})[\s:：]*(.*)$', re.IGNORECASE
     )
 
     for meta in pages_metadata:
@@ -2088,7 +2140,7 @@ def format_search_results(pages_metadata: list, language: str = "ko") -> str:
             {source_note}
             <div class="card-footer">
                 {f'<a href="{safe_url}" target="_blank" rel="noopener noreferrer" class="detail-link">{html.escape(ui["source_label"])}</a>' if url else ''}
-                <button class="card-share-btn" data-copy="{safe_copy_text}">{html.escape({"ko":"공유","en":"Share","vi":"Chia sẻ","zh":"分享"}[language])}</button>
+                <button class="card-share-btn" data-copy="{safe_copy_text}">{html.escape({"ko":"공유","en":"Share","vi":"Chia sẻ","zh":"分享","ja":"共有"}[language])}</button>
             </div>
         </div>
         """
@@ -2474,7 +2526,7 @@ def translate_content_simple(content: str, language: str = "ko") -> str:
         "ko": "한국어",
         "en": "English",
         "zh": "中文(简体)",
-        "vi": "Tiếng Việt"
+        "vi": "Tiếng Việt", "ja": "日本語"
     }
     
     lang_name = LANG_NAMES.get(language, language)
@@ -2485,7 +2537,7 @@ def translate_content_simple(content: str, language: str = "ko") -> str:
     
     try:
         prompt = f"""다음 복지 서비스 설명을 {lang_name}로 번역해주세요. 
-설명만 출력하고, 다른 말은 하지 마세요.
+한국의 복지제도입니다. 다른 나라 제도로 바꾸지 말고 금액·원화 단위·연령·자격 조건을 보존하세요.\n설명만 출력하고, 다른 말은 하지 마세요.
 
 원문:
 {content}
@@ -2503,7 +2555,7 @@ async def translate_content_simple_async(content: str, language: str = "ko") -> 
     
     LANG_NAMES = {
         "ko": "한국어", "en": "English",
-        "zh": "中文(简体)", "vi": "Tiếng Việt"
+        "zh": "中文(简体)", "vi": "Tiếng Việt", "ja": "日本語"
     }
     lang_name = LANG_NAMES.get(language, language)
     
@@ -2511,7 +2563,7 @@ async def translate_content_simple_async(content: str, language: str = "ko") -> 
     
     try:
         prompt = f"""다음 복지 서비스 설명을 {lang_name}로 번역해주세요. 
-설명만 출력하고, 다른 말은 하지 마세요.
+한국의 복지제도입니다. 다른 나라 제도로 바꾸지 말고 금액·원화 단위·연령·자격 조건을 보존하세요.\n설명만 출력하고, 다른 말은 하지 마세요.
 
 원문:
 {content}
@@ -2535,7 +2587,7 @@ async def translate_titles_batch_async(titles: List[str], language: str) -> List
     if not client:
         return titles
 
-    language_name = {"en": "English", "vi": "Vietnamese", "zh": "Chinese (Simplified)"}.get(language)
+    language_name = {"en": "English", "vi": "Vietnamese", "zh": "Chinese (Simplified)", "ja": "Japanese"}.get(language)
     if not language_name:
         return titles
 
@@ -2703,7 +2755,7 @@ async def expand_search_query_async(question: str) -> list:
     
     expansion_prompt = f"""
     당신은 한국어 DB 검색을 위한 '다국어 통역기'입니다.
-    사용자의 질문(영어/중국어/베트남어)을 분석하여, 반드시 **'한국어 핵심 키워드'**로 변환하세요.
+    사용자의 질문(영어/중국어/베트남어/일본어)을 분석하여, 반드시 **'한국어 핵심 키워드'**로 변환하세요.
     
     [사용자 질문]
     "{clean_question}"

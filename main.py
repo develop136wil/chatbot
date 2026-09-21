@@ -162,6 +162,7 @@ JOB_RESULT_KEY_PREFIX = "chatbot:job_result:"
 
 # 정확한 '더 보기' 문구는 LLM 의도 분석 전에 처리해 불필요한 API 호출을 줄입니다.
 SHOW_MORE_EXACT_TERMS = {
+    "結果をもっと見る", "もっと見る", "次へ", "続き", "ほかの結果",
     "더보여주세요", "다른결과도보여줘", "다음결과를보여줘",
     "showmemore", "pleaseshowmore", "xemthêmkếtquả", "请显示更多",
     "더", "다음", "계속", "더보여줘", "다른거", "다른것", "또",
@@ -177,7 +178,7 @@ class ChatRequest(BaseModel):
     input_method: Literal["typed", "suggestion", "clarification", "unknown"] = "unknown"
     action: Literal["ask", "more"] = "ask"
     question: str = Field(min_length=1, max_length=MAX_QUESTION_LENGTH)
-    language: str = Field(default="ko", pattern="^(ko|en|vi|zh)$")
+    language: str = Field(default="ko", pattern="^(ko|en|vi|zh|ja)$")
     last_result_ids: List[str] = Field(default_factory=list, max_length=MAX_RESULT_IDS)
     shown_count: int = Field(default=0, ge=0, le=MAX_RESULT_IDS)
     chat_history: List[dict] = Field(default_factory=list, max_length=MAX_CHAT_HISTORY_ITEMS)
@@ -586,6 +587,7 @@ async def _chat_with_bot(chat_request: ChatRequest, request: Request):
             "en": ("thank",),
             "vi": ("cảm ơn", "cam on"),
             "zh": ("谢谢", "感謝", "感谢"),
+            "ja": ("ありがとう", "感謝"),
         }
         if any(keyword in normalized_input for keyword in thanks_keywords[language]):
             answer = ui_text["thanks"]

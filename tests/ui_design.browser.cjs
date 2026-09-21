@@ -52,7 +52,7 @@ function contrast(a,b){
  check('첫 안내의 기관 확인 고지 제거',await page.locator('#time-notice').count()===0);
  check('통계 고지는 기본 접힘·말풍선 밖 작은 글씨',await page.locator('#analytics-notice').evaluate(el=>!el.closest('.message')&&!el.closest('details').open&&getComputedStyle(el).fontSize==='11px'));
  check('시작 화면은 말풍선이 아님',await page.locator('#welcome-panel .message').count()===0);
- check('첫 안내 장식 제거·상단 캐릭터 유지',await page.locator('#welcome-panel img, #welcome-panel svg').count()===0&&await page.locator('img[src="/static/header-icon.png"]').count()===1);
+ check('첫 안내와 상단 장식 제거',await page.locator('#welcome-panel img, #welcome-panel svg').count()===0&&await page.locator('.chat-topbar .header-icon').count()===0);
  check('입력창 아래 주의 문구 10px·대비 유지',await page.locator('#privacy-notice').evaluate(el=>getComputedStyle(el).fontSize==='10px'&&getComputedStyle(el).color==='rgb(102, 112, 133)'));
 
  check('시작 설명은 쉼표 뒤 지정 줄바꿈',await page.locator('#welcome-msg').evaluate(el=>el.textContent.includes(',\n')&&getComputedStyle(el).whiteSpace==='pre-line'));
@@ -70,8 +70,8 @@ function contrast(a,b){
   return tray.backgroundColor==='rgba(0, 0, 0, 0)'&&tray.backgroundImage==='none'&&tray.backdropFilter==='none'&&[...document.querySelectorAll('.suggestion-chip')].every(el=>!/[\u{1F300}-\u{1FAFF}]/u.test(el.textContent)&&getComputedStyle(el).backdropFilter==='blur(10px)');
  }));
  check('상단 Pretendard 및 좌측 정렬',await page.evaluate(()=>{
-  const name=document.getElementById('header-title'),bar=document.querySelector('.chat-topbar .chat-header'),icon=document.querySelector('.header-icon');
-  return getComputedStyle(name).fontFamily.startsWith('Pretendard')&&getComputedStyle(name).fontWeight==='600'&&Math.abs(icon.getBoundingClientRect().left-bar.getBoundingClientRect().left-24)<1;
+  const name=document.getElementById('header-title'),bar=document.querySelector('.chat-topbar .chat-header');
+  return getComputedStyle(name).fontFamily.startsWith('Pretendard')&&getComputedStyle(name).fontWeight==='600'&&Math.abs(name.getBoundingClientRect().left-bar.getBoundingClientRect().left-24)<1;
  }));
  const chipColors=await page.locator('.suggestion-chip').first().evaluate(el=>{
   const s=getComputedStyle(el);return {fg:s.color.match(/[\d.]+/g).map(Number),bg:s.backgroundColor.match(/[\d.]+/g).map(Number)};
@@ -87,10 +87,26 @@ function contrast(a,b){
   const input=document.querySelector('.composer-controls').getBoundingClientRect(),notice=document.getElementById('privacy-notice').getBoundingClientRect();
   return style.backgroundColor==='rgba(0, 0, 0, 0)'&&style.borderTopWidth==='0px'&&style.backdropFilter==='none'&&Math.abs(notice.top-input.bottom-2)<.1;
  }));
+ check('접기 버튼은 기본 베이지로 질문과 구분',await page.locator('#suggestion-toggle-btn').evaluate(el=>getComputedStyle(el).backgroundColor==='rgba(245, 240, 231, 0.94)'));
+ await page.locator('.suggestion-chip').first().hover();
+ await page.waitForTimeout(250);
+ check('추천 질문 베이지 호버',await page.locator('.suggestion-chip').first().evaluate(el=>getComputedStyle(el).backgroundColor==='rgb(250, 243, 231)'));
+ await page.mouse.move(0,0);
+ await page.locator('#user-input').focus();
+ check('입력창 전체 베이지 포커스·마이크 포함',await page.evaluate(()=>{
+  const group=document.querySelector('.composer-controls'),g=group.getBoundingClientRect(),mic=document.getElementById('mic-btn').getBoundingClientRect(),s=getComputedStyle(group);
+  return s.borderColor==='rgb(161, 123, 69)'&&s.borderWidth==='1px'&&s.boxShadow!=='none'&&getComputedStyle(document.getElementById('user-input')).outlineStyle==='none'&&g.right>=mic.right&&g.left<=mic.left;
+ }));
+ await page.screenshot({path:path.join(out,'composer-focus-mobile.png')});
+ await page.locator('#user-input').fill('로컬 UI 입력 확인');
+ await page.keyboard.press('Tab');
+ check('전송 버튼 키보드 포커스 유지',await page.locator('#send-btn').evaluate(el=>el.matches(':focus-visible')&&getComputedStyle(el).outlineColor==='rgb(161, 123, 69)'));
+ await page.locator('#user-input').fill('');
+ await page.evaluate(()=>document.activeElement?.blur());
  await page.screenshot({path:path.join(out,'welcome-mobile.png')});
  for(const [width,height] of [[320,812],[390,844],[768,1024],[1280,900],[812,375]]){
   await page.setViewportSize({width,height});
-  for(const lang of ['ko','en','vi','zh']){
+  for(const lang of ['ko','en','vi','zh','ja']){
    await page.evaluate(async l=>{
     changeLanguage(l);
     // Each case measures the initial screen, not scroll carried over from an opened disclosure.
@@ -106,8 +122,18 @@ function contrast(a,b){
      welcome:welcome.scrollWidth<=welcome.clientWidth+1,header:header.scrollWidth<=header.clientWidth+1,
      titleSize:parseFloat(getComputedStyle(document.getElementById('welcome-title')).fontSize),flags:document.querySelectorAll('.language-flag').length};
    });
-   check('첫 화면 reflow '+width+'x'+height+' '+lang,state.page&&state.welcome&&state.header&&state.titleSize===24&&state.flags===4,state);
+   check('첫 화면 reflow '+width+'x'+height+' '+lang,state.page&&state.welcome&&state.header&&state.titleSize===24&&state.flags===5,state);
 
+   check('일본어 국기와 입력 영역 겹침 없음 '+width+' '+lang,await page.evaluate(()=>{
+    const rail=document.querySelector('.lang-floating-container').getBoundingClientRect();
+    return rail.bottom<=document.getElementById('suggestion-container').getBoundingClientRect().top;
+   }));
+   if(lang==='ja')check('일본어 입력 예시 한 줄 표시 '+width,await page.evaluate(()=>{
+    const el=document.getElementById('user-input'),s=getComputedStyle(el),ctx=document.createElement('canvas').getContext('2d');
+    ctx.font=s.font;
+    return ctx.measureText(el.placeholder).width<=el.clientWidth-parseFloat(s.paddingLeft)-parseFloat(s.paddingRight);
+   }));
+   if(width===390&&lang==='ja')await page.screenshot({path:path.join(out,'welcome-japanese-mobile.png')});
    check('첫 안내와 국기 시작 높이 정렬 '+width+' '+lang,await page.evaluate(()=>Math.abs(document.getElementById('welcome-title').getBoundingClientRect().top-document.querySelector('.lang-btn').getBoundingClientRect().top)<=8));
    const toggleLayout=await page.evaluate(()=>{
     const tray=document.getElementById('suggestion-container'),toggle=document.getElementById('suggestion-toggle-btn');
@@ -128,16 +154,20 @@ function contrast(a,b){
    await page.evaluate(()=>{document.activeElement?.blur();document.getElementById('suggestion-container').scrollLeft=0;});
    check('첫 안내 좌측 24px 정렬 '+width+' '+lang,await page.evaluate(()=>Math.abs(document.getElementById('welcome-title').getBoundingClientRect().left-document.querySelector('.chat-container').getBoundingClientRect().left-24)<1));
    const brand=await page.evaluate(()=>{
-    const bar=document.querySelector('.chat-topbar'),name=document.getElementById('header-title'),icon=document.querySelector('.header-icon');
-    const b=bar.getBoundingClientRect(),n=name.getBoundingClientRect(),i=icon.getBoundingClientRect(),style=getComputedStyle(bar);
-    return {height:b.height,font:parseFloat(getComputedStyle(name).fontSize),icon:i.width,
+    const bar=document.querySelector('.chat-topbar'),name=document.getElementById('header-title');
+    const b=bar.getBoundingClientRect(),n=name.getBoundingClientRect(),style=getComputedStyle(bar);
+    return {height:b.height,font:parseFloat(getComputedStyle(name).fontSize),
      contained:n.top>=b.top&&n.bottom<=b.bottom&&n.left>=b.left&&n.right<=b.right,
      glass:getComputedStyle(bar,'::before').backdropFilter.includes('blur('),visible:style.visibility==='visible'&&style.opacity==='1'};
    });
-   check('작은 상단 브랜드·글라스 보존 '+width+' '+lang,brand.height>=50&&brand.font===15&&brand.icon===24&&brand.contained&&brand.glass&&brand.visible,brand);
+   check('작은 상단 브랜드·글라스 보존 '+width+' '+lang,brand.height>=50&&brand.font===15&&brand.contained&&brand.glass&&brand.visible,brand);
    await page.locator('.analytics-disclosure summary').click();
    check('통계 안내/개인정보 reflow '+width+' '+lang,await page.evaluate(()=>[document.getElementById('analytics-notice'),document.getElementById('privacy-notice')].every(el=>el.scrollWidth<=el.clientWidth+1)));
    await page.locator('.analytics-disclosure summary').click();
+   check('추천 질문과 입력 필드 간격 16px '+width+' '+lang,await page.evaluate(()=>{
+    const chip=document.querySelector('.suggestion-chip').getBoundingClientRect(),field=document.querySelector('.composer-controls').getBoundingClientRect();
+    return Math.abs(field.top-chip.bottom-16)<1;
+   }));
    check('입력창/추천 질문 영역 분리 '+width+' '+lang,await page.evaluate(()=>{
     const footer=document.querySelector('.chat-input-box').getBoundingClientRect();
     const tray=document.getElementById('suggestion-container').getBoundingClientRect();
@@ -149,7 +179,7 @@ function contrast(a,b){
  await page.setViewportSize({width:1280,height:900});await page.evaluate(()=>changeLanguage('ko'));
  await page.screenshot({path:path.join(out,'welcome-desktop.png')});
  await page.setViewportSize({width:390,height:844});
- for(const lang of ['ko','en','vi','zh']){
+ for(const lang of ['ko','en','vi','zh','ja']){
   await page.evaluate(l=>changeLanguage(l),lang);
   if(await page.locator('#suggestion-toggle-btn').getAttribute('aria-expanded')==='false')await page.locator('#suggestion-toggle-btn').click();
   finishChat=null;
@@ -204,6 +234,10 @@ function contrast(a,b){
  check('동작 줄이기에서는 팁 자동 교체 없음',await page.locator('.tip-text').textContent()===firstTip);
  await page.evaluate(()=>{stopUiTips();document.querySelector('.loading-copy').remove();});
  await page.locator('.show-more-btn').scrollIntoViewIfNeeded();
+ check('더 보기 구분선 및 하단 여백',await page.locator('.show-more-btn').evaluate(el=>{
+  const actions=el.parentElement,style=getComputedStyle(actions),message=el.closest('.message').getBoundingClientRect(),button=el.getBoundingClientRect();
+  return actions.classList.contains('result-actions')&&style.borderTopWidth==='1px'&&style.paddingTop==='16px'&&message.bottom-button.bottom>=24;
+ }));
  check('결과 더 보기 명칭',await page.locator('.show-more-btn').textContent()==='결과 더 보기');
  check('문의는 답변 바깥 같은 행에 표시',await page.locator('.contact-actions').evaluate(el=>!el.closest('.message')&&el.parentElement.classList.contains('message-row')));
  check('문의는 답변 아래 배치',await page.locator('.contact-actions').evaluate(el=>el.getBoundingClientRect().top>=el.parentElement.querySelector('.message').getBoundingClientRect().bottom));
@@ -220,7 +254,7 @@ function contrast(a,b){
  await page.locator('.contact-actions summary').click();
  for(const width of [320,390,600]){
   await page.setViewportSize({width,height:844});
-  for(const lang of ['ko','en','vi','zh']){
+  for(const lang of ['ko','en','vi','zh','ja']){
    await page.evaluate(l=>{
     const row=window.uiTestBox.closest('.message-row');
     row.querySelector('.contact-actions').remove();
