@@ -99,7 +99,7 @@ test('레이아웃 갱신은 읽던 과거 답변의 스크롤 위치를 유지�
     assert.equal(c.document.documentElement.style['--chat-bottom-padding'],'217px');
 });
 test('4개 언어의 더 보기 버튼이 각각 표시된다', async () => {
-    for (const [lang,label] of Object.entries({ko:'더 보기',en:'Show more',vi:'Xem thêm',zh:'更多'})) {
+    for (const [lang,label] of Object.entries({ko:'결과 더 보기',en:'More results',vi:'Xem thêm kết quả',zh:'查看更多结果'})) {
         const c=setup();c.window.currentLang=lang;c.box=element();
         await vm.runInContext("renderChatResponse({status:'complete',answer:'ok',last_result_ids:['a','b','c'],shown_count:2},box,'q',0)",c);
         assert.equal(c.box.children[0].textContent,label);
@@ -266,7 +266,7 @@ test('라이트 모드만 선언하고 다크 시스템 테마 분기를 제거�
     assert.match(html,/<meta name="color-scheme" content="only light">/);
     assert.ok(html.indexOf('name="color-scheme"') < html.indexOf('rel="stylesheet"'));
     for (const source of [css,html,js]) assert.doesNotMatch(source,/prefers-color-scheme\s*:\s*dark/i);
-    assert.match(html,/style\.css\?v=2026\.09\.21-analytics/);
+    assert.match(html,/style\.css\?v=2026\.09\.21-design-contract/);
 });
 
 test('라이트 고정 후에도 동작 줄이기와 사용자 고대비 설정을 방해하지 않는다', () => {
@@ -796,7 +796,7 @@ test('상단 국기 영역은 텍스트 레일과 구분되고 시작 화면은 
     assert.match(css,/\.chat-box\s*\{[^}]*padding-right: 60px/);
     assert.match(css,/#splash-screen\s*\{[^}]*pointer-events: none/);
     const c=setup();
-    for(const value of Object.values(c.window.CHAT_UI_TEXT)) assert.ok(value.welcome.includes('<br><br>'));
+    for(const value of Object.values(c.window.CHAT_UI_TEXT)) assert.equal((value.welcome.match(/<span>/g)||[]).length,3);
 });
 
 
@@ -810,7 +810,7 @@ test('로딩 팁은 원본 3줄 스켈레톤과 14px 진행 문구·12px 팁을 
     const action=css.match(/\.message\.assistant \.loading-copy \.action-text\s*\{([^}]+)\}/)[1];
     const tip=css.match(/\.message\.assistant \.loading-copy \.tip-text\s*\{([^}]+)\}/)[1];
     for(const rule of ['font-size: 14px','font-weight: 600','color: #333','margin: 0 0 8px']) assert.ok(action.includes(rule));
-    for(const rule of ['font-size: 12px','font-weight: 400','color: #888','margin: 0','line-height: 1.6']) assert.ok(tip.includes(rule));
+    for(const rule of ['font-size: 12px','font-weight: 400','color: var(--text-secondary)','margin: 0','line-height: 1.6']) assert.ok(tip.includes(rule));
     assert.doesNotMatch(css,/\.tip-text\s*\{[^}]*margin-top:\s*12px/);
 });
 
@@ -983,13 +983,22 @@ test('재시도 불가 오류에도 이메일 문의가 남는다',()=>{
     c.showRequestError(box,{retryable:false,message:'error'},null,'q',0);
     assert.equal(box.children[0].className,'contact-actions');
 });
-test('첫 화면의 문의 메뉴도 언어 선택에 맞춰 갱신한다',()=>{
+test('첫 안내에는 문의 메뉴 없이 다국어 안내와 통계 고지를 유지한다',()=>{
+    const html=fs.readFileSync('static/index.html','utf8');
+    assert.doesNotMatch(html,/welcome-contact|addContactActions/);
     const c=setup();loadHome(c);
     for (const lang of ['en','vi','zh','ko']) {
-        const host=c.document.getElementById('welcome-contact');host.children=[];
         c.changeLanguage(lang);
-        assert.equal(host.children[0].children[0].textContent,c.window.CHAT_UI_TEXT[lang].contact.label);
+        assert.equal(c.document.getElementById('welcome-msg').innerHTML,c.window.CHAT_UI_TEXT[lang].welcome);
+        assert.equal(c.document.getElementById('analytics-notice').textContent,c.window.CHAT_UI_TEXT[lang].analytics_notice);
     }
+});
+test('결과 더 보기는 읽기 쉬운 회색 버튼이며 문의 앞에만 옅은 구분선을 둔다',()=>{
+    const css=fs.readFileSync('static/style.css','utf8');
+    const more=css.match(/\.show-more-btn\s*\{([^}]+)\}/)[1];
+    assert.ok(more.includes('color: #344054; background: #EAECF0'));
+    assert.match(css,/\.contact-actions\s*\{[^}]*border-top: 1px solid #DDE2E8/);
+    assert.match(css,/#welcome-msg > span \+ span\s*\{ margin-top: 6px/);
 });
 test('새 프런트엔드는 질문·답변을 피드백 API로 전송하는 코드를 포함하지 않는다',()=>{
     const source=fs.readFileSync('static/script.js','utf8');
@@ -1026,4 +1035,54 @@ test('원문 클릭 통계 오류는 화면 동작을 실패시키지 않는다'
     c.fetch=async()=>{count++;throw new Error('offline');};
     await c.trackSourceClick(c.box);await c.trackSourceClick(c.box);
     assert.equal(count,2);
+});
+
+
+test('4개 언어의 결과 더 보기 버튼은 새 검색 대신 more 요청으로 이전 결과를 이어간다',async()=>{
+    for(const lang of ['ko','en','vi','zh']){
+        const c=setup();c.window.currentLang=lang;c.box=element();
+        vm.runInContext("addMessageToBox=()=>({}); fetchChatResponse=async body=>{window.sent=body};",c);
+        await vm.runInContext("renderChatResponse({status:'complete',answer:'ok',last_result_ids:['a','b','c'],shown_count:2},box,'q',0)",c);
+        c.box.children[0].onclick();
+        assert.equal(c.window.sent.action,'more');
+        assert.deepEqual(Array.from(c.window.sent.last_result_ids),['a','b','c']);
+        assert.equal(c.window.sent.shown_count,2);
+        assert.equal(c.window.sent.question,c.buildServerQuestion(c.window.CHAT_UI_TEXT[lang].more));
+    }
+});
+
+
+test('동작 줄이기 설정에 따라 팁 순환을 중단·재개하고 리스너를 정리한다',()=>{
+    const c=setup(),tip=element(),box=element();box.querySelector=()=>tip;
+    let change,removed=false,started=0,stopped=0;
+    const preference={matches:true,addEventListener:(name,fn)=>{change=fn;},
+        removeEventListener:(name,fn)=>{removed=fn===change;}};
+    c.window.matchMedia=()=>preference;
+    c.setInterval=()=>{started++;return 7;};c.clearInterval=id=>{assert.equal(id,7);stopped++;};
+    const stop=c.startLoadingTips(box,'ko');
+    assert.ok(tip.textContent);assert.equal(started,0);
+    preference.matches=false;change();assert.equal(started,1);
+    preference.matches=true;change();assert.equal(stopped,1);
+    stop();assert.equal(removed,true);
+});
+test('답변 포커스 보정은 가려진 키보드 제어에만 작동한다',()=>{
+    const c=setup();let calls=0;
+    const target={matches:()=>true,getBoundingClientRect:()=>({top:720,bottom:760}),
+        scrollIntoView:opts=>{assert.equal(opts.behavior,'instant');calls++;}};
+    c.document.getElementById('chat-box').getBoundingClientRect=()=>({top:0,bottom:844});
+    c.window.getComputedStyle=()=>({scrollPaddingBottom:'160px'});
+    c.revealFocusedAnswerControl({target});assert.equal(calls,1);
+    target.getBoundingClientRect=()=>({top:200,bottom:230});
+    c.revealFocusedAnswerControl({target});assert.equal(calls,1);
+    target.matches=()=>false;target.getBoundingClientRect=()=>({top:720,bottom:760});
+    c.revealFocusedAnswerControl({target});assert.equal(calls,1);
+});
+test('시각 디자인은 유지하고 폰트 지연·장식 이미지·카드 동작 줄이기를 보완한다',()=>{
+    const css=fs.readFileSync('static/style.css','utf8'),html=fs.readFileSync('static/index.html','utf8');
+    const faces=css.match(/@font-face\s*\{[^}]+\}/g);
+    assert.equal(faces.length,2);assert.ok(faces.every(rule=>rule.includes('font-display: swap')));
+    assert.match(css,/\.result-card \{ animation: none; opacity: 1; \}/);
+    assert.doesNotMatch(html,/alt="(?:bot|icon)"/);
+    assert.match(css,/scroll-padding-top: calc\(var\(--chat-top-height/);
+    assert.match(css,/scroll-padding-bottom: var\(--chat-bottom-padding/);
 });

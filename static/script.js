@@ -41,6 +41,7 @@ const MAX_HISTORY_TURNS = 2;
 const UI_TEXT = window.CHAT_UI_TEXT;
 
 const SHOW_MORE_KEYWORDS = new Set([
+    ...Object.values(UI_TEXT).map(copy => copy.more.toLowerCase()),
     "다음", "더", "더 보기", "더 보여줘", "계속", "이어서", "다음거", "다음꺼", "다른거", "다른 거", "또",
     "next", "more", "continue", "show more",
     "tiếp", "tiếp theo", "thêm", "xem thêm", "nữa", "tiếp tục",
@@ -327,8 +328,18 @@ function startLoadingTips(element, language) {
         target.textContent = copy.tip_label + '\n' + tips[index];
     };
     show();
-    const timer = setInterval(show, 7000);
-    return () => clearInterval(timer);
+    const preference = window.matchMedia?.('(prefers-reduced-motion: reduce)');
+    let timer = null;
+    const syncRotation = () => {
+        if (timer !== null) clearInterval(timer);
+        timer = preference?.matches ? null : setInterval(show, 7000);
+    };
+    syncRotation();
+    preference?.addEventListener?.('change', syncRotation);
+    return () => {
+        if (timer !== null) clearInterval(timer);
+        preference?.removeEventListener?.('change', syncRotation);
+    };
 }
 
 async function fetchChatResponse(requestBody, resumeJobId = null) {
@@ -443,7 +454,8 @@ function addMessageToBox(role, content) {
         const iconImg = document.createElement('img');
         iconImg.src = "/static/bot-icon.png";
         iconImg.className = "bot-profile-icon";
-        iconImg.alt = "bot";
+        iconImg.alt = "";
+        iconImg.setAttribute("aria-hidden", "true");
         rowElement.appendChild(iconImg);
     }
 
@@ -853,3 +865,21 @@ window.addEventListener('load', () => {
     if (header && window.ResizeObserver) new window.ResizeObserver(syncHeaderHeight).observe(header);
 });
 window.addEventListener('resize', syncHeaderHeight);
+
+
+// Scroll only keyboard-focused answer controls, never move a pointer reader.
+// Native focus scrolling uses the whole chat viewport, including fixed overlays.
+function revealFocusedAnswerControl(event) {
+    const target = event.target;
+    if (!target?.matches?.(':focus-visible') || !target.scrollIntoView) return;
+    const rect = target.getBoundingClientRect();
+    const viewport = chatBox.getBoundingClientRect();
+    const header = document.querySelector('.chat-topbar')?.getBoundingClientRect();
+    const styles = window.getComputedStyle(chatBox);
+    const top = Math.max(viewport.top, header?.bottom || viewport.top) + 8;
+    const bottom = viewport.bottom - (parseFloat(styles.scrollPaddingBottom) || 0) + 8;
+    if (rect.top < top || rect.bottom > bottom) {
+        target.scrollIntoView({block: 'nearest', inline: 'nearest', behavior: 'instant'});
+    }
+}
+chatBox.addEventListener('focusin', revealFocusedAnswerControl);

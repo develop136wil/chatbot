@@ -7,12 +7,14 @@
     font-family: 'SF Pro';
     src: url('SF-Pro.ttf') format('truetype');
     font-weight: normal;
+    font-display: swap;
 }
 
 @font-face {
     font-family: 'ONE Mobile POP';
     src: url('ONE Mobile POP.ttf') format('truetype'), url('ONE Mobile POP OTF.otf') format('opentype');
     font-weight: normal;
+    font-display: swap;
 }
 
 /* 2. 변수 설정 - 라이트 모드 */
@@ -688,9 +690,11 @@ body {
     /* 흑백 처리 */
 }
 
-/* Compact, opt-in contact disclosure; no rating panel or extra footer frame. */
+/* One quiet divider separates answer actions from optional support. */
 .contact-actions {
     margin-top: 8px;
+    padding-top: 6px;
+    border-top: 1px solid #DDE2E8;
     color: #475467;
     font-size: 12px;
     line-height: 1.6;
@@ -1264,12 +1268,12 @@ body {
     display: flex; align-items: center; justify-content: center;
     margin: 12px auto 0; padding: 5px 12px; min-height: 32px;
     max-width: 100%; width: fit-content;
-    border: 1px solid #E2D6AE; border-radius: 16px;
-    color: #594B2B; background: #FFF9E7;
+    border: 1px solid #CBD2DC; border-radius: 16px;
+    color: #344054; background: #EAECF0;
     font-family: inherit; font-size: 13px; font-weight: 500; line-height: 1.4;
     cursor: pointer;
 }
-.show-more-btn:hover:not(:disabled) { background: #FFF1C2; }
+.show-more-btn:hover:not(:disabled) { background: #DDE2E8; }
 .show-more-btn:disabled { opacity: 0.55; cursor: wait; }
 .show-more-btn:focus-visible { outline: 3px solid #5684CC; outline-offset: 3px; }
 
@@ -1277,7 +1281,8 @@ body {
 /* Measured footer height includes safe-area padding and multiline input growth. */
 .chat-box, .chat-box.suggestions-visible {
     padding-bottom: var(--chat-bottom-padding, calc(162px + env(safe-area-inset-bottom)));
-    scroll-padding-bottom: 16px;
+    scroll-padding-top: calc(var(--chat-top-height, 72px) + 16px);
+    scroll-padding-bottom: var(--chat-bottom-padding, calc(162px + env(safe-area-inset-bottom)));
 }
 .suggestion-container { bottom: var(--chat-footer-height, 76px); }
 #suggestion-toggle-btn { bottom: calc(var(--chat-footer-height, 76px) + 6px); }
@@ -1348,6 +1353,8 @@ body {
 .chat-box { padding-top: calc(var(--chat-top-height, 72px) + 16px); padding-right: 60px; }
 .message.user p { white-space: pre-wrap; overflow-wrap: anywhere; }
 #welcome-msg { line-height: 1.75; word-break: keep-all; }
+#welcome-msg > span { display: block; }
+#welcome-msg > span + span { margin-top: 6px; }
 .message.assistant p + p { margin-top: .65em; }
 /* Original loading typography (before c8b1468), scoped against paragraph rules. */
 .loading-copy { margin-top: 12px; text-align: left; }
@@ -1355,7 +1362,7 @@ body {
     font-size: 14px; font-weight: 600; color: #333; margin: 0 0 8px;
 }
 .message.assistant .loading-copy .tip-text {
-    font-size: 12px; font-weight: 400; color: #888; margin: 0;
+    font-size: 12px; font-weight: 400; color: var(--text-secondary); margin: 0;
     line-height: 1.6; white-space: pre-line;
 }
 #splash-screen { pointer-events: none; animation: dismiss-splash 0s 3s forwards; }
@@ -1384,4 +1391,5 @@ body {
 @media (prefers-reduced-motion: reduce) {
     .chat-box { scroll-behavior: auto; }
     .message-row, .toast, .skeleton-box, .splash-content { animation: none; transition: none; }
+    .result-card { animation: none; opacity: 1; }
 }

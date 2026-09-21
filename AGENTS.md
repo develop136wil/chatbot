@@ -56,3 +56,10 @@ python index.py
 *   **Supabase Keep-Alive**: `main.py` has a scheduler to wake up Supabase every 12h.
 *   **Feedback**: Stored in Notion (`FEEDBACK_DB_ID`).
 *   **Timezone**: Explicitly set to `Asia/Seoul` in schedulers.
+
+
+## UI DESIGN CONTRACT
+- UI/UX 변경 전 저장소 루트의 `DESIGN.md`를 읽고 기존 정체성과 사용자 선택을 보존한다.
+- `docs/design-review-20260921.md`의 확인 범위와 미검증 항목을 구분한다.
+- UI 변경 시 `tests/frontend.test.cjs`와 `tests/ui_design.browser.cjs`를 사용해 회귀를 확인한다.
+- 외부 디자인 스킬의 일반 권고만으로 캐릭터·국기·폰트·글라스 효과를 교체하지 않는다.
