@@ -7,9 +7,9 @@ const {chromium}=require('playwright');
    const date=new Date('2026-09-01T00:00:00Z');date.setUTCDate(date.getUTCDate()+i);
    return {day:date.toISOString().slice(0,10),stats:{questions:10+i,answered:7+i,empty:1,errors:1,clarify:1,
      source_clicks:3,more:2,sessions:8,cache_hits:4,cache_eligible:8,
-     categories:{'의료/재활':4,'돌봄/양육':3,'교육/보육':2,'미분류':1},
-     languages:{ko:7,en:1,vi:1,zh:1},sources:{direct:5,qr:4,unknown:1},inputs:{typed:6,suggestion:4},
-     latency_cached:{'<1초':2,'1–3초':2},latency_fresh:{'3–5초':2,'5–10초':1,'10–20초':2}}};
+     categories:{'의료/재활':4+i,'돌봄/양육':3,'교육/보육':2,'미분류':1},
+     languages:{ko:7+i,en:1,vi:1,zh:1},sources:{direct:5+i,qr:4,unknown:1},inputs:{typed:6+i,suggestion:4},
+     latency_cached:{'<1초':2,'1–3초':2},latency_fresh:{'3–5초':1+i,'5–10초':1,'10–20초':1}}};
  });
  const server=http.createServer((req,res)=>{
    const name=req.url.split('?')[0];
@@ -42,9 +42,15 @@ const {chromium}=require('playwright');
    await page.screenshot({path:path.join(out,'desktop.png'),fullPage:true});
    await page.setViewportSize({width:375,height:812});await page.screenshot({path:path.join(out,'mobile.png'),fullPage:true});
    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+   assert.ok(Number((await page.locator('#trend svg').getAttribute('viewBox')).split(' ')[2])<400);
    const download=page.waitForEvent('download');await page.locator('#csv').click();
    assert.match((await download).suggestedFilename(),/^chatbot-2026/);
-   await page.locator('#logout').click();assert.equal(await page.locator('#report').isVisible(),false);
+   await page.route('**/admin/analytics/data?*',async route=>{await new Promise(r=>setTimeout(r,300));await route.continue();});
+   await page.locator('#refresh').click();
+   await page.locator('#logout').click();
+   await page.waitForTimeout(700);
+   assert.equal(await page.locator('#report').isVisible(),false);
+   assert.equal(await page.locator('#trend svg').count(),0);
    assert.deepEqual(errors,[]);
    console.log(JSON.stringify({passed:true,desktop:path.join(out,'desktop.png'),mobile:path.join(out,'mobile.png')}));
  }finally{await browser.close();server.close();}

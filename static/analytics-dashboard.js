@@ -1,5 +1,5 @@
 'use strict';
-let adminKey = '', currentReport = null;
+let adminKey = '', currentReport = null, reportSequence = 0;
 const $ = id => document.getElementById(id);
 const COLORS = ['#187d78','#d29a3d','#5784a0','#a37baf','#83a36a','#8e9699','#bb7b6b'];
 const COUNTS = ['questions','answered','empty','errors','limited','pending','clarify','source_clicks','more','other','retry_attempts','cache_hits','cache_eligible','sessions'];
@@ -35,7 +35,7 @@ function bars(id, values, labels=LABELS) {
 function line(days) {
     const host=$('trend');host.replaceChildren();
     if(!days.some(d=>d.stats.questions))return empty(host);
-    const width=960,height=220,left=40,bottom=185,plot=880,max=Math.max(1,...days.map(d=>d.stats.questions||0));
+    const width=Math.max(320,Math.min(960,host.clientWidth||960)),height=220,left=40,bottom=185,plot=width-80,max=Math.max(1,...days.map(d=>d.stats.questions||0));
     const svg=svgNode('svg',{viewBox:'0 0 '+width+' '+height,role:'img','aria-label':'일별 질문 수 추이. 정확한 값은 아래 일별 집계표에서 확인할 수 있습니다.'});
     for(let i=0;i<=4;i++){
         const y=bottom-i*150/4;svg.append(svgNode('line',{x1:left,x2:width-40,y1:y,y2:y,stroke:'#e4edeb'}));
@@ -130,6 +130,7 @@ function render(data,start,end) {
 async function loadReport(){
     const start=$('start').value,end=$('end').value;
     if(!start||!end||start>end||(new Date(end)-new Date(start))/86400000>729){$('status').textContent='조회 기간은 시작일부터 최대 730일로 선택하세요.';return;}
+    const sequence=++reportSequence;
     $('status').textContent='집계 내용을 확인하고 있습니다…';$('refresh').disabled=true;
     try {
         const response=await fetch('/admin/analytics/data?start='+encodeURIComponent(start)+'&end='+encodeURIComponent(end),
@@ -137,19 +138,26 @@ async function loadReport(){
         if(response.status===401||response.status===404)throw new Error('관리자 키를 확인해 주세요. Supabase 키가 아니라 ADMIN_SECRET_KEY입니다.');
         if(!response.ok)throw new Error(response.status===429?'조회 요청이 많습니다. 잠시 후 다시 시도하세요.':'통계 저장소 연결 실패: 올바른 프로젝트에 SQL을 적용했는지 확인해 주세요.');
         const data=await response.json();
+        if(sequence!==reportSequence || !adminKey)return;
         render(data,start,end);$('report').hidden=false;$('login-panel').hidden=true;$('status').textContent='';
-    } catch(error){$('status').textContent=error.name==='TimeoutError'?'조회 시간이 초과됐습니다. 다시 시도해 주세요.':error.message;}
-    finally{$('refresh').disabled=false;}
+    } catch(error){if(sequence!==reportSequence)return;$('status').textContent=error.name==='TimeoutError'?'조회 시간이 초과됐습니다. 다시 시도해 주세요.':error.message;}
+    finally{if(sequence===reportSequence)$('refresh').disabled=false;}
 }
 function csvCell(value){return '"'+String(value).replaceAll('"','""')+'"';}
 function csvText(report){
-    const keys=['questions','answered','empty','errors','limited','pending','clarify','source_clicks','more','retry_attempts','sessions'];
+    const keys=['questions','answered','empty','errors','limited','pending','clarify','source_clicks','more','retry_attempts','sessions','cache_hits','cache_eligible'];
     const rows=[['date_kst',...keys],...report.days.map(d=>[d.day,...keys.map(k=>d.missing?'':d.stats[k]||0)])];
     return '\ufeff'+rows.map(r=>r.map(csvCell).join(',')).join('\r\n');
 }
 $('login-form').addEventListener('submit',async e=>{e.preventDefault();adminKey=$('secret').value;$('secret').value='';await loadReport();});
 $('refresh').addEventListener('click',loadReport);
-$('logout').addEventListener('click',()=>{adminKey='';currentReport=null;$('report').hidden=true;$('login-panel').hidden=false;$('status').textContent='잠금 상태입니다.';});
+$('logout').addEventListener('click',()=>{
+    ++reportSequence;adminKey='';currentReport=null;$('refresh').disabled=false;
+    $('report').hidden=true;$('login-panel').hidden=false;$('status').textContent='잠금 상태입니다.';
+    for(const id of ['kpis','trend','categories','languages','outcomes','latency','sources','inputs','daily-table'])$(id).replaceChildren();
+    $('health').textContent='';
+});
+window.addEventListener('resize',()=>{if(currentReport)line(currentReport.days);});
 $('print').addEventListener('click',()=>window.print());
 $('csv').addEventListener('click',()=>{
     if(!currentReport)return;
