@@ -262,11 +262,11 @@ test('오프라인·온라인 이벤트가 선택 언어 안내를 사용한다'
     c.windowEvents.online[0]();
     assert.equal(c.window.notice,c.window.CHAT_UI_TEXT.zh.online);
 });
-test('언어 선택은 국기 대신 언어명이며 상단 높이를 측정한다', () => {
+test('언어 선택은 로컬 국기와 접근성 이름을 유지하며 제목 높이를 측정한다', () => {
     const html=fs.readFileSync('static/index.html','utf8');
     assert.match(html,/class="chat-topbar"/);
     assert.match(html,/Tiếng Việt/);
-    assert.doesNotMatch(html,/🇰🇷|🇺🇸|🇻🇳|🇨🇳/);
+    for (const flag of ['kr','us','vn','cn']) assert.ok(html.includes('/static/flags/'+flag+'.svg'));
     const header=element();header.getBoundingClientRect=()=>({height:172});
     const c=setup({selectors:{'.chat-topbar':header}});
     c.syncHeaderHeight();
@@ -281,7 +281,7 @@ test('라이트 모드만 선언하고 다크 시스템 테마 분기를 제거�
     assert.match(html,/<meta name="color-scheme" content="only light">/);
     assert.ok(html.indexOf('name="color-scheme"') < html.indexOf('rel="stylesheet"'));
     for (const source of [css,html,js]) assert.doesNotMatch(source,/prefers-color-scheme\s*:\s*dark/i);
-    assert.match(html,/style\.css\?v=2026\.09\.20-mobile/);
+    assert.match(html,/style\.css\?v=2026\.09\.21-restore/);
 });
 
 test('라이트 고정 후에도 동작 줄이기와 사용자 고대비 설정을 방해하지 않는다', () => {
@@ -873,4 +873,72 @@ test('피드백 입력 화면을 다시 열어도 상태 안내와 429 대기는
     assert.equal(count,1);
     assert.equal(status(),originalStatus);
     assert.match(status().textContent,/다시 시도/);
+});
+
+test('시작 화면·제목·설치 앱의 한국어 이름이 일치한다',()=>{
+    const c=setup(),html=fs.readFileSync('static/index.html','utf8');
+    const manifest=JSON.parse(fs.readFileSync('static/manifest.json','utf8'));
+    const name=c.window.CHAT_UI_TEXT.ko.title;
+    assert.equal(name,'도봉구 영유아 복지정보자료집');
+    assert.ok(html.includes('<title>'+name+'</title>'));
+    assert.ok(html.includes('class="splash-title">'+name+'</h1>'));
+    assert.ok(html.includes('id="header-title">'+name+'</span>'));
+    assert.equal(manifest.name,name);
+});
+
+test('글라스 제목의 상위 영역이 불투명한 배경으로 효과를 덮지 않는다',()=>{
+    const css=fs.readFileSync('static/style.css','utf8');
+    const top=css.match(/\.chat-topbar\s*\{([^}]+)\}/)[1];
+    assert.match(top,/background: var\(--glass-bg\)/);
+    assert.match(top,/backdrop-filter: var\(--glass-blur\)/);
+    assert.doesNotMatch(top,/background: var\(--bg-color\)/);
+    assert.match(css,/\.message\.user p\s*\{[^}]*white-space: pre-wrap/);
+});
+
+test('육아 팁은 네 언어에서 무작위로 순환하고 바로 같은 팁을 반복하지 않는다',()=>{
+    for(const lang of ['ko','en','vi','zh']){
+        const c=setup(),tip=element(),box=element();
+        box.querySelector=()=>tip;
+        let tick,cleared=false;
+        c.setInterval=(fn,ms)=>{assert.equal(ms,7000);tick=fn;return 51;};
+        c.clearInterval=id=>{assert.equal(id,51);cleared=true;};
+        const stop=c.startLoadingTips(box,lang);
+        const first=tip.textContent;tick();
+        assert.notEqual(tip.textContent,first);
+        assert.ok(tip.textContent.startsWith(c.window.CHAT_UI_TEXT[lang].tip_label+'\n'));
+        assert.ok(c.window.CHAT_UI_TEXT[lang].tips.length>=8);
+        stop();assert.equal(cleared,true);
+    }
+});
+
+test('답변 성공·HTTP 실패·취소 모두 팁 타이머를 정리한다',async()=>{
+    for(const result of ['complete','http','abort']){
+        const c=setup(),box=element(),tip=element();
+        box.querySelector=selector=>selector==='.tip-text' ? tip : null;
+        let stopped=0;
+        c.setInterval=()=>92;c.clearInterval=id=>{if(id===92)stopped++;};
+        c.box=box;
+        vm.runInContext("addMessageToBox=()=>box;renderChatResponse=async()=>{};",c);
+        c.fetch=async()=>{
+            if(result==='abort') throw new DOMException('cancel','AbortError');
+            return result==='http' ? {ok:false,status:503} : response({status:'complete',answer:'ok'});
+        };
+        await c.fetchChatResponse({question:'지원'});
+        assert.equal(stopped,1);
+    }
+});
+
+test('원래 질문의 줄바꿈은 전송 시 보존한다',async()=>{
+    const c=lengthContext();
+    c.document.getElementById('user-input').value='첫째 줄\n둘째 줄';
+    await c.handleFormSubmit();
+    assert.equal(c.window.sent.question,'첫째 줄\n둘째 줄');
+});
+
+test('상단 국기 영역은 텍스트 레일과 구분되고 시작 화면은 입력을 막지 않는다',()=>{
+    const css=fs.readFileSync('static/style.css','utf8');
+    assert.match(css,/\.chat-box\s*\{[^}]*padding-right: 60px/);
+    assert.match(css,/#splash-screen\s*\{[^}]*pointer-events: none/);
+    const c=setup();
+    for(const value of Object.values(c.window.CHAT_UI_TEXT)) assert.ok(value.welcome.includes('<br><br>'));
 });

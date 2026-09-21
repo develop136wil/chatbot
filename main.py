@@ -161,6 +161,8 @@ JOB_RESULT_KEY_PREFIX = "chatbot:job_result:"
 
 # 정확한 '더 보기' 문구는 LLM 의도 분석 전에 처리해 불필요한 API 호출을 줄입니다.
 SHOW_MORE_EXACT_TERMS = {
+    "더보여주세요", "다른결과도보여줘", "다음결과를보여줘",
+    "showmemore", "pleaseshowmore", "xemthêmkếtquả", "请显示更多",
     "더", "다음", "계속", "더보여줘", "다른거", "다른것", "또",
     "more", "next", "showmore", "continue",
     "xemthêm", "tiếp", "tiếptheo", "thêm", "nữa", "tiếptục",
@@ -509,14 +511,12 @@ async def chat_with_bot(chat_request: ChatRequest, request: Request):
         return {"status": "error", "message": ui_text["system_error"]}
 
 
-    # 4. 자연어 '더 보기' 요청은 의도 분석 결과로만 처리합니다.
-    is_ai_match = extracted_info.get("intent") == "show_more"
-    is_show_more = is_ai_match
-    
-    # '더 보기' 실행 (Redis가 죽어도 Supabase는 살아있으므로 작동 가능)
-    if is_show_more:
-        logger.info("더 보기 AI 의도 경로 처리")
-        return await build_show_more_response(chat_request, language)
+    # Only an explicit action or an exact continuation phrase may page results.
+    # An LLM guess must never turn a new service question into pagination.
+    if extracted_info.get("intent") == "show_more":
+        logger.warning("[Intent Guard] ignored AI show_more for new question (request_id=%s)",
+                       current_request_id())
+        extracted_info = dict(extracted_info, intent=None)
 
     # 4. 의도별 분기 (Small talk 등)
     if extracted_info.get("intent") == "safety_block":

@@ -1,4 +1,4 @@
-from observability import timed_async
+from observability import timed_async, current_request_id
 import sys
 # UTF-8 출력 설정 (Windows 인코딩 오류 방지)
 # UTF-8 출력 설정 (Windows 인코딩 오류 방지)
@@ -27,6 +27,7 @@ import itertools
 import re  # [긴급 수정] 정규식 모듈 추가 (expand_search_query에서 사용)
 import html
 import unicodedata
+from urllib.parse import urlparse
 import secrets  # [추가] 보안 토큰 생성용
 import logging  # [추가] 구조화된 로깅
 import httpx
@@ -2276,6 +2277,36 @@ def search_supabase(question: str, extracted_info: dict, keywords: list = []) ->
     
     return results
 
+async def diagnose_empty_search_async(embedding_dimensions: int) -> None:
+    """Read only: distinguish an empty RPC result from an unavailable index.
+    Never log keys, question text or document content. No extra LLM call.
+    """
+    report = {
+        "request_id": current_request_id(),
+        "environment": os.getenv("VERCEL_ENV", "local"),
+        "project_host": urlparse(SUPABASE_URL).hostname,
+        "embedding_dimensions": embedding_dimensions,
+        "rpc_results": 0,
+    }
+    try:
+        loop = asyncio.get_running_loop()
+        result = await asyncio.wait_for(loop.run_in_executor(
+            None, lambda: supabase_async.table("site_pages").select(
+                "page_id", count="exact", head=True).execute()), timeout=3)
+        count = result.count
+        if not isinstance(count, int) or isinstance(count, bool):
+            raise ValueError("missing row count")
+        report["visible_index_rows"] = count
+    except Exception as error:
+        report["index_check"] = "failed"
+        report["error_type"] = type(error).__name__
+        logger.warning("[Search Diagnostic] %s", json.dumps(report, ensure_ascii=False))
+        raise SearchUnavailable("index visibility check unavailable") from error
+    logger.warning("[Search Diagnostic] %s", json.dumps(report, ensure_ascii=False))
+    if count == 0:
+        raise SearchUnavailable("index empty or inaccessible")
+
+
 @timed_async("search")
 async def search_supabase_async(question: str, extracted_info: dict, keywords: list = []) -> list:
     """
@@ -2320,6 +2351,8 @@ async def search_supabase_async(question: str, extracted_info: dict, keywords: l
                 ).execute()
             )
             results = response.data
+            logger.info("[Search Rows] request_id=%s phase=category rows=%s threshold=0.45",
+                        current_request_id(), len(results))
         except Exception as e:
             print(f"⚠️ 1차 검색 실패: {e}")
 
@@ -2343,6 +2376,8 @@ async def search_supabase_async(question: str, extracted_info: dict, keywords: l
                 ).execute()
             )
             
+            logger.info("[Search Rows] request_id=%s phase=global rows=%s threshold=0.4",
+                        current_request_id(), len(response.data))
             # 중복 제거 및 합치기
             existing_ids = {r['id'] for r in results}
             for doc in response.data:
@@ -2387,6 +2422,8 @@ async def search_supabase_async(question: str, extracted_info: dict, keywords: l
             else:
                 print(f"⚠️ [Age Filter] 필터링 결과가 0개여서 원본 유지")
 
+        if not results:
+            await diagnose_empty_search_async(len(query_embedding))
         return results
 
     # 카테고리 검색만으로 충분한 결과가 나온 경우에도 결과를 반환합니다.

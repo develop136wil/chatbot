@@ -1,8 +1,8 @@
 // Static interface copy: no runtime translation or AI calls.
 window.CHAT_UI_TEXT = {
   "ko": {
-    "title": "도봉구 영유아 복지톡",
-    "welcome": "도봉구 영유아 복지정보를 찾아드려요.<br>“24개월 아이가 받을 수 있는 지원”처럼 물어보세요.<br>필요한 경우 아이의 개월 수를 알려주세요. 이름이나 연락처는 입력하지 않아도 돼요.",
+    "title": "도봉구 영유아 복지정보자료집",
+    "welcome": "도봉구 영유아 복지정보를 찾아드려요.<br><br>“24개월 아이가 받을 수 있는 지원”처럼 물어보세요.<br><br>필요한 경우 아이의 개월 수를 알려주세요. 이름이나 연락처는 입력하지 않아도 돼요.",
     "time": "관련 정보를 안내하며, 최종 지원 여부는 담당 기관에서 확인해 주세요.",
     "placeholder": "예: 24개월 아이가 받을 수 있는 지원",
     "toggle_open": "추천 질문",
@@ -77,11 +77,22 @@ window.CHAT_UI_TEXT = {
       "send_failed": "오류로 저장 여부를 확인하지 못했어요. 작성 내용은 유지했어요. 다시 전송할 수 있지만, 이미 저장됐다면 중복될 수 있어요.",
       "thanks_good": "의견 감사합니다.",
       "thanks_bad": "개선에 참고하겠습니다."
-    }
+    },
+    "tips": [
+      "그림책을 보며 아이가 가리키는 그림에 함께 관심을 가져보세요.",
+      "아이의 말을 끝까지 듣고 대답할 시간을 주세요.",
+      "놀이 중 아이가 관심을 보이는 것을 말로 표현해 주세요.",
+      "아이에게 선택할 수 있는 두 가지 놀이를 제안해 보세요.",
+      "함께 장난감을 정리하며 물건의 이름을 이야기해 보세요.",
+      "아이와 눈높이를 맞추고 오늘 즐거웠던 일을 물어보세요.",
+      "다른 아이와 비교하기보다 아이가 새롭게 해낸 일을 이야기해 주세요.",
+      "부모에게도 쉬는 시간이 필요해요. 가능한 도움을 주변에 요청해 보세요."
+    ],
+    "tip_label": "아이와 함께하는 일상 팁"
   },
   "en": {
-    "title": "Dobong Child Welfare",
-    "welcome": "Find child welfare information for Dobong-gu.<br>Try “Support for a 24-month-old child”.<br>You can include your child’s age in months when relevant. No name or contact details are needed.",
+    "title": "Dobong Child Welfare Guide",
+    "welcome": "Find child welfare information for Dobong-gu.<br><br>Try “Support for a 24-month-old child”.<br><br>You can include your child’s age in months when relevant. No name or contact details are needed.",
     "time": "This is an information guide. Confirm eligibility with the responsible organization.",
     "placeholder": "E.g. support for a 24-month-old child",
     "toggle_open": "Suggested Questions",
@@ -156,11 +167,22 @@ window.CHAT_UI_TEXT = {
       "send_failed": "We could not confirm saving. Your draft is kept. You can send again, but this may create a duplicate if it was already saved.",
       "thanks_good": "Thank you for your feedback.",
       "thanks_bad": "Thank you. We will review it."
-    }
+    },
+    "tips": [
+      "While reading a picture book, notice the pictures your child points to.",
+      "Listen to the end of your child's words and give them time to respond.",
+      "Put into words what catches your child's interest during play.",
+      "Offer your child a choice between two play activities.",
+      "Talk about the names of toys as you tidy them together.",
+      "Get down to your child's eye level and ask what they enjoyed today.",
+      "Notice what your child has newly learned, rather than comparing them with others.",
+      "Parents need breaks too. Ask people around you for help when possible."
+    ],
+    "tip_label": "Everyday parenting tip"
   },
   "vi": {
-    "title": "Phúc lợi trẻ em Dobong",
-    "welcome": "Tìm thông tin phúc lợi trẻ em tại quận Dobong.<br>Ví dụ: “Hỗ trợ cho trẻ 24 tháng tuổi”.<br>Bạn có thể thêm tuổi của trẻ theo tháng khi cần. Không cần nhập tên hoặc thông tin liên hệ.",
+    "title": "Cẩm nang phúc lợi trẻ em Dobong",
+    "welcome": "Tìm thông tin phúc lợi trẻ em tại quận Dobong.<br><br>Ví dụ: “Hỗ trợ cho trẻ 24 tháng tuổi”.<br><br>Bạn có thể thêm tuổi của trẻ theo tháng khi cần. Không cần nhập tên hoặc thông tin liên hệ.",
     "time": "Đây là thông tin tham khảo. Hãy xác nhận điều kiện hưởng hỗ trợ với cơ quan phụ trách.",
     "placeholder": "Ví dụ: Hỗ trợ cho trẻ 24 tháng tuổi",
     "toggle_open": "Câu hỏi gợi ý",
@@ -235,11 +257,22 @@ window.CHAT_UI_TEXT = {
       "send_failed": "Không thể xác nhận việc lưu. Nội dung vẫn được giữ lại. Bạn có thể gửi lại, nhưng có thể bị trùng nếu đã được lưu.",
       "thanks_good": "Cảm ơn phản hồi của bạn.",
       "thanks_bad": "Chúng tôi sẽ xem xét ý kiến của bạn."
-    }
+    },
+    "tips": [
+      "Khi xem sách tranh, hãy cùng chú ý đến hình mà trẻ chỉ vào.",
+      "Lắng nghe trẻ nói hết và cho trẻ thời gian trả lời.",
+      "Hãy gọi tên những điều trẻ quan tâm khi chơi.",
+      "Cho trẻ chọn giữa hai hoạt động vui chơi.",
+      "Cùng cất đồ chơi và nói tên từng món đồ.",
+      "Ngồi ngang tầm mắt trẻ và hỏi hôm nay điều gì khiến trẻ vui.",
+      "Hãy ghi nhận điều trẻ mới làm được thay vì so sánh với trẻ khác.",
+      "Cha mẹ cũng cần nghỉ ngơi. Hãy nhờ người xung quanh giúp khi có thể."
+    ],
+    "tip_label": "Gợi ý hằng ngày cùng trẻ"
   },
   "zh": {
-    "title": "道峰区婴幼儿福利",
-    "welcome": "查询道峰区婴幼儿福利信息。<br>例如：“24个月的孩子可以获得哪些支持？”<br>如有需要，可提供孩子的月龄。无需输入姓名或联系方式。",
+    "title": "道峰区婴幼儿福利指南",
+    "welcome": "查询道峰区婴幼儿福利信息。<br><br>例如：“24个月的孩子可以获得哪些支持？”<br><br>如有需要，可提供孩子的月龄。无需输入姓名或联系方式。",
     "time": "本服务提供信息参考，是否符合申请条件请向负责机构确认。",
     "placeholder": "例如：24个月孩子可以获得哪些支持？",
     "toggle_open": "推荐提问",
@@ -314,6 +347,17 @@ window.CHAT_UI_TEXT = {
       "send_failed": "无法确认是否保存，已保留填写内容。您可以再次发送，但若已保存，可能产生重复记录。",
       "thanks_good": "感谢您的反馈。",
       "thanks_bad": "我们会参考您的意见改进。"
-    }
+    },
+    "tips": [
+      "一起看绘本时，关注孩子指着的图画。",
+      "听孩子把话说完，并给孩子回应的时间。",
+      "玩耍时，用语言描述孩子感兴趣的事物。",
+      "提供两种游戏，让孩子自己选择。",
+      "一起收拾玩具时，说一说玩具的名称。",
+      "与孩子保持相同的视线高度，问问今天有什么开心的事。",
+      "关注孩子新学会的事情，不必与其他孩子比较。",
+      "父母也需要休息，可以向身边的人寻求帮助。"
+    ],
+    "tip_label": "日常亲子小贴士"
   }
 };

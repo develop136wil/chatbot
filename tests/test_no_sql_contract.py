@@ -148,6 +148,20 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(self.client.post("/chat", json={"question": "초기화"}).json()["action"], "reset")
         self.assertEqual(self.client.post("/chat", json={"question": "지원"}).json()["code"], "daily_limit")
 
+    def test_ai_show_more_cannot_override_new_service_question(self):
+        self.intent.return_value = {"intent": "show_more", "category": None}
+        with patch.object(worker, "process_job_async", AsyncMock(return_value=("정상 검색", ["p1"], 1))) as job:
+            for ids in ([], ["previous"]):
+                result = self.client.post("/chat", json={"question": "양육수당 지원", "action": "ask",
+                    "last_result_ids": ids, "chat_history": [{"role": "user", "content": "영유아 발달검사"}]}).json()
+                self.assertEqual(result["answer"], "정상 검색")
+        self.assertEqual(job.await_count, 2)
+
+    def test_explicit_polite_more_phrase_still_avoids_ai(self):
+        result = self.client.post("/chat", json={"question": "더 보여주세요"}).json()
+        self.assertEqual(result["answer"], utils.LOCALIZED_UI["ko"]["no_more"])
+        self.intent.assert_not_awaited()
+
     def test_routes_choose_distinct_rate_limit_scopes(self):
         self.read.return_value = cached()
         self.assertEqual(self.client.post("/chat", json={"question": "지원"}).status_code, 200)
@@ -294,7 +308,39 @@ class UXFailureTests(unittest.IsolatedAsyncioTestCase):
         query.execute.side_effect = error
         db = Mock()
         db.rpc.return_value = query
+        db.table.return_value.select.return_value.execute.return_value = SimpleNamespace(count=155)
         return db
+
+    async def test_zero_rpc_with_visible_index_stays_not_found_and_logs_safely(self):
+        db = self.db()
+        with patch.object(utils, "supabase_async", db), patch.object(utils, "get_gemini_embedding_async", AsyncMock(return_value=[0.1])):
+            with self.assertLogs("utils", level="WARNING") as logs:
+                self.assertEqual(await utils.search_supabase_async("private question", {}, keywords=["test"]), [])
+        self.assertIn('"visible_index_rows": 155', "\\n".join(logs.output))
+        self.assertNotIn("private question", "\\n".join(logs.output))
+        db.table.return_value.select.assert_called_once_with("page_id", count="exact", head=True)
+
+    async def test_zero_rpc_with_empty_or_invisible_index_is_error(self):
+        db = self.db()
+        db.table.return_value.select.return_value.execute.return_value = SimpleNamespace(count=0)
+        with patch.object(utils, "supabase_async", db), patch.object(utils, "get_gemini_embedding_async", AsyncMock(return_value=[0.1])):
+            with self.assertRaises(utils.SearchUnavailable):
+                await utils.search_supabase_async("지원", {}, keywords=["test"])
+
+    async def test_failed_index_probe_is_not_reported_as_no_matching_content(self):
+        db = self.db()
+        db.table.return_value.select.return_value.execute.side_effect = RuntimeError("secret detail")
+        with patch.object(utils, "supabase_async", db), self.assertLogs("utils", level="WARNING") as logs:
+            with self.assertRaises(utils.SearchUnavailable):
+                await utils.diagnose_empty_search_async(768)
+        self.assertNotIn("secret detail", "\\n".join(logs.output))
+
+    async def test_nonempty_category_search_needs_no_extra_table_probe(self):
+        rows = [{"id": i, "metadata": {"page_id": str(i)}} for i in range(3)]
+        db = self.db(data=rows)
+        with patch.object(utils, "supabase_async", db), patch.object(utils, "get_gemini_embedding_async", AsyncMock(return_value=[0.1])):
+            self.assertEqual(await utils.search_supabase_async("지원", {"category": "돌봄/양육"}, keywords=["test"]), rows)
+        db.table.assert_not_called()
 
     async def test_failed_search_is_not_empty_results(self):
         db = self.db(error=RuntimeError("offline"))

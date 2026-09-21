@@ -5,7 +5,12 @@ console.log('SCRIPT_LOADED_FINAL_FIX');
 // ==========================================
 // [신규] 1. 스플래시 화면 로직
 // ==========================================
-document.getElementById('splash-screen')?.remove();
+function dismissSplash() {
+    document.getElementById('splash-screen')?.remove();
+}
+// No forced minimum wait. CSS also hides the non-blocking splash if JS fails.
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', dismissSplash, {once: true});
+else dismissSplash();
 
 // --- 1. 전역 변수 ---
 const chatBox = document.getElementById('chat-box');
@@ -274,6 +279,25 @@ async function renderChatResponse(data, element, question, sequence) {
     }
 }
 
+function startLoadingTips(element, language) {
+    const copy = UI_TEXT[language] || UI_TEXT.ko;
+    const tips = copy.tips || [];
+    const target = element.querySelector('.tip-text');
+    if (!target || !tips.length) return () => {};
+    target.setAttribute('aria-live', 'off');
+    let last = -1;
+    const show = () => {
+        // Random first tip; subsequent tips cannot repeat immediately.
+        const index = last < 0 ? Math.floor(Math.random() * tips.length)
+            : (last + 1 + Math.floor(Math.random() * Math.max(1, tips.length - 1))) % tips.length;
+        last = index;
+        target.textContent = copy.tip_label + '\n' + tips[index];
+    };
+    show();
+    const timer = setInterval(show, 7000);
+    return () => clearInterval(timer);
+}
+
 async function fetchChatResponse(requestBody, resumeJobId = null) {
     const lang = window.currentLang || 'ko';
     const messages = getRequestMessages();
@@ -284,7 +308,8 @@ async function fetchChatResponse(requestBody, resumeJobId = null) {
     const controller = new AbortController();
     activeRequestController = controller;
     const langData = UI_TEXT[lang] || UI_TEXT.ko;
-    const loading = addMessageToBox('assistant', '<div class="skeleton-container"><div class="skeleton-box" style="width:90%"></div><div class="skeleton-box" style="width:70%"></div><p class="action-text"></p></div>');
+    const loading = addMessageToBox('assistant', '<div class="skeleton-container"><div class="skeleton-box" style="width:90%"></div><div class="skeleton-box" style="width:70%"></div><p class="action-text"></p><p class="tip-text"></p></div>');
+    const stopTips = startLoadingTips(loading, lang);
     const text = loading.querySelector('.action-text');
     if (text) text.textContent = langData.processing;
     const animation = setTimeout(() => {
@@ -325,6 +350,7 @@ async function fetchChatResponse(requestBody, resumeJobId = null) {
             }, requestBody, question, sequence, error.retryDelay || 0, jobId);
         }
     } finally {
+        stopTips();
         clearTimeout(timeout);
         clearTimeout(animation);
         if (sequence === activeRequestSequence) {
