@@ -1,4 +1,6 @@
 from observability import timed_async, current_request_id
+from translation_retry import (TranslationFailure, TranslationRateGate, token_estimate,
+                               translation_json, missing_languages)
 import sys
 # UTF-8 출력 설정 (Windows 인코딩 오류 방지)
 # UTF-8 출력 설정 (Windows 인코딩 오류 방지)
@@ -962,9 +964,10 @@ async def get_gemini_embedding_async(text: str, task_type: str = "SEMANTIC_SIMIL
 @retry(
     stop=stop_after_attempt(_RETRY_ATTEMPTS),  # Vercel 환경에서 재시도 횟수 제한
     wait=wait_exponential(multiplier=1, min=1, max=5),
-    retry=retry_if_exception(lambda error: not isinstance(error, FreeTierQuotaExceeded))
+    retry=retry_if_exception(lambda error: not isinstance(error, (FreeTierQuotaExceeded, TranslationFailure)))
 )
 def generate_content_safe(client, prompt, timeout=8, **kwargs): 
+    translation_once = kwargs.pop('translation_once', False)
     # client 인자는 이제 LLM_CLIENT (Client 객체)입니다.
     
     # kwargs에서 설정값 추출하여 Config 객체 생성
@@ -979,6 +982,13 @@ def generate_content_safe(client, prompt, timeout=8, **kwargs):
         config_params['max_output_tokens'] = kwargs.pop('max_output_tokens')
     if 'response_mime_type' in kwargs:
         config_params['response_mime_type'] = kwargs.pop('response_mime_type')
+    if 'response_schema' in kwargs:
+        config_params['response_schema'] = kwargs.pop('response_schema')
+    if translation_once:
+        config_params['automatic_function_calling'] = {'disable': True}
+        config_params['thinking_config'] = {'thinking_budget': 0}
+        config_params['http_options'] = types.HttpOptions(
+            timeout=int(timeout * 1000), retry_options=types.HttpRetryOptions(attempts=1))
     if FREE_TIER_ONLY:
         config_params['max_output_tokens'] = min(
             int(config_params.get('max_output_tokens', FREE_TIER_MAX_OUTPUT_TOKENS)),
@@ -987,6 +997,21 @@ def generate_content_safe(client, prompt, timeout=8, **kwargs):
         
     config = types.GenerateContentConfig(**config_params)
     
+    if translation_once:
+        # One network attempt: the caller owns the bounded retry budget.
+        current_client = client or get_llm_client()
+        if not current_client:
+            raise TranslationFailure("provider_unavailable")
+        try:
+            return current_client.models.generate_content(
+                model='gemini-2.5-flash', contents=prompt, config=config)
+        except Exception as error:
+            if is_quota_error(error):
+                raise FreeTierQuotaExceeded("Gemini translation quota exhausted") from None
+            status = getattr(error, "code", None)
+            raise TranslationFailure("provider_configuration" if status in (400, 401, 403, 404)
+                                     else "provider_transient", status not in (400, 401, 403, 404)) from None
+
     for attempt in range(5):
         try:
             # 매 시도마다 최신 Client 객체 사용 (키 로테이션 반영)
@@ -1216,104 +1241,128 @@ async def call_groq_async_simple(
                 await asyncio.sleep(1)
     return None
 
-# --- [신규] Groq Sync 호출 함수 (run_indexer.py 등 동기 환경용) ---
-def call_groq_sync_robust(
-    prompt: str,
-    system_message: str = "You are a helpful assistant.",
-    *,
-    max_tokens: int = 2048,
-    json_mode: bool = False,
-) -> Optional[str]:
-    """Helper for sync Groq calls"""
-    if not GROQ_SYNC_CLIENT: return None
-    try:
-        request_options = {}
-        if json_mode:
-            # Groq JSON Object Mode로 형식 오류를 줄이고 유효한 JSON만 요청합니다.
-            request_options["response_format"] = {"type": "json_object"}
-        completion = GROQ_SYNC_CLIENT.chat.completions.create(
-            messages=[
-                {"role": "system", "content": system_message},
-                {"role": "user", "content": prompt}
-            ],
-            model=GROQ_QUALITY_MODEL,
-            temperature=0.1,
-            max_tokens=max_tokens,
-            **request_options,
-        )
-        if json_mode and getattr(completion.choices[0], "finish_reason", None) == "length":
-            print("⚠️ Groq Translation Failed: output truncated")
-            return None
-        return completion.choices[0].message.content
-    except Exception as e:
-        print(f"⚠️ Groq Sync Error: {e}")
+# Translation-only pacing: no effect on interactive chat requests.
+_translation_rate_gate = TranslationRateGate()
+_translation_gemini_unavailable = False
+
+
+def call_groq_sync_robust(prompt, system_message="You are a helpful assistant.",
+                          *, max_tokens=2048, json_mode=False):
+    if not GROQ_SYNC_CLIENT:
         return None
+    estimate = token_estimate(prompt + system_message, max_tokens)
+    # Disable SDK retries here to prevent nested retry multiplication.
+    client = GROQ_SYNC_CLIENT.with_options(max_retries=0, timeout=40)
+    for attempt in range(2):
+        _translation_rate_gate.before(estimate)
+        try:
+            raw = client.chat.completions.with_raw_response.create(
+                messages=[{"role": "system", "content": system_message},
+                          {"role": "user", "content": prompt}],
+                model=GROQ_QUALITY_MODEL, temperature=0.1, max_tokens=max_tokens,
+                **({"response_format": {"type": "json_object"}} if json_mode else {}))
+            _translation_rate_gate.observe(raw.headers)
+            completion = raw.parse()
+            if not completion.choices:
+                raise TranslationFailure("empty_response", True)
+            choice = completion.choices[0]
+            if choice.finish_reason == "length":
+                raise TranslationFailure("output_truncated")
+            if choice.finish_reason not in (None, "stop"):
+                raise TranslationFailure("output_blocked")
+            return choice.message.content
+        except TranslationFailure:
+            raise
+        except Exception as error:
+            failure = _translation_rate_gate.on_error(error)
+            logger.warning("[Translation API] provider=groq attempt=%d reason=%s", attempt + 1, failure.reason)
+            if not failure.retryable or attempt == 1:
+                raise failure from None
+
 
 def translate_content_multilingual_sync(title: str, content: str, languages=None) -> dict:
-    """
-    [Phase 3] 요청 언어만 번역 (영어/중국어/베트남어/일본어) - JSON 반환
-    Groq 우선 사용 -> Gemini 폴백
-    """
+    """Bounded translation recovery; return validated fields, never fabricated data."""
+    global _translation_gemini_unavailable
     names = {"en": "English", "zh": "Chinese (Simplified)", "vi": "Vietnamese", "ja": "Japanese"}
-    requested = [lang for lang in (languages if languages is not None else names) if lang in names]
+    requested = list(dict.fromkeys(lang for lang in (languages if languages is not None else names) if lang in names))
+    result = {}
     if not requested:
-        return {}
-    output_schema = json.dumps({lang: {"title": "...", "content": "..."} for lang in requested})
-    prompt = f"""
-    You are a professional translator for a welfare chatbot.
-    Translate the following Korean title and content into {", ".join(names[lang] for lang in requested)}.
-    These are South Korean welfare programs, NOT programs of Japan or another country.
-    Preserve Korean official program names in parentheses where needed. Never replace them with foreign schemes.
-    Preserve every amount, currency (KRW), age, eligibility restriction, date and contact detail. Do not infer missing facts.
-
-    [Source]
-    Title: {title}
-    Content: {content}
-
-    [Output Format]
-    Return ONLY a JSON object with this exact structure:
-    {output_schema}
-    """
-    
-    # 1. Groq 시도
-    if GROQ_SYNC_CLIENT:
-        try:
-            resp = call_groq_sync_robust(
-                prompt,
-                "You are a JSON translator. Return a complete JSON object only.",
-                max_tokens=4096,
-                json_mode=True,
-            )
-            if resp:
-                 # JSON 추출
-                json_start = resp.find('{')
-                json_end = resp.rfind('}') + 1
-                if json_start != -1 and json_end != -1:
-                    # 모델이 문자열 안에 줄바꿈을 이스케이프하지 않아도 복구합니다.
-                    return json.loads(resp[json_start:json_end], strict=False)
-        except Exception as e:
-            print(f"⚠️ Groq Translation Failed: {e}")
-
-    # 2. Gemini 폴백
-    client = get_llm_client()
-    if client:
-        try:
-            resp = generate_content_safe(
-                client,
-                prompt,
-                timeout=40,
-                response_mime_type="application/json",
-                max_output_tokens=4096,
-            )
-            text = resp.text if hasattr(resp, 'text') else str(resp)
-            json_start = text.find('{')
-            json_end = text.rfind('}') + 1
-            if json_start != -1 and json_end != -1:
-                return json.loads(text[json_start:json_end], strict=False)
-        except Exception as e:
-            print(f"⚠️ Gemini Translation Failed: {e}")
-            
-    return {} # 실패 시 빈 딕셔너리
+        return result
+    for provider in ("groq", "gemini"):
+        if provider == "groq" and not GROQ_SYNC_CLIENT:
+            continue
+        if provider == "gemini" and _translation_gemini_unavailable:
+            continue
+        client = get_llm_client() if provider == "gemini" else None
+        if provider == "gemini" and not client:
+            continue
+        for attempt in range(2):
+            missing = missing_languages(result, requested)
+            if not missing:
+                return result
+            schema = {"type": "object", "properties": {
+                lang: {"type": "object", "properties": {
+                    "title": {"type": "string"}, "content": {"type": "string"}},
+                    "required": ["title", "content"]} for lang in missing}, "required": missing}
+            output_shape = json.dumps({lang: {"title": "...", "content": "..."} for lang in missing})
+            prompt = f"""
+Translate this Korean welfare title and content into {", ".join(names[l] for l in missing)}.
+These are South Korean welfare programs, NOT programs of Japan or another country.
+Preserve Korean official names where needed, every amount, currency (KRW), age,
+eligibility restriction, date and contact detail. Never infer or omit facts.
+Return ONLY a complete JSON object with nonempty strings: {output_shape}
+[Source]
+Title: {title}
+Content: {content}
+"""
+            try:
+                if provider == "groq":
+                    text = call_groq_sync_robust(prompt, "Return a complete JSON object only.",
+                                                 max_tokens=4096, json_mode=True)
+                else:
+                    response = generate_content_safe(
+                        client, prompt, timeout=40, translation_once=True,
+                        response_mime_type="application/json", response_schema=schema,
+                        max_output_tokens=4096, temperature=0.0)
+                    candidates = getattr(response, "candidates", None) or []
+                    reason = getattr(candidates[0], "finish_reason", None) if candidates else None
+                    reason = getattr(reason, "name", str(reason)).upper()
+                    if "MAX_TOKENS" in reason:
+                        raise TranslationFailure("output_truncated")
+                    if reason not in ("NONE", "STOP", "FINISHREASON.STOP"):
+                        raise TranslationFailure("output_blocked")
+                    text = getattr(response, "text", None)
+                valid = translation_json(text, missing)
+                for lang, fields in valid.items():
+                    current = result.setdefault(lang, {})
+                    for key, value in fields.items():
+                        current.setdefault(key, value)
+                if not missing_languages(result, requested):
+                    return result
+                raise TranslationFailure("missing_fields", True)
+            except FreeTierQuotaExceeded:
+                _translation_gemini_unavailable = True
+                logger.warning("[Translation] provider=gemini reason=quota_exhausted")
+                break
+            except TranslationFailure as error:
+                logger.warning("[Translation] provider=%s attempt=%d languages=%s reason=%s",
+                               provider, attempt + 1, ",".join(missing), error.reason)
+                if provider == "gemini" and error.reason == "provider_configuration":
+                    _translation_gemini_unavailable = True
+                # Only Groq transport retries already used their inner budget.
+                if not error.retryable or (provider == "groq" and error.reason in ("rate_limited", "provider_transient")):
+                    break
+            except Exception as error:
+                status = getattr(error, "code", None) or getattr(error, "status_code", None)
+                logger.warning("[Translation] provider=%s attempt=%d reason=provider_error type=%s",
+                               provider, attempt + 1, type(error).__name__)
+                if status in (401, 403, 404):
+                    if provider == "gemini":
+                        _translation_gemini_unavailable = True
+                    break
+            if attempt == 0:
+                time.sleep(2)
+    return result
 
 
 # --- [신규] 비동기 의도 분석 함수 ---

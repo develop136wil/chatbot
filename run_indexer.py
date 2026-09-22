@@ -10,6 +10,7 @@ from email.mime.multipart import MIMEMultipart
 import logging
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, asdict
+from pathlib import Path
 from supabase import create_client
 from notion_client import Client as NotionClient
 from dotenv import load_dotenv
@@ -63,16 +64,30 @@ class IndexingReport:
     deleted: int = 0
     failed_deletions: int = 0
     translations_pending: int = 0
+    translations_attempted: int = 0
+    translations_completed: int = 0
+    translations_failed: int = 0
+    translations_deferred: int = 0
     cache_refresh_failed: bool = False
     cache_marker_failures: int = 0
     cleanup_failed: bool = False
     setup_failed: bool = False
 
     @property
+    def has_errors(self):
+        return any((self.failed_pages, self.failed_categories, self.failed_deletions,
+                    self.translations_failed, self.cache_refresh_failed,
+                    self.cache_marker_failures, self.cleanup_failed, self.setup_failed,
+                    # Do not silently accept an unclassified pending count.
+                    self.translations_pending != self.translations_deferred + self.translations_failed))
+
+    @property
     def complete(self):
-        return not any((self.failed_pages, self.failed_categories, self.failed_deletions,
-                        self.translations_pending, self.cache_refresh_failed,
-                        self.cache_marker_failures, self.cleanup_failed, self.setup_failed))
+        return not self.has_errors and self.translations_pending == 0
+
+    @property
+    def status(self):
+        return "failed" if self.has_errors else ("complete" if self.complete else "in_progress")
 
 
 class IndexingIncomplete(RuntimeError):
@@ -82,11 +97,40 @@ class IndexingIncomplete(RuntimeError):
 
 
 def finish_indexing(report):
-    summary = {"status": "complete" if report.complete else "incomplete", **asdict(report)}
-    logger.log(logging.INFO if report.complete else logging.ERROR,
+    summary = {"status": report.status, **asdict(report)}
+    logger.log(logging.ERROR if report.has_errors else logging.INFO,
                "[Indexer Summary] %s", json.dumps(summary, ensure_ascii=False))
-    if not report.complete:
+    summary_path = os.getenv("GITHUB_STEP_SUMMARY")
+    if summary_path:
+        try:
+            labels = {"complete": "전체 완료", "in_progress": "진행 중 — 다음 자동 실행에서 계속",
+                      "failed": "실제 오류 발생 — 로그 확인 필요"}
+            rows = [
+                ("발견 문서", report.discovered), ("DB 업데이트", report.updated),
+                ("이미 완료되어 건너뜀", report.skipped),
+                ("이번 실행 번역 시도", report.translations_attempted),
+                ("이번 실행 번역 완료·저장", report.translations_completed),
+                ("번역 실패", report.translations_failed),
+                ("처리량 제한으로 미시도", report.translations_deferred),
+                ("번역 미완료 합계", report.translations_pending),
+                ("문서 처리 실패", report.failed_pages),
+                ("카테고리 조회 실패", report.failed_categories),
+                ("삭제 실패", report.failed_deletions),
+                ("캐시 갱신 실패", int(report.cache_refresh_failed)),
+                ("캐시 표시 정리 실패", report.cache_marker_failures),
+                ("캐시 정리 실패", int(report.cleanup_failed)),
+                ("초기화 실패", int(report.setup_failed))]
+            with Path(summary_path).open("a", encoding="utf-8") as output:
+                output.write("\n## 인덱싱: " + labels[report.status]
+                             + "\n\n| 항목 | 건수 |\n|---|---:|\n"
+                             + "".join(f"| {label} | {count} |\n" for label, count in rows)
+                             + "\n진행 중은 전체 번역 완료를 뜻하지 않습니다. 완료된 문서는 다음 실행에서 건너뜁니다.\n")
+        except OSError:
+            logger.warning("[Indexer] GitHub summary unavailable")
+    if report.has_errors:
         raise IndexingIncomplete(report)
+    if not report.complete and os.getenv("GITHUB_ACTIONS") == "true":
+        print(f"::notice title=Translation backfill in progress::{report.translations_deferred} documents deferred by batch limit; not all translations are complete.")
     return report
 
 
@@ -232,7 +276,7 @@ def run_indexing():
     total_processed = 0
     total_skipped = 0
     backfill_attempts = 0
-    translation_pending_pages = []
+    translation_pending_pages = set()
     has_critical_error = False
     changed_categories = set()
     pending_metadata = {}
@@ -332,12 +376,16 @@ def run_indexing():
                         and isinstance(old_meta.get("title"), str) and old_meta["title"].strip()
                         and isinstance(old_meta.get("pre_summary"), str) and old_meta["pre_summary"].strip()):
                     if backfill_attempts >= TRANSLATION_BACKFILL_LIMIT:
-                        translation_pending_pages.append(page_id)
+                        translation_pending_pages.add(page_id)
+                        report.translations_deferred += 1
                         continue
                     backfill_attempts += 1
+                    report.translations_attempted += 1
+                    translation_pending_pages.add(page_id)
                     missing = [lang for lang in TRANSLATION_LANGUAGES if not all(
                         isinstance(old_meta.get(field), str) and old_meta[field].strip()
                         for field in (f"title_{lang}", f"pre_summary_{lang}"))]
+                    translation_failure_counted = False
                     try:
                         translated = translate_content_multilingual_sync(
                             old_meta["title"], old_meta["pre_summary"], languages=missing)
@@ -357,7 +405,9 @@ def run_indexing():
                                     changed = True
                         complete = has_complete_multilingual_metadata(metadata)
                         if not complete:
-                            translation_pending_pages.append(page_id)
+                            report.translations_failed += 1
+                            translation_failure_counted = True
+                            logger.warning('[Translation Pending] page_id=%s languages=%s reason=incomplete_response', page_id, ','.join(missing))
                         if not changed:
                             continue
                         metadata["translations_complete"] = complete
@@ -370,10 +420,15 @@ def run_indexing():
                         if not isinstance(result.data, list) or not result.data:
                             raise RuntimeError("Translation update returned no row")
                         total_processed += 1
+                        if complete:
+                            report.translations_completed += 1
+                            translation_pending_pages.discard(page_id)
                         if RESPONSE_CACHE_ENABLED:
                             pending_metadata[page_id] = metadata
                         logger.info("[Indexer] 누락 번역 보완 (ID=%s, 언어=%s, 완료=%s)", page_id, ",".join(missing), complete)
                     except Exception as error:
+                        if not translation_failure_counted:
+                            report.translations_failed += 1
                         report.failed_pages += 1
                         has_critical_error = True
                         logger.error("번역 보완 실패 (ID=%s, 유형=%s)", page_id, type(error).__name__)
@@ -474,6 +529,7 @@ def run_indexing():
                             raise ValueError("Empty Korean summary")
 
                         # [신규] 다국어 번역 (Phase 3)
+                        report.translations_attempted += 1
                         transl_dict = translate_content_multilingual_sync(title, pre_summary)
                         
                         if not isinstance(transl_dict, dict):
@@ -558,7 +614,11 @@ def run_indexing():
                         if RESPONSE_CACHE_ENABLED:
                             pending_metadata[page_id] = dict(metadata)
                         if not metadata.get("translations_complete"):
-                            translation_pending_pages.append(title)
+                            translation_pending_pages.add(page_id)
+                            report.translations_failed += 1
+                            logger.warning("[Translation Pending] page_id=%s reason=incomplete_response", page_id)
+                        else:
+                            report.translations_completed += 1
                         
                         # [변경] DB 상태 관리는 upsert 시 즉시 반영되므로 별도 save_state 불필요
                         # 로깅만 수행

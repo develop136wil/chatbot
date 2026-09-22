@@ -349,7 +349,10 @@ class IndexerRecoveryTests(unittest.TestCase):
         self.japanese_missing("p1")
         self.japanese_missing("p2")
         with patch.object(indexer, "TRANSLATION_BACKFILL_LIMIT", 1):
-            report = self.incomplete()
+            report = indexer.run_indexing()
+            self.assertEqual(report.status, "in_progress")
+            self.assertFalse(report.complete)
+            self.assertEqual((report.translations_failed, report.translations_deferred), (0, 1))
             self.assertEqual((report.updated, report.translations_pending), (1, 1))
             self.assertEqual(self.translate.call_count, 1)
             report = indexer.run_indexing()
@@ -390,3 +393,57 @@ class IndexerRecoveryTests(unittest.TestCase):
         self.assertTrue(indexer.run_indexing().complete)
         self.translate.assert_not_called()
         self.assertNotIn(indexer.CACHE_PENDING_FIELD,self.db.rows["p1"]["metadata"])
+
+    def test_one_failed_translation_and_batch_deferrals_are_distinct(self):
+        self.pages["a"] = [page("p"+str(i)) for i in range(5)]
+        for i in range(5):
+            self.japanese_missing("p"+str(i))
+        valid = self.translate.return_value
+        self.translate.side_effect = [valid, {}]
+        with patch.object(indexer,"TRANSLATION_BACKFILL_LIMIT",2):
+            report=self.incomplete()
+        self.assertEqual(report.status,"failed")
+        self.assertEqual((report.translations_attempted,report.translations_completed,
+                          report.translations_failed,report.translations_deferred,
+                          report.translations_pending),(2,1,1,3,4))
+        self.translate.side_effect=None
+        self.assertTrue(indexer.run_indexing().complete)
+
+    def test_logged_155_document_batch_has_exact_19_1_135_counts(self):
+        self.pages["a"] = [page("p"+str(i)) for i in range(155)]
+        for i in range(155):
+            self.japanese_missing("p"+str(i))
+        self.translate.side_effect = [self.translate.return_value] * 19 + [{}]
+        with patch.object(indexer,"TRANSLATION_BACKFILL_LIMIT",20):
+            report=self.incomplete()
+        self.assertEqual((report.discovered,report.updated,report.translations_attempted,
+                          report.translations_completed,report.translations_failed,
+                          report.translations_deferred,report.translations_pending),
+                         (155,19,20,19,1,135,136))
+        self.assertEqual(report.status,"failed")
+        self.assertEqual(report.failed_pages,0)
+        self.embedding.assert_not_called()
+
+    def test_only_scheduled_backlog_is_success_but_never_complete(self):
+        report=indexer.IndexingReport(translations_pending=135,translations_deferred=135)
+        self.assertEqual(indexer.finish_indexing(report).status,"in_progress")
+        with patch.object(indexer,"run_indexing",return_value=report):
+            self.assertEqual(indexer.cli(),0)
+
+    def test_error_with_scheduled_backlog_still_fails(self):
+        report=indexer.IndexingReport(translations_pending=135,translations_deferred=135,cache_refresh_failed=True)
+        with self.assertRaises(indexer.IndexingIncomplete):
+            indexer.finish_indexing(report)
+
+    def test_github_summary_makes_partial_progress_explicit(self):
+        import tempfile,os
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as directory:
+            target=Path(directory)/"summary.md"
+            with patch.dict(os.environ,{"GITHUB_STEP_SUMMARY":str(target)}):
+                report=indexer.IndexingReport(translations_pending=4,translations_deferred=4)
+                indexer.finish_indexing(report)
+            text=target.read_text(encoding="utf-8")
+            self.assertIn("진행 중",text)
+            self.assertIn("| 처리량 제한으로 미시도 | 4 |",text)
+            self.assertNotIn("## 인덱싱: 전체 완료",text)
