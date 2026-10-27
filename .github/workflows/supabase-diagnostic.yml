@@ -1,0 +1,26 @@
+name: Read-only Supabase Diagnostic
+on:
+  workflow_dispatch:
+  # Temporary branch-only trigger for this approved audit; removed after verification.
+  push:
+    branches: [codex/ops-hardening-20261027]
+    paths: ['scripts/supabase_diagnostic.py', '.github/workflows/supabase-diagnostic.yml']
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Check target, key role hint and visible row count
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          EXPECTED_SUPABASE_HOST: vlxxxpqyvrvcwffrpvid.supabase.co
+        run: python scripts/supabase_diagnostic.py
