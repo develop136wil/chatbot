@@ -1,0 +1,2 @@
+# Preserve vendored browser assets byte-for-byte for integrity checks.
+static/vendor/** -text
