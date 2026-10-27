@@ -1,16 +1,18 @@
-fastapi>=0.115.0
-uvicorn>=0.30.0
-python-dotenv
-redis
-supabase
-google-genai>=1.0.0
-notion-client>=2.0.0
-tenacity
-groq
-requests
-httpx
-pydantic>=2.0.0
-itsdangerous
-apscheduler
-pytz
-grpcio>=1.60.0
+# Direct runtime dependencies; transitive versions are constrained as well.
+-c requirements.lock.txt
+fastapi==0.162.0
+uvicorn==0.54.0
+python-dotenv==1.2.4
+redis==8.1.0
+supabase==2.33.0
+google-genai==2.33.0
+notion-client==3.1.0
+tenacity==9.1.4
+groq==1.7.0
+requests==2.34.2
+httpx==0.28.1
+pydantic==2.14.1
+itsdangerous==2.2.0
+apscheduler==3.11.3
+pytz==2026.5
+grpcio==1.85.0

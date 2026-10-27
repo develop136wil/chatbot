@@ -63,7 +63,12 @@ def diagnose(env=None, opener=None):
     if not result["project_match"]:
         result["error"] = "project_mismatch"
     elif result["visible_rows"] == 0:
-        result["error"] = "no_visible_index_rows"
+        if env.get("REQUIRE_VISIBLE_INDEX", "true").lower() == "false":
+            result["outcome"] = "connectivity_only_no_index_visibility"
+        else:
+            result["error"] = "no_visible_index_rows"
+    else:
+        result["outcome"] = "index_visible"
     return result, int("error" in result)
 
 

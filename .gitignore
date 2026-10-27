@@ -12,7 +12,6 @@ env/
 
 # Node
 node_modules/
-package-lock.json
 
 # IDE
 .vscode/
@@ -35,3 +34,6 @@ test_*.py
 chroma-data/
 # Offline regression tests are versioned.
 !tests/test_*.py
+
+# Isolated release verification environments
+.venv-*/

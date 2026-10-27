@@ -10,7 +10,7 @@ from observability import ChatTimingMiddleware, current_request_id
 import secrets  # [추가] 보안 토큰 생성
 import re
 from typing import List, Dict, Optional, Literal
-from fastapi import FastAPI, Query, HTTPException, Request, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, HTMLResponse
@@ -429,10 +429,10 @@ def debug_check():
     return results
 
 @app.post("/admin/clear_cache")
-def clear_all_caches(request: Request, secret: Optional[str] = Query(None)):
+def clear_all_caches(request: Request):
     if not ADMIN_SECRET_KEY:
         raise HTTPException(status_code=404, detail="Not Found")
-    secret = request.headers.get("X-Admin-Secret") or secret
+    secret = request.headers.get("X-Admin-Secret")
     if not secret or not secrets.compare_digest(secret, ADMIN_SECRET_KEY):
         raise HTTPException(status_code=401, detail="Unauthorized")
     if not redis_client:

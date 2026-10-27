@@ -206,15 +206,15 @@ def send_email_alert(subject: str, body: str):
         
         # Gmail SMTP 서버 (보안 연결)
         # 587: TLS (starttls 필요), 465: SSL
-        with smtplib.SMTP('smtp.gmail.com', 587) as server:
+        with smtplib.SMTP('smtp.gmail.com', 587, timeout=10) as server:
             server.starttls()
             server.login(smtp_user, smtp_password)
             server.send_message(msg)
             
-        logger.info(f"📧 [Email] 알림 발송 완료: {recipient}")
+        logger.info("📧 [Email] 알림 발송 완료")
         
     except Exception as e:
-        logger.error(f"❌ [Email] 알림 발송 실패: {e}")
+        logger.error("❌ [Email] 알림 발송 실패 (유형=%s)", type(e).__name__)
 
 def load_state_from_db() -> Dict[str, Dict[str, Any]]:
     """Supabase에서 현재 저장된 페이지들의 last_edited_time을 로드합니다."""
@@ -639,7 +639,6 @@ def run_indexing():
             logger.error(error_msg)
             has_critical_error = True
             report.failed_categories += 1
-            send_email_alert(f"[Chatbot Indexer] 인덱싱 실패 알림 ({category_name})", error_msg)
 
     # Deletion requires a complete source scan; cache refresh does not.
     if has_critical_error:
@@ -708,9 +707,21 @@ def run_indexing():
 def cli():
     try:
         run_indexing()
-    except IndexingIncomplete:
+    except IndexingIncomplete as error:
+        # One alert per failed execution, including translation/cache/setup errors.
+        send_email_alert(
+            "[Chatbot Indexer] 인덱싱 실패",
+            json.dumps({"status": error.report.status, **asdict(error.report)}, ensure_ascii=False),
+        )
         if os.getenv("GITHUB_ACTIONS") == "true":
             print("::error title=Indexing incomplete::See [Indexer Summary] for failed or pending work.")
+        return 1
+    except Exception as error:
+        # Never include provider responses, question content or credentials in email.
+        logger.error("[Indexer] 예기치 않은 종료 (유형=%s)", type(error).__name__)
+        send_email_alert("[Chatbot Indexer] 예기치 않은 종료", "error_type=" + type(error).__name__)
+        if os.getenv("GITHUB_ACTIONS") == "true":
+            print("::error title=Indexer failed::Unexpected failure; check the execution logs.")
         return 1
     return 0
 

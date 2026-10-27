@@ -45,3 +45,9 @@ class DiagnosticTests(unittest.TestCase):
         def fail(*args,**kwargs):raise HTTPError("url",401,"sb_secret_test",{},None)
         result,code=d.diagnose(self.env(),fail)
         self.assertEqual(result["http_status"],401);self.assertNotIn("sb_secret_test",json.dumps(result))
+
+    def test_connectivity_mode_explicitly_does_not_assert_index_readiness(self):
+        env=self.env("sb_publishable_test");env["REQUIRE_VISIBLE_INDEX"]="false"
+        result,code=d.diagnose(env,lambda *a,**k:self.response(0))
+        self.assertEqual(code,0)
+        self.assertEqual(result["outcome"],"connectivity_only_no_index_visibility")

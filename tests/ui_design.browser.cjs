@@ -16,7 +16,7 @@ function contrast(a,b){
 }
 (async()=>{
  const root=process.cwd(),out=fs.mkdtempSync(path.join(os.tmpdir(),'chatbot-design-qa-'));
- const browser=await chromium.launch({headless:true,executablePath:process.env.CHATBOT_TEST_BROWSER||'C:/Program Files/Google/Chrome/Application/chrome.exe'});
+ const browser=await chromium.launch({headless:true,executablePath:process.env.CHATBOT_TEST_BROWSER||(process.platform==='win32'?'C:/Program Files/Google/Chrome/Application/chrome.exe':undefined)});
  try{
  let finishChat;
  const page=await browser.newPage({viewport:{width:390,height:844},reducedMotion:'reduce'});

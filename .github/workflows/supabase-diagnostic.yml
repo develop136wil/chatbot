@@ -1,10 +1,6 @@
 name: Read-only Supabase Diagnostic
 on:
   workflow_dispatch:
-  # Temporary branch-only trigger for this approved audit; removed after verification.
-  push:
-    branches: [codex/ops-hardening-20261027]
-    paths: ['scripts/supabase_diagnostic.py', '.github/workflows/supabase-diagnostic.yml']
 permissions:
   contents: read
 jobs:
