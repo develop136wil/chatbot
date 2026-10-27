@@ -56,7 +56,8 @@ class AlertTests(unittest.TestCase):
         with patch.dict(os.environ, {"SMTP_USER": "test@example.org", "SMTP_PASSWORD": "fake-secret"}, clear=True):
             with patch.object(indexer.smtplib, "SMTP") as smtp:
                 smtp.return_value.__enter__.return_value = server
-                indexer.send_email_alert("Test", "Counts only")
+                accepted = indexer.send_email_alert("Test", "Counts only")
+        self.assertTrue(accepted)
         context = server.starttls.call_args.kwargs["context"]
         self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
         self.assertTrue(context.check_hostname)
@@ -73,7 +74,8 @@ class AlertTests(unittest.TestCase):
             with patch.object(indexer.smtplib, "SMTP") as smtp:
                 smtp.return_value.__enter__.return_value = server
                 with self.assertLogs(indexer.logger, level="ERROR") as logs:
-                    indexer.send_email_alert("Test", "Counts only")
+                    accepted = indexer.send_email_alert("Test", "Counts only")
+        self.assertFalse(accepted)
         server.login.assert_not_called()
         server.send_message.assert_not_called()
         self.assertNotIn("private certificate details", " ".join(logs.output))

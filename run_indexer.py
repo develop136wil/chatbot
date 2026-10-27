@@ -185,7 +185,7 @@ NOTION_PROPERTY_NAMES = {
     "cost_info": "비용 부담", "notes": "주의사항"
 }
 
-def send_email_alert(subject: str, body: str):
+def send_email_alert(subject: str, body: str) -> bool:
     """
     [신규] 인덱싱 실패 시 이메일 알림 발송 (Gmail SMTP)
     """
@@ -195,7 +195,7 @@ def send_email_alert(subject: str, body: str):
     
     if not smtp_user or not smtp_password:
         logger.warning("📧 [Email] SMTP 설정이 없어 알림을 건너뜠습니다. (SMTP_USER, SMTP_PASSWORD 확인 필요)")
-        return
+        return False
 
     try:
         msg = MIMEMultipart()
@@ -213,9 +213,11 @@ def send_email_alert(subject: str, body: str):
             server.send_message(msg)
             
         logger.info("📧 [Email] 알림 발송 완료")
+        return True
         
     except Exception as e:
         logger.error("❌ [Email] 알림 발송 실패 (유형=%s)", type(e).__name__)
+        return False
 
 def load_state_from_db() -> Dict[str, Dict[str, Any]]:
     """Supabase에서 현재 저장된 페이지들의 last_edited_time을 로드합니다."""

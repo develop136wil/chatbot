@@ -66,3 +66,10 @@
 - 후속 로컬 검증: Python 181개, 프런트엔드 132개, 실제 정화 브라우저 검사 및 UI 회귀 통과.
 - pip-audit 2.10.1 및 npm audit에서 알려진 취약점이 발견되지 않았다(검사 시점 기준).
 - npm ci --ignore-scripts 재설치 후 배포용 라이브러리 무결성 검사도 통과했다.
+
+## 승인된 메일 점검 경로
+
+- Manual Alert Email Test는 workflow_dispatch와 confirm=true일 때만 실행한다. push/예약으로 실행하지 않는다.
+- scripts/test_alert_email.py는 SMTP_USER 자신에게 테스트 안내만 한 번 보내며 자동 재시도하지 않는다.
+- 인덱싱을 호출하지 않고 DB/AI 자격증명을 전달하지 않는다. 주소·키를 로그로 출력하지 않는다.
+- 성공은 SMTP 서버의 접수 확인이며, 받은편지함 또는 스팸함 수신은 사용자가 별도 확인해야 한다.

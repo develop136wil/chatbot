@@ -37,3 +37,6 @@ chroma-data/
 
 # Isolated release verification environments
 .venv-*/
+
+# Explicitly authorized, manual-only operational email test entry point.
+!scripts/test_alert_email.py
