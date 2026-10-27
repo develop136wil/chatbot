@@ -33,6 +33,22 @@ jobs:
       - run: node tests/security.browser.cjs
       - run: node tests/ui_design.browser.cjs
 
+  python-security:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      # Separate job: the audit tool never changes the application environment.
+      - run: python -m pip install pip-audit==2.10.1
+      # All direct/transitive requirements are pinned; do not resolve or install them.
+      # Do not use --fix or suppress failures: advisories and lookup failures fail CI.
+      - run: python -m pip_audit -r requirements.txt --no-deps --disable-pip --strict --progress-spinner off --timeout 20
+
   redis-integration:
     runs-on: ubuntu-24.04
     timeout-minutes: 15

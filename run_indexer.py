@@ -4,6 +4,7 @@ import time
 import traceback
 import sys
 import smtplib
+import ssl
 import requests
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -207,7 +208,7 @@ def send_email_alert(subject: str, body: str):
         # Gmail SMTP 서버 (보안 연결)
         # 587: TLS (starttls 필요), 465: SSL
         with smtplib.SMTP('smtp.gmail.com', 587, timeout=10) as server:
-            server.starttls()
+            server.starttls(context=ssl.create_default_context())
             server.login(smtp_user, smtp_password)
             server.send_message(msg)
             

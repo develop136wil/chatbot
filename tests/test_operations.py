@@ -1,8 +1,9 @@
 """Operations regression tests: no real SMTP, provider or database traffic."""
 import json
 import os
+import ssl
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 import test_no_sql_contract as isolation
 
 def setUpModule():
@@ -49,6 +50,33 @@ class AlertTests(unittest.TestCase):
                     indexer.send_email_alert("Test","Counts only")
                 smtp.assert_called_once_with("smtp.gmail.com",587,timeout=10)
                 self.assertNotIn("fake-secret"," ".join(logs.output))
+
+    def test_smtp_validates_server_certificate_before_login(self):
+        server = MagicMock()
+        with patch.dict(os.environ, {"SMTP_USER": "test@example.org", "SMTP_PASSWORD": "fake-secret"}, clear=True):
+            with patch.object(indexer.smtplib, "SMTP") as smtp:
+                smtp.return_value.__enter__.return_value = server
+                indexer.send_email_alert("Test", "Counts only")
+        context = server.starttls.call_args.kwargs["context"]
+        self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
+        self.assertTrue(context.check_hostname)
+        self.assertGreater(context.cert_store_stats()["x509_ca"], 0)
+        self.assertEqual(
+            [call[0] for call in server.method_calls],
+            ["starttls", "login", "send_message"],
+        )
+
+    def test_invalid_certificate_never_sends_credentials_or_email(self):
+        server = MagicMock()
+        server.starttls.side_effect = ssl.SSLCertVerificationError("private certificate details")
+        with patch.dict(os.environ, {"SMTP_USER": "test@example.org", "SMTP_PASSWORD": "fake-secret"}, clear=True):
+            with patch.object(indexer.smtplib, "SMTP") as smtp:
+                smtp.return_value.__enter__.return_value = server
+                with self.assertLogs(indexer.logger, level="ERROR") as logs:
+                    indexer.send_email_alert("Test", "Counts only")
+        server.login.assert_not_called()
+        server.send_message.assert_not_called()
+        self.assertNotIn("private certificate details", " ".join(logs.output))
 
     def test_category_failure_no_longer_sends_per_category_email(self):
         # Guard the once-per-run policy; actual recovery tests exercise category errors.

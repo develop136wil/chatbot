@@ -54,3 +54,15 @@
 - 동일한 버전 목록을 requirements.txt에 평탄화해 포함 파일 처리를 제거한다.
 - tests/test_requirements_contract.py가 포함 지시문 금지·정확한 버전 고정·기준 목록 일치를 검사한다.
 - 패키지 버전, SQL, 키, 운영 데이터는 변경하지 않는다.
+
+## 후속 보완
+
+- 실패 메일 STARTTLS에 ssl.create_default_context()를 전달하여 인증서·호스트명을 검증한다.
+- 인증서 검증 실패 시 로그인 및 발송을 하지 않는 회귀 테스트를 추가한다.
+- python-security CI 작업에서 pip-audit 2.10.1로 고정한 requirements.txt를 검사한다.
+  검사 도구는 앱과 별도 작업에 설치한다. 자동 수정·취약점 무시·실패 무시는 하지 않는다.
+- node_modules 59개 파일의 Git 추적만 해제한다. 로컬 파일과 package-lock.json, 배포용 static/vendor는 보존한다.
+- 실제 이메일 발송·수신과 새 코드의 예약 인덱싱 성공은 별도 확인 항목이다.
+- 후속 로컬 검증: Python 181개, 프런트엔드 132개, 실제 정화 브라우저 검사 및 UI 회귀 통과.
+- pip-audit 2.10.1 및 npm audit에서 알려진 취약점이 발견되지 않았다(검사 시점 기준).
+- npm ci --ignore-scripts 재설치 후 배포용 라이브러리 무결성 검사도 통과했다.
