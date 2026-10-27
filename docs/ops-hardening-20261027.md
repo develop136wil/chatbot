@@ -12,7 +12,7 @@
 - Chatbot Actions는 Ubuntu 24.04 및 Python 3.11을 사용한다.
   Vercel은 지원되는 기본 버전인 Python 3.12를 .python-version에 명시한다.
   오프라인 CI는 Python 3.11/3.12 둘 다 검사한다.
-- requirements.txt에 직접 의존성을, requirements.lock.txt에 런타임 전이 의존성을 고정한다.
+- requirements.txt에 직접·전이 의존성을 모두 고정한다. requirements.lock.txt의 기준 목록과 동일해야 한다.
   초기 기준은 성공한 인덱서 실행 40416356738의 설치 목록이다.
   pip check, 전체 회귀 및 Redis·SQL 통합 CI를 통과해야 배포한다.
 - 인덱싱 워크플로 제한 45분, SMTP 연결 제한 10초.
@@ -47,3 +47,10 @@
   GitHub Actions 실패 알림 설정 및 실행 결과를 함께 확인해야 한다.
 - 라이브러리 업데이트가 모든 XSS나 모든 의존성 취약점의 부재를 보증하는 것은 아니다.
 - SQL/RLS/자격증명, 실제 검색 품질·번역 의미 정확성은 이번 변경 대상이 아니다.
+
+## Vercel 빌드 호환 수정
+
+- 최초 배포는 requirements.txt의 -c requirements.lock.txt 포함 단계에서 파싱 실패했다.
+- 동일한 버전 목록을 requirements.txt에 평탄화해 포함 파일 처리를 제거한다.
+- tests/test_requirements_contract.py가 포함 지시문 금지·정확한 버전 고정·기준 목록 일치를 검사한다.
+- 패키지 버전, SQL, 키, 운영 데이터는 변경하지 않는다.
