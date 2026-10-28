@@ -66,6 +66,16 @@ class CacheStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(await utils.get_response_cache_async("지원", "ko"))
         self.scope_query.execute.assert_not_called()
 
+    async def test_pre_fact_preservation_cache_is_not_reused(self):
+        self.assertNotEqual(utils.RESPONSE_CACHE_SCHEMA_VERSION, "v2")
+        current_key = utils.build_response_cache_key("지원", "ko")
+        with patch.object(utils, "RESPONSE_CACHE_SCHEMA_VERSION", "v2"):
+            old_key = utils.build_response_cache_key("지원", "ko")
+        self.assertNotEqual(current_key, old_key)
+        self.row["cache_version"] = "v2"
+        self.assertIsNone(await utils.get_response_cache_async("지원", "ko"))
+        self.scope_query.execute.assert_not_called()
+
     async def test_scope_lookup_failure_never_uses_unverified_answer(self):
         self.scope_query.execute.side_effect = RuntimeError("simulated 401")
         self.assertIsNone(await utils.get_response_cache_async("지원", "ko"))

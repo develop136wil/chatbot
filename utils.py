@@ -114,7 +114,8 @@ RESPONSE_CACHE_TABLE = "chatbot_response_cache"
 RESPONSE_CACHE_TTL_SECONDS = max(
     300, min(int(os.getenv("CHAT_RESPONSE_CACHE_TTL_SECONDS", "7776000")), 15_552_000)
 )
-RESPONSE_CACHE_SCHEMA_VERSION = "v2"
+# Rendered HTML from v2 may have lost leading amounts/ages. Never reuse it.
+RESPONSE_CACHE_SCHEMA_VERSION = "v3"
 RESPONSE_CACHE_SCOPE_TABLE = "chatbot_cache_scope_versions"
 GLOBAL_CACHE_SCOPE = "__all__"
 _response_cache_error_logged = False
@@ -1924,9 +1925,7 @@ def clean_summary_text(text: str, language: str = "ko") -> str:
         "신청 기간", "신청 절차", "신청 장소", # 신청 방법으로 통합 유도
         "참고", "주의", "유의사항"
     ]
-    
-    MAX_LINES = 4  # 섹션당 최대 줄 수 (3->4로 늘려 정보량 확보)
-    
+
     sections = {}  # {section_name: [content_lines]}
     current_section = None
     
@@ -1953,13 +1952,17 @@ def clean_summary_text(text: str, language: str = "ko") -> str:
                 sections[current_section] = []
             # "**Support Content**: ..."처럼 헤더와 내용이 같은 줄에
             # 있는 번역 결과도 버리지 않고 카드 본문에 유지합니다.
-            inline_content = stripped.split(found_section, 1)[1].strip(" *:-：")
-            if inline_content and len(inline_content) > 2:
+            # Do not strip '-' here: it can be the sign of a numeric value.
+            inline_content = stripped.split(found_section, 1)[1].strip(" *:：")
+            if inline_content:
                 sections[current_section].append(inline_content)
-        elif current_section and len(sections.get(current_section, [])) < MAX_LINES:
-            # 내용 줄 정리
-            clean_line = re.sub(r'^[\s\*\-•①-⑮❶-❿0-9\.]+\s*', '', stripped)
-            if clean_line and len(clean_line) > 5:
+        elif current_section:
+            # Strip one explicit list marker, not leading digits, decimal points
+            # or minus signs. "1. " is a list marker; "1.5%"/"-3%" are facts.
+            clean_line = re.sub(r'^(?:[-*]\s+|•\s*|[①-⑮❶-❿]\s*|\d+[.)]\s+)', '', stripped).strip()
+            # Even "0원", "무료" or a single digit can be meaningful. Ignore
+            # empty/punctuation-only decoration, never content based on length.
+            if re.search(r'\w', clean_line):
                 sections[current_section].append(clean_line)
     
     # 빈 섹션 제거하고 출력 생성
@@ -1967,7 +1970,9 @@ def clean_summary_text(text: str, language: str = "ko") -> str:
     for section in SHOW_SECTIONS:
         if section in sections and sections[section]:
             final_lines.append(f"**{section}**")
-            for content in sections[section][:MAX_LINES]:
+            # Formatting is not summarization: later lines can contain amounts
+            # or eligibility exclusions and must not be silently truncated.
+            for content in sections[section]:
                 final_lines.append(f"• {content}")
     
     if final_lines:
@@ -1993,7 +1998,8 @@ def format_search_results(pages_metadata: list, language: str = "ko") -> str:
     header_pattern_emoji = re.compile(r'^\s*[\*\-•]?\s*[✅💰📍📞💡📋🕒📝📌ℹ️✨⚠️🔴🔵📄🔗]\s*([^:\n]+)(?::\s*(.*))?$')
 
     # 3. [기존] 번호 목록 패턴
-    numbered_pattern = re.compile(r'^\s*[\*\-•]?\s*(?:\*\*)?\s*([①-⑮❶-❿]|[0-9]+\.)\s*(.*)$')
+    # A decimal such as 1.5% is not the ordered-list label "1. ".
+    numbered_pattern = re.compile(r'^\s*[\*\-•]?\s*(?:\*\*)?\s*([①-⑮❶-❿]|[0-9]+\.(?=\s))\s*(.*)$')
     
     # 4. [신규] 당구장(참고) 패턴 (※)
     ref_pattern = re.compile(r'^\s*[\*\-•]?\s*※\s*(.*)$')
