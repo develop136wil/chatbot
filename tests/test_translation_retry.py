@@ -200,14 +200,15 @@ class ProviderWrapperTests(unittest.TestCase):
             self.assertEqual(utils.call_groq_sync_robust("prompt",max_tokens=100),"{}")
         self.assertEqual(utils._translation_rate_gate.remaining,123)
 
-    def test_gemini_single_attempt_keeps_free_cap_and_timeout(self):
+    def test_gemini_single_attempt_keeps_translation_cap_and_timeout(self):
         client=Mock()
-        with patch.object(utils,"FREE_TIER_ONLY",True),patch.object(utils,"FREE_TIER_MAX_OUTPUT_TOKENS",400):
+        with patch.object(utils,"FREE_TIER_ONLY",True),patch.object(utils,"FREE_TIER_TRANSLATION_MAX_OUTPUT_TOKENS",4096):
             utils.generate_content_safe(client,"prompt",timeout=40,translation_once=True,
                                         max_output_tokens=4096,response_schema={"type":"object"})
         config=client.models.generate_content.call_args.kwargs["config"]
-        self.assertEqual(config.max_output_tokens,400)
-        self.assertEqual(config.thinking_config.thinking_budget,0)
+        self.assertEqual(config.max_output_tokens,4096)
+        self.assertEqual(config.thinking_config.thinking_level,"MINIMAL")
+        self.assertIsNone(config.thinking_config.thinking_budget)
         self.assertTrue(config.automatic_function_calling.disable)
         self.assertEqual(config.http_options.timeout,40000)
         self.assertEqual(config.http_options.retry_options.attempts,1)

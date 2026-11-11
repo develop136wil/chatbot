@@ -108,7 +108,12 @@ GROQ_FALLBACK_ENABLED = (not FREE_TIER_ONLY) or _env_flag("ALLOW_FREE_TIER_GROQ_
 LIVE_TRANSLATION_ENABLED = (not FREE_TIER_ONLY) or _env_flag("ALLOW_LIVE_TRANSLATION", False)
 GROQ_FAST_MODEL = os.getenv("GROQ_FAST_MODEL", "openai/gpt-oss-20b").strip()
 GROQ_QUALITY_MODEL = os.getenv("GROQ_QUALITY_MODEL", "openai/gpt-oss-120b").strip()
+GEMINI_GENERATION_MODEL = os.getenv("GEMINI_GENERATION_MODEL", "gemini-3.5-flash-lite").strip() or "gemini-3.5-flash-lite"
 FREE_TIER_MAX_OUTPUT_TOKENS = max(64, min(int(os.getenv("FREE_TIER_MAX_OUTPUT_TOKENS", "400")), 1024))
+# Batch document translation needs a complete multilingual JSON, unlike ranking.
+FREE_TIER_TRANSLATION_MAX_OUTPUT_TOKENS = max(
+    1024, min(int(os.getenv("FREE_TIER_TRANSLATION_MAX_OUTPUT_TOKENS", "4096")), 8192)
+)
 RESPONSE_CACHE_ENABLED = _env_flag("ENABLE_RESPONSE_CACHE", True)
 RESPONSE_CACHE_TABLE = "chatbot_response_cache"
 RESPONSE_CACHE_TTL_SECONDS = max(
@@ -470,7 +475,7 @@ def get_llm_client():
         try:
             # 첫 번째 키로 클라이언트 생성
             LLM_CLIENT = genai.Client(api_key=KEY_POOL[0])
-            print("✅ Utils: Google GenAI Client (gemini-2.5-flash) 초기화 완료")
+            print(f"✅ Utils: Google GenAI Client ({GEMINI_GENERATION_MODEL}) 초기화 완료")
             return LLM_CLIENT
         except Exception as e:
             print(f"⚠️ Utils: Google GenAI Client 초기화 실패: {e}")
@@ -962,6 +967,26 @@ async def get_gemini_embedding_async(text: str, task_type: str = "SEMANTIC_SIMIL
         raise e
 
 # --- [수정] 콘텐츠 생성 함수 (Client API 사용) ---
+def _gemini_generation_config(options, *, translation_once=False, timeout=8):
+    """Shared 3.5 Flash-Lite config; consume obsolete caller options locally."""
+    for field in ('temperature', 'top_p', 'top_k', 'candidate_count'):
+        options.pop(field, None)
+    params = {field: options.pop(field) for field in (
+        'safety_settings', 'max_output_tokens', 'response_mime_type', 'response_schema'
+    ) if field in options}
+    # These wrappers perform text/JSON work only, not autonomous tool calls.
+    params['automatic_function_calling'] = {'disable': True}
+    params['thinking_config'] = {'thinking_level': 'minimal'}
+    if translation_once:
+        params['http_options'] = types.HttpOptions(
+            timeout=int(timeout * 1000), retry_options=types.HttpRetryOptions(attempts=1))
+    if FREE_TIER_ONLY:
+        cap = (FREE_TIER_TRANSLATION_MAX_OUTPUT_TOKENS if translation_once
+               else FREE_TIER_MAX_OUTPUT_TOKENS)
+        params['max_output_tokens'] = min(int(params.get('max_output_tokens', cap)), cap)
+    return types.GenerateContentConfig(**params)
+
+
 @retry(
     stop=stop_after_attempt(_RETRY_ATTEMPTS),  # Vercel 환경에서 재시도 횟수 제한
     wait=wait_exponential(multiplier=1, min=1, max=5),
@@ -969,34 +994,7 @@ async def get_gemini_embedding_async(text: str, task_type: str = "SEMANTIC_SIMIL
 )
 def generate_content_safe(client, prompt, timeout=8, **kwargs): 
     translation_once = kwargs.pop('translation_once', False)
-    # client 인자는 이제 LLM_CLIENT (Client 객체)입니다.
-    
-    # kwargs에서 설정값 추출하여 Config 객체 생성
-    config_params = {}
-    if 'safety_settings' in kwargs:
-        config_params['safety_settings'] = kwargs.pop('safety_settings')
-    if 'temperature' in kwargs:
-        config_params['temperature'] = kwargs.pop('temperature')
-    if 'top_p' in kwargs:
-        config_params['top_p'] = kwargs.pop('top_p')
-    if 'max_output_tokens' in kwargs:
-        config_params['max_output_tokens'] = kwargs.pop('max_output_tokens')
-    if 'response_mime_type' in kwargs:
-        config_params['response_mime_type'] = kwargs.pop('response_mime_type')
-    if 'response_schema' in kwargs:
-        config_params['response_schema'] = kwargs.pop('response_schema')
-    if translation_once:
-        config_params['automatic_function_calling'] = {'disable': True}
-        config_params['thinking_config'] = {'thinking_budget': 0}
-        config_params['http_options'] = types.HttpOptions(
-            timeout=int(timeout * 1000), retry_options=types.HttpRetryOptions(attempts=1))
-    if FREE_TIER_ONLY:
-        config_params['max_output_tokens'] = min(
-            int(config_params.get('max_output_tokens', FREE_TIER_MAX_OUTPUT_TOKENS)),
-            FREE_TIER_MAX_OUTPUT_TOKENS,
-        )
-        
-    config = types.GenerateContentConfig(**config_params)
+    config = _gemini_generation_config(kwargs, translation_once=translation_once, timeout=timeout)
     
     if translation_once:
         # One network attempt: the caller owns the bounded retry budget.
@@ -1005,7 +1003,7 @@ def generate_content_safe(client, prompt, timeout=8, **kwargs):
             raise TranslationFailure("provider_unavailable")
         try:
             return current_client.models.generate_content(
-                model='gemini-2.5-flash', contents=prompt, config=config)
+                model=GEMINI_GENERATION_MODEL, contents=prompt, config=config)
         except Exception as error:
             if is_quota_error(error):
                 raise FreeTierQuotaExceeded("Gemini translation quota exhausted") from None
@@ -1027,7 +1025,7 @@ def generate_content_safe(client, prompt, timeout=8, **kwargs):
             
             # v1.0 동기 호출
             return current_client.models.generate_content(
-                model='gemini-2.5-flash',
+                model=GEMINI_GENERATION_MODEL,
                 contents=prompt,
                 config=config,
                 # timeout은 별도 옵션일 수 있으나 여기서는 생략하거나 kwargs에 남은 것 사용
@@ -1120,25 +1118,7 @@ async def generate_content_safe_async(client, prompt, timeout=15, **kwargs):
     max_retries = 2 if _IS_VERCEL else 3
     consecutive_quota_errors = 0
     
-    # Config 구성 (동기 함수와 동일)
-    config_params = {}
-    if 'safety_settings' in kwargs:
-        config_params['safety_settings'] = kwargs.pop('safety_settings')
-    if 'temperature' in kwargs:
-        config_params['temperature'] = kwargs.pop('temperature')
-    if 'top_p' in kwargs:
-        config_params['top_p'] = kwargs.pop('top_p')
-    if 'max_output_tokens' in kwargs:
-        config_params['max_output_tokens'] = kwargs.pop('max_output_tokens')
-    if 'response_mime_type' in kwargs:
-        config_params['response_mime_type'] = kwargs.pop('response_mime_type')
-    if FREE_TIER_ONLY:
-        config_params['max_output_tokens'] = min(
-            int(config_params.get('max_output_tokens', FREE_TIER_MAX_OUTPUT_TOKENS)),
-            FREE_TIER_MAX_OUTPUT_TOKENS,
-        )
-        
-    config = types.GenerateContentConfig(**config_params)
+    config = _gemini_generation_config(kwargs)
     
     for attempt in range(max_retries):
         try:
@@ -1162,7 +1142,7 @@ async def generate_content_safe_async(client, prompt, timeout=15, **kwargs):
             # 주의: client.aio (AsyncClient) 속성을 사용해야 함
             result = await asyncio.wait_for(
                 current_client.aio.models.generate_content(
-                    model='gemini-2.5-flash',
+                    model=GEMINI_GENERATION_MODEL,
                     contents=prompt,
                     config=config,
                     **kwargs,
@@ -1324,7 +1304,7 @@ Content: {content}
                     response = generate_content_safe(
                         client, prompt, timeout=40, translation_once=True,
                         response_mime_type="application/json", response_schema=schema,
-                        max_output_tokens=4096, temperature=0.0)
+                        max_output_tokens=FREE_TIER_TRANSLATION_MAX_OUTPUT_TOKENS)
                     candidates = getattr(response, "candidates", None) or []
                     reason = getattr(candidates[0], "finish_reason", None) if candidates else None
                     reason = getattr(reason, "name", str(reason)).upper()
@@ -1420,12 +1400,15 @@ async def extract_info_from_question_async(question: str, chat_history: list[dic
     [Rules]
     1. **intent**: "show_more", "safety_block", "exit", "reset", "out_of_scope", "small_talk", "clarify_category", null.
     2. **age**: Convert to MONTHS (int) or null.
-    3. **category**: generic queries only (see utils.py rules). specific names -> null.
+    3. **category**: For broad category requests only, choose one of these exact Korean labels:
+       {json.dumps(list(DATABASE_IDS), ensure_ascii=False)}.
+       For specific service names (including child allowance), return JSON null.
+       Never invent or translate category labels.
     4. **sub_category**: specific traits or null.
     5. **keywords**: extract core nouns.
 
     [Output Example]
-    {{ "intent": null, "category": "null", "sub_category": "null", "age": 24, "keywords": ["바우처"] }}
+    {{ "intent": null, "category": null, "sub_category": null, "age": 24, "keywords": ["바우처"] }}
     """
     
     try:
@@ -1472,6 +1455,9 @@ async def extract_info_from_question_async(question: str, chat_history: list[dic
             default_info = {"age": None, "category": None, "sub_category": None, "intent": None, "keywords": None}
             extracted_info = json.loads(json_string)
             default_info.update(extracted_info)
+            category = default_info.get("category")
+            category = category.strip() if isinstance(category, str) else None
+            default_info["category"] = category if category in DATABASE_IDS else None
                 
             has_other_criteria = default_info.get("age") is not None or default_info.get("sub_category") is not None
             
@@ -2771,6 +2757,7 @@ async def rerank_search_results_async(question: str, results: List[Dict[str, Any
     질문: {question}
     
     다음 후보 문서들 중 질문과 가장 관련성 높은 순서대로 번호(인덱스)만 나열하세요.
+    후보에 있는 0 이상의 정수 번호만 중복 없이 사용하세요. 관련성이 같으면 원래 순서를 유지하세요.
     
     후보:
     {start_text}
@@ -2779,7 +2766,7 @@ async def rerank_search_results_async(question: str, results: List[Dict[str, Any
     """
     
     client = get_llm_client()
-    if not client: return candidates
+    if not client: return results
 
     try:
         response = await generate_content_safe_async(client, prompt, timeout=10, temperature=0.0)
@@ -2790,7 +2777,11 @@ async def rerank_search_results_async(question: str, results: List[Dict[str, Any
         match = re.search(r'\[.*?\]', text)
         if match:
             indices = json.loads(match.group(0))
-            reranked = [candidates[i] for i in indices if i < len(candidates)]
+            if (not isinstance(indices, list) or not indices
+                    or any(type(i) is not int or not 0 <= i < len(candidates) for i in indices)
+                    or len(set(indices)) != len(indices)):
+                return results
+            reranked = [candidates[i] for i in indices]
             # 리랭킹에 포함 안 된 나머지는 뒤에 붙임
             remaining = [c for i, c in enumerate(candidates) if i not in indices]
             return reranked + remaining + results[5:]
