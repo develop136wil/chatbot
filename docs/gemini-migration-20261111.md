@@ -53,7 +53,7 @@ git diff --check
 ```
 
 로컬 Python은 3.14이며 CI의 Python 3.11/3.12 실행을 대체하지 않는다.
-기존 의존성의 Python/Starlette deprecation 경고는 남아 있다. 이번 변경에서 의존성을 교체하지 않는다.
+기존 의존성의 Python/Starlette deprecation 경고는 남아 있다. 아래 CI 보안 수정 외의 의존성은 유지한다.
 
 ## 배포 전 남은 확인
 
@@ -103,3 +103,12 @@ HTTP 전송 단계에서 총 7회 및 단계별 1회를 제한한다. SDK 재시
 7회 예산을 지키기 위해 이 보완 뒤 실제 API를 추가 호출하지 않았다. 따라서 새 프롬프트의
 추가 실측은 미실시이며, 관측된 응답을 안전하게 정규화하는 로직은 오프라인으로 검증했다.
 다음 명시적 검사에서는 특정 아동수당 질문에 category=null인지도 합격 조건에 포함한다.
+
+## CI 보안 검사에서 발견한 배포 차단 사항
+
+첫 브랜치 CI [42946732664](https://github.com/develop136wil/chatbot/actions/runs/42946732664)의
+Python 보안 검사가 `pyasn1==0.6.4`에서 CVE-2026-119194/119195/119196/119197을 발견했다.
+Gemini 모델 응답 실패가 아니라 기존 의존성의 새 보안 공지에 따른 차단이다.
+수정 버전 0.6.5를 requirements.txt와 requirements.lock.txt 양쪽에 동일하게 고정했다.
+보안 검사를 끄거나 취약점을 무시하지 않는다. 이후 새 커밋의 CI 통과를 배포 조건으로 삼는다.
+[공식 릴리스](https://github.com/pyasn1/pyasn1/releases/tag/v0.6.5)
