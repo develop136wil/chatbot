@@ -1,0 +1,4 @@
+interface:
+  display_name: "챗봇 운영 검증"
+  short_description: "Chatbot 배포·인덱싱·다국어 품질을 근거와 범위에 맞게 검증"
+  default_prompt: "$chatbot-ops-verification 스킬로 이번 챗봇 변경의 검증 범위와 실제 완료 여부를 확인해줘."
